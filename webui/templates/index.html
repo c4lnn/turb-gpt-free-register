@@ -134,6 +134,9 @@
     .accounts-table .col-note { width: 180px; }
     .accounts-table .col-agent { width: 220px; }
     .accounts-table .col-actions { width: 360px; }
+    .reauth-table { min-width: 1480px; }
+    .reauth-table .col-actions { width: 250px; }
+    .reauth-table .col-attempts { width: 72px; }
     .accounts-table td:nth-child(6), .accounts-table th:nth-child(6) { overflow: visible; text-overflow: clip; }
     .accounts-table td:nth-child(10), .accounts-table th:nth-child(10) { overflow: visible; text-overflow: clip; }
 
@@ -153,6 +156,9 @@
     .status-partial_success { color: #9a6700; background: #fff7d6; }
     .status-running { color: var(--amber); background: #fff7e6; }
     .status-success { color: var(--green); background: #e9f7ef; }
+    .status-skipped_phone_required { color: var(--amber); background: #fff7e6; }
+    .status-blocked_missing_otp_source { color: #475467; background: #f2f4f7; }
+    .status-deactivated { color: var(--red); background: #fff0ef; }
     .extract-link-cell {
       display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
       margin-top: 4px; max-width: 100%;
@@ -198,8 +204,8 @@
       width: 100%; max-width: 100%; min-width: 0;
       max-height: 320px; overflow: auto; line-height: 1.5;
     }
-    #logPanel, #retryLogPanel, #qrPanel { min-width: 0; max-width: 100%; overflow-x: hidden; }
-    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #qrPanel:not(.hidden) {
+    #logPanel, #retryLogPanel, #qrPanel, #reauthLogPanel { min-width: 0; max-width: 100%; overflow-x: hidden; }
+    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #qrPanel:not(.hidden), #reauthLogPanel:not(.hidden) {
       position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
       z-index: 1000; display: block; width: min(1100px, calc(100vw - 48px));
       max-height: min(760px, calc(100vh - 48px)); overflow: hidden;
@@ -207,9 +213,9 @@
       background: var(--surface); box-shadow: 0 0 0 9999px rgba(15,23,42,.45), 0 24px 70px rgba(15,23,42,.34);
     }
     #qrPanel:not(.hidden) { width: min(520px, calc(100vw - 48px)); text-align: center; }
-    #logPanel h3, #retryLogPanel h3, #qrPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
-    #logPanel h3 .btn, #retryLogPanel h3 .btn, #qrPanel h3 .btn { margin-left:auto; float:none !important; }
-    #logPanel .log, #retryLogPanel .log { max-height: calc(min(760px, calc(100vh - 48px)) - 74px); margin-top:0; }
+    #logPanel h3, #retryLogPanel h3, #qrPanel h3, #reauthLogPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+    #logPanel h3 .btn, #retryLogPanel h3 .btn, #qrPanel h3 .btn, #reauthLogPanel h3 .btn { margin-left:auto; float:none !important; }
+    #logPanel .log, #retryLogPanel .log, #reauthLogPanel .log { max-height: calc(min(760px, calc(100vh - 48px)) - 74px); margin-top:0; }
     #qrPanel img { display:block; max-width:min(360px, calc(100vw - 96px)); max-height:420px; margin:12px auto; border:1px solid var(--line); border-radius:10px; background:#fff; }
     #qrPanel .qr-link { display:block; word-break:break-all; white-space:normal; font-size:12px; color:var(--muted); margin-top:8px; }
     .hidden { display: none !important; }
@@ -246,6 +252,26 @@
       background: #fff; color: var(--blue); text-decoration: none; font-size: 12px; font-weight: 800;
     }
     .roxy-invite-link:hover { background: #e0ebff; }
+    .reauth-import-grid {
+      display: grid; grid-template-columns: minmax(260px, 1fr) minmax(320px, 1.2fr);
+      gap: 16px; align-items: end;
+    }
+    .reauth-import-grid label.fld { margin-bottom: 0; }
+    .segment-control {
+      display: inline-grid; grid-template-columns: repeat(2, minmax(145px, 1fr));
+      gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 7px; background: var(--soft);
+    }
+    .segment-control label { min-width: 0; }
+    .segment-control input { position: absolute; width: 1px; height: 1px; min-height: 0; margin: 0; opacity: 0; pointer-events: none; }
+    .segment-control span {
+      min-height: 32px; padding: 0 12px; display: flex; align-items: center; justify-content: center;
+      border: 1px solid transparent; border-radius: 5px; color: var(--muted); font-size: 12px; font-weight: 800; cursor: pointer;
+    }
+    .segment-control input:checked + span { color: #fff; background: var(--blue); border-color: var(--blue); }
+    .reauth-summary { display: flex; gap: 18px; flex-wrap: wrap; color: var(--muted); font-size: 12px; }
+    .reauth-summary strong { color: var(--text); font-size: 15px; margin-left: 4px; }
+    .import-errors { margin: 8px 0 0; padding-left: 18px; max-height: 150px; overflow: auto; }
+    .import-errors li { margin: 3px 0; overflow-wrap: anywhere; }
 
     /* ---- 左侧边栏（新增，暂不替换顶栏导航） ---- */
     .app-sidebar {
@@ -1846,6 +1872,12 @@
       </svg>
       <span class="sidebar-item-label">Codex 授权</span>
     </button>
+    <button type="button" data-tab="reauthorization" class="sidebar-item">
+      <svg class="sidebar-item-icon" viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/>
+      </svg>
+      <span class="sidebar-item-label">二次授权</span>
+    </button>
     <button type="button" data-tab="outlook" class="sidebar-item">
       <svg class="sidebar-item-icon" viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><path d="M22 6l-10 7L2 6"/>
@@ -2164,6 +2196,74 @@
     </section>
   </div>
 
+  <!-- ============ 二次授权 ============ -->
+  <div id="tab-reauthorization" class="hidden">
+    <h1 class="register-title">二次授权</h1>
+    <section class="card">
+      <div class="head"><h2>导入 Codex 账号</h2><p>导入已有 Codex JSON，关联邮箱 OTP 后执行本地二次授权。</p></div>
+      <div class="body">
+        <div id="reauthImportResult"></div>
+        <div class="reauth-import-grid">
+          <label class="fld">Codex JSON 文件
+            <input id="reauthFiles" type="file" accept="application/json,.json" multiple>
+            <span class="hint" id="reauthFilesHint">未选择文件</span>
+          </label>
+          <div>
+            <label class="fld">需要手机号时
+              <span class="segment-control" id="reauthPhonePolicy">
+                <label><input type="radio" name="reauthPhonePolicy" value="verify" checked><span>允许接码</span></label>
+                <label><input type="radio" name="reauthPhonePolicy" value="skip_if_required"><span>跳过该账号</span></label>
+              </span>
+            </label>
+          </div>
+        </div>
+        <div class="actions" style="margin-top:12px;">
+          <button class="primary" id="btnReauthImport" disabled>导入文件</button>
+        </div>
+      </div>
+    </section>
+    <section class="card">
+      <div class="toolbar">
+        <div>
+          <div class="search"><input id="qReauthorization" placeholder="搜索邮箱、account_id、状态、来源…"></div>
+          <div class="reauth-summary" style="margin-top:8px;">
+            <span>总数<strong id="reauthStatTotal">0</strong></span>
+            <span>运行中<strong id="reauthStatRunning">0</strong></span>
+            <span>成功<strong id="reauthStatSuccess">0</strong></span>
+            <span>阻塞/跳过<strong id="reauthStatBlocked">0</strong></span>
+          </div>
+        </div>
+        <div class="buttons">
+          <span class="muted" id="reauthSelectedHint" style="font-size:12px;align-self:center;margin-right:4px;">已选 0</span>
+          <button class="btn primary" id="btnReauthRunSelected" disabled>授权选中</button>
+          <button class="btn" id="btnReauthResetSelected" disabled>重置选中</button>
+          <button class="btn danger" id="btnReauthDeleteSelected" disabled>删除选中</button>
+          <button class="btn" id="btnRefreshReauthorization">刷新</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="reauth-table">
+          <colgroup>
+            <col class="col-check"><col class="col-id"><col class="col-email"><col class="col-account">
+            <col class="col-time"><col class="col-source"><col class="col-status"><col class="col-attempts">
+            <col class="col-time"><col class="col-error"><col class="col-token"><col class="col-actions">
+          </colgroup>
+          <thead><tr>
+            <th><input type="checkbox" id="reauthSelectAll" title="全选/取消全选当前页"></th>
+            <th>ID</th><th>邮箱</th><th>Account ID</th><th>原过期时间</th><th>OTP 来源</th>
+            <th>状态</th><th>尝试</th><th>最后执行</th><th class="wrap">错误</th><th>结果文件</th><th>操作</th>
+          </tr></thead>
+          <tbody id="reauthBody"></tbody>
+        </table>
+      </div>
+      <div class="pager-bar" id="pager-reauthorization"></div>
+      <div class="body hidden" id="reauthLogPanel">
+        <h3>二次授权日志 · <span id="reauthLogEmail"></span><button class="btn" id="btnCloseReauthLog" style="min-height:28px;">关闭</button></h3>
+        <div class="log" id="reauthLogContent">加载中…</div>
+      </div>
+    </section>
+  </div>
+
   <!-- ============ 邮箱池 ============ -->
   <div id="tab-outlook" class="hidden">
     <h1 class="register-title">邮箱池</h1>
@@ -2315,7 +2415,7 @@ const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
 let copySeq = 0;
 const copyStore = new Map();
-let ACCOUNTS = [], OUTLOOK = [], CONFIG = [];
+let ACCOUNTS = [], OUTLOOK = [], CONFIG = [], REAUTHORIZATION = [];
 let ACCOUNTS_TOTAL = 0;
 let OUTLOOK_TOTAL = 0;
 let SHOW_ARCHIVED_ACCOUNTS = false;
@@ -2328,6 +2428,8 @@ let JOB_STATUS_COUNTS = {};
 let jobsRenderSignature = '';
 const JOB_SELECTED = new Set();
 let activeLogJob = null, logTimer = null, jobsTimer = null;
+const REAUTH_SELECTED = new Set();
+let activeReauthLogId = null, reauthLogTimer = null, reauthPollTimer = null;
 
 // ---------- 分页状态 ----------
 const PAGERS = {
@@ -2335,6 +2437,7 @@ const PAGERS = {
   accounts: { page: 1, size: 20 },
   outlook:  { page: 1, size: 20 },
   codex:    { page: 1, size: 20 },
+  reauthorization: { page: 1, size: 20 },
 };
 
 function _renderPager(id, total) {
@@ -2436,7 +2539,7 @@ function pagerJump(id, val) {
 }
 
 function _reloadPagedList(id) {
-  ({ jobs: refreshJobs, accounts: loadAccounts, outlook: loadOutlook, codex: loadCodex })[id]?.();
+  ({ jobs: refreshJobs, accounts: loadAccounts, outlook: loadOutlook, codex: loadCodex, reauthorization: renderReauthorization })[id]?.();
 }
 function pagerGo(id, dir) {
   PAGERS[id].page = Math.max(1, PAGERS[id].page + dir);
@@ -2467,6 +2570,22 @@ function cbtn(label, value, cls='') { const id = copyId(value); return `<button 
 function pill(status) {
   const map = { available:'可用', used:'已用', failed:'失败', partial_success:'部分成功', disabled:'已停用', pending:'排队', running:'运行中', stopping:'停止中', stopped:'已停止', success:'成功', cancelled:'已取消' };
   return `<span class="pill status-${esc(status)}">${esc(map[status]||status||'-')}</span>`;
+}
+function reauthStatusPill(status) {
+  const map = {
+    pending:'待处理', running:'运行中', success:'成功', failed:'失败', deactivated:'账号已停用',
+    skipped_phone_required:'需要手机，已跳过', blocked_missing_otp_source:'缺少 OTP 来源'
+  };
+  const value = status || 'pending';
+  return `<span class="pill status-${esc(value)}" title="${esc(map[value] || value)}">${esc(map[value] || value)}</span>`;
+}
+function redactSensitiveText(value) {
+  let text = String(value == null ? '' : value);
+  text = text.replace(/(["']?\b(?:id_token|access_token|refresh_token|refreshToken|client_secret|password)\b["']?\s*[:=]\s*)["']?[^\s,"'}\]]+["']?/gi, '$1[已隐藏]');
+  text = text.replace(/\bAuthorization\s*:\s*Bearer\s+[^\s]+/gi, 'Authorization: Bearer [已隐藏]');
+  text = text.replace(/([?&](?:code|id_token|access_token|refresh_token)=)[^&\s]+/gi, '$1[已隐藏]');
+  text = text.replace(/\beyJ[A-Za-z0-9_-]{20,}(?:\.[A-Za-z0-9_-]+){1,2}\b/g, '[JWT 已隐藏]');
+  return text;
 }
 function pillV2(status) {
   const s = String(status || '');
@@ -2519,13 +2638,14 @@ function debounce(fn, wait=250) {
 
 // ---------- Tab 切换 ----------
 function activateTab(tab, persist=true) {
-  const allowed = ['register','accounts','codex','outlook','config'];
+  const allowed = ['register','accounts','codex','reauthorization','outlook','config'];
   if (!allowed.includes(tab)) tab = 'register';
   $$('nav button').forEach(x => x.classList.toggle('active', x.dataset.tab === tab));
   allowed.forEach(t => $('#tab-'+t).classList.toggle('hidden', t !== tab));
   if (persist) localStorage.setItem('gpt_console_active_tab', tab);
   if (tab === 'accounts') loadAccounts();
   if (tab === 'codex') loadCodex();
+  if (tab === 'reauthorization') loadReauthorization();
   if (tab === 'outlook') loadOutlook();
   if (tab === 'config') loadConfig();
   if (tab === 'register') refreshJobs();
@@ -2755,6 +2875,7 @@ function updateModalScrollLock() {
   const opened = !$('#logPanel').classList.contains('hidden')
     || !$('#retryLogPanel').classList.contains('hidden')
     || !$('#qrPanel').classList.contains('hidden')
+    || !$('#reauthLogPanel').classList.contains('hidden')
     || !$('#outlookImportModal').classList.contains('hidden');
   const locked = document.body.classList.contains('modal-open');
   if (opened && !locked) {
@@ -4926,6 +5047,270 @@ async function codexDeleteBulk() {
   window.addEventListener('resize', () => closeCodexV2MoreMenus());
 })();
 
+// ---------- Codex 二次授权 ----------
+function selectedReauthPhonePolicy() {
+  return document.querySelector('input[name="reauthPhonePolicy"]:checked')?.value || 'verify';
+}
+
+function reauthRowsForCurrentPage() {
+  const q = $('#qReauthorization').value.trim().toLowerCase();
+  const filtered = REAUTHORIZATION.filter(r => !q || [
+    r.email, r.account_id, r.status, r.result_filename, r.source_filename,
+    r.otp_source, r.email_source, r.last_error, r.error,
+  ].join('\n').toLowerCase().includes(q));
+  const p = PAGERS.reauthorization;
+  return { filtered, rows: filtered.slice((p.page - 1) * p.size, p.page * p.size) };
+}
+
+function reauthCanRun(row) {
+  return !['running', 'blocked_missing_otp_source'].includes(row.status || 'pending');
+}
+
+function reauthOtpCell(row) {
+  const source = row.otp_source || row.email_source || '';
+  if ((row.status || '') === 'blocked_missing_otp_source' || row.otp_available === false) {
+    return '<span class="pill status-blocked_missing_otp_source">未关联</span>';
+  }
+  return source ? `<span class="main-cell">${esc(source)}</span>` : '<span class="muted">待校验</span>';
+}
+
+function updateReauthorizationSelectionUi() {
+  const selectedRows = Array.from(REAUTH_SELECTED)
+    .map(id => REAUTHORIZATION.find(r => Number(r.id) === Number(id))).filter(Boolean);
+  const runnable = selectedRows.filter(reauthCanRun).length;
+  const running = selectedRows.filter(r => r.status === 'running').length;
+  const deletable = selectedRows.filter(r => r.status !== 'running').length;
+  $('#reauthSelectedHint').textContent = `已选 ${selectedRows.length}`;
+  $('#btnReauthRunSelected').disabled = runnable === 0;
+  $('#btnReauthResetSelected').disabled = running === 0;
+  $('#btnReauthDeleteSelected').disabled = deletable === 0;
+}
+
+function renderReauthorization() {
+  const { filtered, rows } = reauthRowsForCurrentPage();
+  const knownIds = new Set(REAUTHORIZATION.map(r => Number(r.id)));
+  Array.from(REAUTH_SELECTED).forEach(id => { if (!knownIds.has(Number(id))) REAUTH_SELECTED.delete(Number(id)); });
+
+  $('#reauthStatTotal').textContent = REAUTHORIZATION.length;
+  $('#reauthStatRunning').textContent = REAUTHORIZATION.filter(r => r.status === 'running').length;
+  $('#reauthStatSuccess').textContent = REAUTHORIZATION.filter(r => r.status === 'success').length;
+  $('#reauthStatBlocked').textContent = REAUTHORIZATION.filter(r => ['blocked_missing_otp_source','skipped_phone_required'].includes(r.status)).length;
+
+  $('#reauthBody').innerHTML = rows.map(r => {
+    const id = Number(r.id);
+    const status = r.status || 'pending';
+    const errorText = redactSensitiveText(r.last_error || r.error || '');
+    const resultFile = r.result_filename || r.file_name || '';
+    const checked = REAUTH_SELECTED.has(id) ? 'checked' : '';
+    const runDisabled = reauthCanRun(r) ? '' : 'disabled';
+    const runLabel = ['failed','skipped_phone_required','deactivated','success'].includes(status) ? '重新授权' : '授权';
+    return `<tr>
+      <td><input type="checkbox" class="reauth-row-check" data-reauth-id="${esc(id)}" ${checked}></td>
+      <td>${esc(id)}</td>
+      <td><div class="main-cell">${esc(r.email || '-')}</div><div class="sub-cell">${esc(r.source_filename || '-')}</div></td>
+      <td><span class="mono" title="${esc(r.account_id || '-')}">${esc(short(r.account_id || '-', 24))}</span></td>
+      <td class="muted">${esc(r.expired || r.previous_expired || '-')}</td>
+      <td>${reauthOtpCell(r)}</td>
+      <td>${reauthStatusPill(status)}</td>
+      <td class="center">${esc(r.attempt_count ?? 0)}</td>
+      <td class="muted">${esc(r.last_attempt_at || r.updated_at || '-')}</td>
+      <td class="wrap" title="${esc(errorText)}">${esc(short(errorText, 100))}</td>
+      <td><span class="mono" title="${esc(resultFile || '-')}">${esc(short(resultFile || '-', 34))}</span></td>
+      <td class="actions">
+        <button class="primary" data-reauth-run="${esc(id)}" ${runDisabled}>${runLabel}</button>
+        <button data-reauth-log="${esc(id)}">日志</button>
+        ${status === 'running' ? `<button data-reauth-reset="${esc(id)}" title="将陈旧运行状态重置为失败">重置</button>` : ''}
+        <button class="danger" data-reauth-delete="${esc(id)}" ${status === 'running' ? 'disabled' : ''}>删除</button>
+      </td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="12" class="muted">暂无二次授权账号。</td></tr>';
+
+  const pageIds = rows.map(r => Number(r.id));
+  const allChecked = pageIds.length > 0 && pageIds.every(id => REAUTH_SELECTED.has(id));
+  $('#reauthSelectAll').checked = allChecked;
+  $('#reauthSelectAll').indeterminate = !allChecked && pageIds.some(id => REAUTH_SELECTED.has(id));
+  updateReauthorizationSelectionUi();
+  _renderPager('reauthorization', filtered.length);
+}
+
+async function loadReauthorization(showError=true) {
+  try {
+    const response = await api('/api/codex/reauthorization/accounts');
+    const nextRows = Array.isArray(response) ? response : (response.accounts || response.items || []);
+    if (JSON.stringify(nextRows) !== JSON.stringify(REAUTHORIZATION)) {
+      REAUTHORIZATION = nextRows;
+      renderReauthorization();
+    } else if (!$('#reauthBody').children.length) {
+      renderReauthorization();
+    }
+  } catch(e) {
+    renderReauthorization();
+    if (showError) showToast('加载二次授权账号失败: ' + redactSensitiveText(e.message));
+  }
+}
+
+function renderReauthImportResult(result) {
+  const inserted = result.inserted ?? result.created ?? 0;
+  const updated = result.updated ?? 0;
+  const rawErrors = result.errors || result.failed || [];
+  const errors = Array.isArray(rawErrors) ? rawErrors : [];
+  const failedCount = result.failed_count ?? (typeof result.failed === 'number' ? result.failed : errors.length);
+  const errorHtml = errors.length ? `<ul class="import-errors">${errors.slice(0, 50).map((item, index) => {
+    const file = typeof item === 'object' ? (item.filename || item.file || `记录 ${item.index ?? index + 1}`) : `记录 ${index + 1}`;
+    const reason = typeof item === 'object' ? (item.error || item.reason || '格式无效') : item;
+    return `<li><b>${esc(file)}</b>：${esc(redactSensitiveText(reason))}</li>`;
+  }).join('')}</ul>` : '';
+  $('#reauthImportResult').innerHTML = `<div class="banner ${failedCount ? 'warn' : 'info'}">新增 ${esc(inserted)}，更新 ${esc(updated)}，失败 ${esc(failedCount)}${errorHtml}</div>`;
+}
+
+$('#reauthFiles').addEventListener('change', (e) => {
+  const files = Array.from(e.target.files || []);
+  $('#reauthFilesHint').textContent = files.length ? `已选择 ${files.length} 个文件` : '未选择文件';
+  $('#btnReauthImport').disabled = files.length === 0;
+});
+
+$('#btnReauthImport').addEventListener('click', async () => {
+  const files = Array.from($('#reauthFiles').files || []);
+  if (!files.length) return;
+  const form = new FormData();
+  files.forEach(file => form.append('files', file, file.name));
+  const btn = $('#btnReauthImport');
+  btn.disabled = true;
+  try {
+    const result = await api('/api/codex/reauthorization/import', { method:'POST', body:form });
+    renderReauthImportResult(result);
+    $('#reauthFiles').value = '';
+    $('#reauthFilesHint').textContent = '未选择文件';
+    showToast('导入处理完成');
+    await loadReauthorization(false);
+  } catch(e) {
+    $('#reauthImportResult').innerHTML = `<div class="banner warn">导入失败：${esc(redactSensitiveText(e.message))}</div>`;
+  } finally {
+    btn.disabled = !$('#reauthFiles').files.length;
+  }
+});
+
+async function runReauthorization(ids) {
+  const requested = ids.map(Number).filter(Number.isFinite);
+  const runnable = requested.filter(id => {
+    const row = REAUTHORIZATION.find(r => Number(r.id) === id);
+    return row && reauthCanRun(row);
+  });
+  if (!runnable.length) { showToast('选中账号当前不可执行'); return; }
+  const policy = selectedReauthPhonePolicy();
+  const policyLabel = policy === 'verify' ? '允许接码' : '需要手机时跳过';
+  if (!confirm(`开始 ${runnable.length} 个账号的本地二次授权？\n\n手机策略：${policyLabel}`)) return;
+  try {
+    const result = await api('/api/codex/reauthorization/run', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ids:runnable, phone_policy:policy}),
+    });
+    showToast(result.message || `已提交 ${result.accepted_count ?? runnable.length} 个账号`);
+    await loadReauthorization(false);
+  } catch(e) { showToast('启动失败: ' + redactSensitiveText(e.message)); }
+}
+
+async function deleteReauthorization(ids) {
+  const deletable = ids.map(Number).filter(id => {
+    const row = REAUTHORIZATION.find(r => Number(r.id) === id);
+    return row && row.status !== 'running';
+  });
+  if (!deletable.length) { showToast('运行中账号不能删除'); return; }
+  if (!confirm(`删除选中的 ${deletable.length} 条二次授权记录？\n\n不会删除邮箱素材、注册账号或 Codex 凭证。`)) return;
+  try {
+    const result = await api('/api/codex/reauthorization/delete', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ids:deletable}),
+    });
+    deletable.forEach(id => REAUTH_SELECTED.delete(id));
+    showToast(`已删除 ${result.deleted_count ?? deletable.length} 条记录`);
+    await loadReauthorization(false);
+  } catch(e) { showToast('删除失败: ' + redactSensitiveText(e.message)); }
+}
+
+async function resetReauthorization(ids) {
+  const running = ids.map(Number).filter(id => REAUTHORIZATION.find(r => Number(r.id) === id)?.status === 'running');
+  if (!running.length) { showToast('没有可重置的运行中记录'); return; }
+  if (!confirm(`将 ${running.length} 条运行中记录重置为失败状态？`)) return;
+  try {
+    const result = await api('/api/codex/reauthorization/reset', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ids:running}),
+    });
+    showToast(result.message || `已重置 ${result.reset_count ?? running.length} 条记录`);
+    await loadReauthorization(false);
+  } catch(e) { showToast('重置失败: ' + redactSensitiveText(e.message)); }
+}
+
+function closeReauthLogModal() {
+  activeReauthLogId = null;
+  clearInterval(reauthLogTimer);
+  $('#reauthLogPanel').classList.add('hidden');
+  updateModalScrollLock();
+}
+
+function openReauthLog(id) {
+  const row = REAUTHORIZATION.find(r => Number(r.id) === Number(id));
+  activeReauthLogId = Number(id);
+  $('#reauthLogEmail').textContent = row?.email || `#${id}`;
+  $('#reauthLogContent').textContent = '加载中…';
+  $('#reauthLogPanel').classList.remove('hidden');
+  updateModalScrollLock();
+  pollReauthLog();
+  clearInterval(reauthLogTimer);
+  reauthLogTimer = setInterval(pollReauthLog, 2000);
+}
+
+async function pollReauthLog() {
+  if (activeReauthLogId == null) return;
+  try {
+    const result = await api(`/api/codex/reauthorization/${activeReauthLogId}/log`);
+    const content = $('#reauthLogContent');
+    const atBottom = content.scrollTop + content.clientHeight >= content.scrollHeight - 30;
+    content.textContent = redactSensitiveText(result.log || '(暂无日志)');
+    if (atBottom) content.scrollTop = content.scrollHeight;
+    const status = result.account?.status || result.status;
+    if (status && status !== 'running') clearInterval(reauthLogTimer);
+  } catch(e) {
+    $('#reauthLogContent').textContent = `日志加载失败：${redactSensitiveText(e.message)}`;
+  }
+}
+
+$('#qReauthorization').addEventListener('input', () => { PAGERS.reauthorization.page = 1; renderReauthorization(); });
+$('#btnRefreshReauthorization').addEventListener('click', () => loadReauthorization());
+$('#btnCloseReauthLog').addEventListener('click', closeReauthLogModal);
+$('#btnReauthRunSelected').addEventListener('click', () => runReauthorization(Array.from(REAUTH_SELECTED)));
+$('#btnReauthDeleteSelected').addEventListener('click', () => deleteReauthorization(Array.from(REAUTH_SELECTED)));
+$('#btnReauthResetSelected').addEventListener('click', () => resetReauthorization(Array.from(REAUTH_SELECTED)));
+
+$('#reauthSelectAll').addEventListener('change', (e) => {
+  const { rows } = reauthRowsForCurrentPage();
+  if (e.target.checked) rows.forEach(r => REAUTH_SELECTED.add(Number(r.id)));
+  else rows.forEach(r => REAUTH_SELECTED.delete(Number(r.id)));
+  renderReauthorization();
+});
+
+$('#reauthBody').addEventListener('change', (e) => {
+  const check = e.target.closest('.reauth-row-check');
+  if (!check) return;
+  const id = Number(check.dataset.reauthId);
+  if (check.checked) REAUTH_SELECTED.add(id); else REAUTH_SELECTED.delete(id);
+  updateReauthorizationSelectionUi();
+  const { rows } = reauthRowsForCurrentPage();
+  const ids = rows.map(r => Number(r.id));
+  $('#reauthSelectAll').checked = ids.length > 0 && ids.every(rowId => REAUTH_SELECTED.has(rowId));
+  $('#reauthSelectAll').indeterminate = ids.some(rowId => REAUTH_SELECTED.has(rowId)) && !$('#reauthSelectAll').checked;
+});
+
+$('#reauthBody').addEventListener('click', (e) => {
+  const run = e.target.closest('[data-reauth-run]');
+  if (run) { runReauthorization([Number(run.dataset.reauthRun)]); return; }
+  const log = e.target.closest('[data-reauth-log]');
+  if (log) { openReauthLog(Number(log.dataset.reauthLog)); return; }
+  const reset = e.target.closest('[data-reauth-reset]');
+  if (reset) { resetReauthorization([Number(reset.dataset.reauthReset)]); return; }
+  const del = e.target.closest('[data-reauth-delete]');
+  if (del) deleteReauthorization([Number(del.dataset.reauthDelete)]);
+});
+
 // ---------- 配置 ----------
 let CONFIG_EMAIL_ACTIVE_SECTION_V2 = '通用邮箱 / OTP';
 let CONFIG_SMS_ACTIVE_SECTION_V2 = '通用接码';
@@ -5781,6 +6166,11 @@ document.addEventListener('click', (e) => {
 loadSummary();
 activateTab(localStorage.getItem('gpt_console_active_tab') || 'register', false);
 jobsTimer = setInterval(() => { if (!$('#tab-register').classList.contains('hidden')) refreshJobs(); }, 3000);
+reauthPollTimer = setInterval(() => {
+  if (!$('#tab-reauthorization').classList.contains('hidden') && REAUTHORIZATION.some(r => r.status === 'running')) {
+    loadReauthorization(false);
+  }
+}, 3000);
 setInterval(loadSummary, 5000);
 setInterval(() => { if (!$('#tab-accounts').classList.contains('hidden')) pollAccountPlanStatuses(); }, 2000);
 </script>
