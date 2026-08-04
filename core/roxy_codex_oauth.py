@@ -746,7 +746,8 @@ def _set_phone_value(driver, phone: str, *, timeout: int = 10) -> dict:
     };
     """, phone)
     if not result or not result.get("ok"):
-        raise RuntimeError(f"手机号写入失败 result={result} state={_phone_page_state(driver)}")
+        reason = result.get("error") if isinstance(result, dict) else "empty_result"
+        raise RuntimeError(f"手机号写入失败 reason={reason} state={_phone_page_state(driver)}")
     actual = str(result.get("actualVisible") or "").strip()
     visible_value = str(result.get("visibleValue") or "").strip()
     hidden_value = str(result.get("hiddenValue") or "").strip()
@@ -759,9 +760,15 @@ def _set_phone_value(driver, phone: str, *, timeout: int = 10) -> dict:
     hidden_digits = ''.join(ch for ch in hidden_value if ch.isdigit())
     expected_visible_ok = bool(actual_digits) and (actual_digits == visible_digits or actual_digits == e164_digits)
     if not expected_visible_ok:
-        raise RuntimeError(f"手机号可见输入框校验失败 expected_digits={visible_digits or e164_digits} actual={actual} result={result} state={_phone_page_state(driver)}")
+        raise RuntimeError(
+            f"手机号可见输入框校验失败 expected={sms_provider.phone_for_log(visible_value or e164)} "
+            f"actual={sms_provider.phone_for_log(actual)} state={_phone_page_state(driver)}"
+        )
     if hidden_value and hidden_digits != e164_digits:
-        raise RuntimeError(f"手机号隐藏字段校验失败 expected={e164} actual={hidden_value} result={result} state={_phone_page_state(driver)}")
+        raise RuntimeError(
+            f"手机号隐藏字段校验失败 expected={sms_provider.phone_for_log(e164)} "
+            f"actual={sms_provider.phone_for_log(hidden_value)} state={_phone_page_state(driver)}"
+        )
     return result
 
 
@@ -801,7 +808,8 @@ def _verify_add_phone_value_before_submit(driver, expected_e164: str) -> dict:
     return {ok, visibleValue, hiddenValue, expected, visibleDigits, hiddenDigits, expectedDigits, url: location.href};
     """, expected_e164)
     if not result or not result.get("ok"):
-        raise RuntimeError(f"手机号提交前校验失败 result={result} state={_phone_page_state(driver)}")
+        reason = result.get("error") if isinstance(result, dict) else "invalid_value"
+        raise RuntimeError(f"手机号提交前校验失败 reason={reason} state={_phone_page_state(driver)}")
     return result
 
 
@@ -1052,18 +1060,18 @@ def _do_phone_verification_if_present(driver) -> None:
             activation_id = None
             try:
                 activation_id, phone = sms_provider.acquire_number(http)
-                logger.info("[Codex][Browser] 手机验证尝试 %s/%s，provider=%s，号码=+%s", attempt, max_retries, provider, phone)
+                logger.info("[Codex][Browser] 手机验证尝试 %s/%s，provider=%s，号码=%s", attempt, max_retries, provider, sms_provider.phone_for_log(phone))
                 logger.info("[Codex][Browser] 准备手机号输入页，重新设置新手机号")
                 _ensure_add_phone_input(driver, reason=f"attempt-{attempt}")
                 phone_fill = _set_phone_value(driver, f"+{phone}", timeout=10)
                 logger.info(
                     "[Codex][Browser] 已重新设置手机号：e164=%s visible=%s hidden=%s dialCode=%s country=%s",
-                    phone_fill.get("e164"), phone_fill.get("actualVisible"), phone_fill.get("hiddenValue") or "-",
+                    sms_provider.phone_for_log(phone_fill.get("e164")), sms_provider.phone_for_log(phone_fill.get("actualVisible")), sms_provider.phone_for_log(phone_fill.get("hiddenValue") or "-"),
                     phone_fill.get("dialCode") or "-", (str(phone_fill.get("selectedText") or "-") + (" [changed]" if phone_fill.get("selectedChanged") else "")),
                 )
                 _blur_active_input_and_wait(driver, label="手机号输入完成")
                 phone_verify = _verify_add_phone_value_before_submit(driver, str(phone_fill.get("e164") or f"+{phone}"))
-                logger.info("[Codex][Browser] 手机号提交前校验通过：visible=%s hidden=%s", phone_verify.get("visibleValue"), phone_verify.get("hiddenValue") or "-")
+                logger.info("[Codex][Browser] 手机号提交前校验通过：visible=%s hidden=%s", sms_provider.phone_for_log(phone_verify.get("visibleValue")), sms_provider.phone_for_log(phone_verify.get("hiddenValue") or "-"))
                 logger.info("[Codex][Browser] 检查并选择 SMS 短信通道")
                 _select_sms_channel_or_raise(driver)
                 _blur_active_input_and_wait(driver, label="短信通道确认完成")
@@ -1072,7 +1080,7 @@ def _do_phone_verification_if_present(driver) -> None:
                 _wait_page_settle_after_submit()
 
                 # 等待页面进入 phone-verification；若号码无效/无法发送/WhatsApp 通道，立即换号。
-                _wait_after_phone_send(driver, timeout=15)
+                _wait_after_phone_send(driver, timeout=5 if provider == "smsbower" else 15)
                 logger.info("[Codex][Browser] 已进入手机验证码页")
 
                 sms_provider.set_status(activation_id, 1, http=http)
@@ -1081,7 +1089,7 @@ def _do_phone_verification_if_present(driver) -> None:
                     activation_id, sms_provider._cfg.SMS_CODE_WAIT, sms_provider._cfg.SMS_POLL_INTERVAL
                 )
                 sms_code = sms_provider.wait_for_sms_code(activation_id, http)
-                logger.info("[Codex][Browser] 手机 OTP 收到：%s", sms_code)
+                logger.info("[Codex][Browser] 手机 OTP 收到：%s", sms_provider.code_for_log(sms_code))
                 _type_otp(driver, sms_code)
                 logger.info("[Codex][Browser] 已填写手机 OTP")
                 human_delay("otp_input")

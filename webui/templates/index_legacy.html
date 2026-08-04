@@ -154,6 +154,11 @@
       margin-top: 4px; max-width: 100%;
     }
     .extract-link-cell .pill { min-width: auto; padding: 4px 10px; }
+    .extract-link-cell .extract-status-label {
+      width: 96px; max-width: 100%; height: 26px; min-height: 26px;
+      flex: 0 0 96px; box-sizing: border-box; justify-content: center;
+      overflow: visible; text-overflow: clip; white-space: nowrap;
+    }
     .extract-link-btn {
       min-height: 26px; border: 1px solid #cfe7dc; border-radius: 999px;
       padding: 0 10px; font-size: 12px; font-weight: 800; line-height: 1;
@@ -162,6 +167,7 @@
     }
     .extract-link-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 10px rgba(22,128,60,.10); }
     .extract-copy { color: #166534; background: linear-gradient(180deg, #f0fbf5, #e3f5ea); border-color: #b9dfc9; }
+    .extract-success-copy { border: 0; font-family: inherit; cursor: pointer; }
     .extract-qr { color: #1d4ed8; background: linear-gradient(180deg, #f3f7ff, #e8f0ff); border-color: #bdd0ff; }
     .extract-link-expire {
       flex-basis: 100%; margin-top: 1px; color: #667085; font-size: 12px;
@@ -464,6 +470,9 @@
             <label class="inline-num" title="只查询/显示已开通 Plus 的账号">
               <input id="showPlusAccountsOnly" type="checkbox" style="width:auto;min-height:auto;"> 已开通Plus
             </label>
+            <label class="inline-num" title="只查询/显示 Codex 授权已通过的账号">
+              <input id="showCodexSuccessOnly" type="checkbox" style="width:auto;min-height:auto;"> Codex已通过
+            </label>
             <button class="btn" id="btnRefreshAccounts" title="重新加载当前筛选条件和当前页账号列表">刷新账号</button>
           </div>
         </div>
@@ -477,7 +486,11 @@
             <span class="btn-group-title">Agent</span>
             <button class="btn good" id="btnGenerateSelectedAgent" disabled title="给选中的已注册账号批量生成 Codex Agent Token">生成</button>
             <button class="btn good" id="btnDownloadSelectedAgent" disabled title="下载选中账号已生成的 Codex Agent Token，打包 ZIP">下载</button>
-            <button class="btn good" id="btnUploadSelectedAgentSub2" disabled title="把选中账号已生成的 Codex Agent Token 上传到 sub2api">上传sub2</button>
+          <button class="btn good" id="btnUploadSelectedAgentSub2" disabled title="把选中账号已生成的 Codex Agent Token 上传到 sub2api">上传sub2</button>
+          </div>
+          <div class="btn-group">
+            <span class="btn-group-title">AT</span>
+            <button class="btn primary" id="btnRefreshSelectedAt" disabled title="为选中的账号批量创建 Roxy 重新登录任务">批量重新获取 AT</button>
           </div>
           <div class="btn-group">
             <span class="btn-group-title">Codex</span>
@@ -551,6 +564,13 @@
       <div class="toolbar" style="padding-top:10px;padding-bottom:10px;">
         <div class="search"><input id="qCodex" placeholder="搜索邮箱、plan、account_id…"></div>
         <div class="buttons">
+          <label class="muted" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;">导出状态
+            <select id="codexExportStatus" aria-label="导出状态筛选">
+              <option value="all">全部</option>
+              <option value="pending">未导出</option>
+              <option value="exported">已导出</option>
+            </select>
+          </label>
           <span class="muted" id="codexSelectedHint" style="font-size:12px;align-self:center;margin-right:4px;">已选 0</span>
           <button class="btn primary" id="btnCodexDownloadBulk" disabled title="把选中的多个本地凭证打包成一个 JSON 文件下载（备份/迁移用，CPA 不能直接读，需先解包）">批量下载本地</button>
           <button class="btn good" id="btnCodexDownloadBulkCpa" disabled title="从 CPA auth-files 下载选中账号的真实 Codex JSON，并打包成 ZIP（可直接解压放入 CPA auth-dir）">批量从CPA下载</button>
@@ -660,6 +680,7 @@ let ACCOUNTS_TOTAL = 0;
 let OUTLOOK_TOTAL = 0;
 let SHOW_ARCHIVED_ACCOUNTS = false;
 let SHOW_PLUS_ACCOUNTS_ONLY = false;
+let SHOW_CODEX_SUCCESS_ONLY = false;
 const ACCOUNT_SELECTED = new Set();
 const OUTLOOK_SELECTED = new Set();
 let JOBS = [];
@@ -1140,9 +1161,10 @@ async function loadAccounts() {
   try {
     const archived = SHOW_ARCHIVED_ACCOUNTS ? 'only' : '0';
     const plan = SHOW_PLUS_ACCOUNTS_ONLY ? 'plus' : '';
+    const codexStatus = SHOW_CODEX_SUCCESS_ONLY ? 'success' : '';
     const q = $('#qAccounts') ? $('#qAccounts').value.trim() : '';
     const p = PAGERS.accounts;
-    const res = await api(`/api/accounts?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&q=${encodeURIComponent(q)}`);
+    const res = await api(`/api/accounts?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&codex_status=${encodeURIComponent(codexStatus)}&q=${encodeURIComponent(q)}`);
     ACCOUNTS = res.items || [];
     ACCOUNTS_TOTAL = Number(res.total || ACCOUNTS.length || 0);
     const totalPages = Math.max(1, Math.ceil(ACCOUNTS_TOTAL / p.size));
@@ -1157,9 +1179,10 @@ async function pollAccountPlanStatuses() {
   try {
     const archived = SHOW_ARCHIVED_ACCOUNTS ? 'only' : '0';
     const plan = SHOW_PLUS_ACCOUNTS_ONLY ? 'plus' : '';
+    const codexStatus = SHOW_CODEX_SUCCESS_ONLY ? 'success' : '';
     const q = $('#qAccounts') ? $('#qAccounts').value.trim() : '';
     const p = PAGERS.accounts;
-    const snapshot = await api(`/api/accounts/plan-check-status?page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&q=${encodeURIComponent(q)}`);
+    const snapshot = await api(`/api/accounts/plan-check-status?page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&codex_status=${encodeURIComponent(codexStatus)}&q=${encodeURIComponent(q)}`);
     const items = snapshot.items || [];
     const accountById = new Map(ACCOUNTS.map(r => [Number(r.id), r]));
     const hasUnknown = items.some(item => !accountById.has(Number(item.id)));
@@ -1178,9 +1201,12 @@ async function pollAccountPlanStatuses() {
         const isExtracting = ['queued', 'running'].includes(item.extract_link_status);
         const wasAgenting = ['queued', 'running'].includes(account?.codex_agent_status);
         const isAgenting = ['queued', 'running'].includes(item.codex_agent_status);
+        const wasRefreshingAt = ['pending', 'running', 'stopping'].includes(account?.at_refresh_status);
+        const isRefreshingAt = ['pending', 'running', 'stopping'].includes(item.at_refresh_status);
         if (wasChecking && !isChecking) needsFullReload = true;
         if (wasExtracting && !isExtracting) needsFullReload = true;
         if (wasAgenting && !isAgenting) needsFullReload = true;
+        if (wasRefreshingAt && !isRefreshingAt) needsFullReload = true;
         Object.assign(account, item);
       });
       planStatusRevision = snapshot.revision || '';
@@ -1329,32 +1355,52 @@ function _fmtExtractExpire(v) {
   }
   return _fmtPlanTime(raw, false) || raw;
 }
+function _extractLinkProgressLabel(message) {
+  const text = String(message || '');
+  const attempt = text.match(/Masi Job\s*第\s*(\d+)\s*\/\s*(\d+)\s*次/i);
+  if (!attempt) return '提链进行中';
+  return `${/(失败|重试|重新提交)/.test(text) ? '重试' : '提炼'} ${attempt[1]}/${attempt[2]}`;
+}
 function _extractLinkCell(r) {
   const s = r.extract_link_status || '';
   const err = r.extract_link_error || '';
   const msg = r.extract_link_message || '';
   const title = esc(err || msg || r.extract_link_job_id || '');
-  if (s === 'queued') return `<span class="pill status-running" title="${title}">提链排队</span>`;
-  if (s === 'running') return `<span class="pill status-running" title="${title}">${esc(msg || '提链中')}</span>`;
+  if (s === 'queued') return `<span class="pill status-running extract-status-label" title="${title}">提链排队</span>`;
+  if (s === 'running') return `<span class="pill status-running extract-status-label" title="${title}">${esc(_extractLinkProgressLabel(msg))}</span>`;
   if (s === 'success') {
     const typ = (r.extract_link_type || '').toUpperCase();
+    const provider = (r.extract_link_provider || 'legacy').toUpperCase();
+    const mode = (r.extract_link_update_mode || 'sse').toUpperCase();
+    const cdk = r.extract_link_cdk_fingerprint ? ` · CDK ${r.extract_link_cdk_fingerprint}` : '';
     const link = r.extract_link_long_url || r.extract_link_copy_paste || '';
     const qr = r.extract_link_image_url_png || r.extract_link_image_url_svg || '';
     const expire = _fmtExtractExpire(r.extract_link_expires_at || '');
-    const copy = link ? cbtn('复制提链', link, 'extract-link-btn extract-copy') : '';
+    const successLabel = `提链成功${typ ? '(' + typ + ')' : ''}`;
+    const successTitle = [
+      successLabel,
+      `${provider} · ${mode}${cdk}`,
+      expire ? `支付到期：${expire}` : '',
+      link ? '点击复制提链' : '',
+    ].filter(Boolean).join('；');
+    const successCopyId = copyId(link);
+    const success = link
+      ? `<button type="button" class="pill status-success extract-success-copy extract-status-label" data-copy-id="${successCopyId}" title="${esc(successTitle)}">提链成功</button>`
+      : `<span class="pill status-success extract-status-label" title="${esc(successTitle || title)}">提链成功</span>`;
     const qrBtn = qr ? `<button class="extract-link-btn extract-qr" data-qr-url="${esc(qr)}" title="打开支付二维码图片">查看二维码</button>` : '';
-    const expireHtml = expire ? `<div class="extract-link-expire" title="支付链接过期时间">支付到期：${esc(expire)}</div>` : '';
-    return `<div class="extract-link-cell"><span class="pill status-success" title="${title || esc(link)}">提链成功${typ ? '(' + esc(typ) + ')' : ''}</span>${copy}${qrBtn}${expireHtml}</div>`;
+    return `<div class="extract-link-cell">${success}${qrBtn}</div>`;
   }
-  if (s === 'failed') {
+  if (s === 'failed' || s === 'canceled') {
     const reason = err || msg || '未知原因';
-    return `<div class="extract-link-cell"><span class="pill status-failed" title="${esc(reason)}">提链失败</span><div class="extract-link-error" title="${esc(reason)}">${esc(reason)}</div></div>`;
+    const label = s === 'canceled' ? '已取消' : '提链失败';
+    return `<div class="extract-link-cell"><span class="pill status-failed extract-status-label" title="${esc(reason)}">${label}</span></div>`;
   }
   return '';
 }
 function _extractLinkAction(r) {
   const s = r.extract_link_status || '';
   if (['queued','running'].includes(s)) return `<button disabled title="${esc(r.extract_link_message || '提链任务执行中')}">提链中…</button>`;
+  if (r.extract_link_resumable) return `<button class="good" data-extract-link-resume="${esc(r.id)}" title="只轮询已保存的 Masi Job，不创建新 Job、不再次消耗 CDK">恢复轮询</button>`;
   const plan = (r.current_plan_type || r.plan_type || '').toString().toLowerCase();
   const eligible = plan === 'free' && !!r.plus_trial_eligible;
   if (!eligible) return '';
@@ -1369,6 +1415,18 @@ function _codexAction(r) {
   if (s === 'deactivated') return '';
   const label = s === 'success' ? '重新补跑 Codex' : '补跑 Codex';
   return `<button data-codex-retry="${esc(r.email)}" title="重新跑一次 Codex 授权（会消耗 1 封邮箱 OTP + 1 个接码短信）">${label}</button>`;
+}
+function _atRefreshAction(r) {
+  const s = r.at_refresh_status || '';
+  const jobId = Number(r.at_refresh_job_id || 0);
+  const err = r.at_refresh_error || '';
+  const log = jobId ? `<button data-at-refresh-log="${esc(jobId)}" title="查看该账号最近一次 AT 刷新日志">AT 日志</button>` : '';
+  if (['pending','running','stopping'].includes(s)) {
+    const stop = jobId ? `<button class="danger" data-at-refresh-stop="${esc(jobId)}" title="停止正在进行的 AT 刷新">${s === 'stopping' ? '停止中…' : '停止获取 AT'}</button>` : '';
+    return `${stop}${log}`;
+  }
+  const title = err ? `重新登录获取 AT；上次失败：${err}` : '使用 Roxy 强制重新登录，获取新的 ChatGPT session 和 AT';
+  return `<button data-at-refresh="${esc(r.id)}" title="${esc(title)}">重新获取 AT</button>${log}`;
 }
 function renderAccounts() {
   const p = PAGERS.accounts;
@@ -1391,6 +1449,7 @@ function renderAccounts() {
         <div class="account-row-actions">
           <div class="account-action-group"><button class="primary" data-account-copy-secret="access_token" data-account-id="${esc(r.id)}" ${r.has_access_token ? '' : 'disabled'}>复制Token</button> <button class="good" data-account-copy-secret="copy_line" data-account-id="${esc(r.id)}">复制整行</button></div>
           <div class="account-action-group"><button data-account-note="${esc(r.id)}" title="设置/清空该账号备注">备注</button> ${_planAction(r)} ${_extractLinkAction(r)}</div>
+          <div class="account-action-group">${_atRefreshAction(r)}</div>
           <div class="account-action-group">${_codexAction(r)} <button data-codex-log="${esc(r.email)}" title="查看该账号最近一次 Codex 补跑日志">补跑日志</button></div>
           <div class="account-action-group danger-zone"><button data-account-archive="${esc(r.id)}" data-archived="${r.archived ? '0' : '1'}" title="${r.archived ? '恢复到默认账号列表' : '归档后默认账号列表不再显示'}">${r.archived ? '恢复' : '归档'}</button> <button class="danger" data-account-delete="${esc(r.id)}" data-email="${esc(r.email)}">删除</button></div>
         </div>
@@ -1410,6 +1469,7 @@ function updateAccountSelectionUi(pageRows = null) {
   const generateAgentBtn = $('#btnGenerateSelectedAgent');
   const downloadAgentBtn = $('#btnDownloadSelectedAgent');
   const uploadAgentSub2Btn = $('#btnUploadSelectedAgentSub2');
+  const refreshAtBtn = $('#btnRefreshSelectedAt');
   const checkPlanBtn = $('#btnCheckSelectedPlans');
   const copySelectedBtn = $('#btnCopySelectedLines');
   const downloadTxtBtn = $('#btnDownloadSelectedTxt');
@@ -1424,6 +1484,7 @@ function updateAccountSelectionUi(pageRows = null) {
   if (generateAgentBtn) generateAgentBtn.disabled = ACCOUNT_SELECTED.size === 0;
   if (downloadAgentBtn) downloadAgentBtn.disabled = ACCOUNT_SELECTED.size === 0;
   if (uploadAgentSub2Btn) uploadAgentSub2Btn.disabled = ACCOUNT_SELECTED.size === 0;
+  if (refreshAtBtn) refreshAtBtn.disabled = ACCOUNT_SELECTED.size === 0;
   if (checkPlanBtn) checkPlanBtn.disabled = ACCOUNT_SELECTED.size === 0;
   if (copySelectedBtn) copySelectedBtn.disabled = ACCOUNT_SELECTED.size === 0;
   if (downloadTxtBtn) downloadTxtBtn.disabled = ACCOUNT_SELECTED.size === 0;
@@ -1522,6 +1583,53 @@ $('#accountsBody').addEventListener('click', async (e) => {
   const extractBtn = e.target.closest('[data-extract-link]');
   if (extractBtn) {
     await extractOneLink(Number(extractBtn.dataset.extractLink), extractBtn);
+    return;
+  }
+
+  const extractResumeBtn = e.target.closest('[data-extract-link-resume]');
+  if (extractResumeBtn) {
+    await resumeExtractLink(Number(extractResumeBtn.dataset.extractLinkResume), extractResumeBtn);
+    return;
+  }
+
+  const atRefreshBtn = e.target.closest('[data-at-refresh]');
+  if (atRefreshBtn) {
+    const accountId = Number(atRefreshBtn.dataset.atRefresh);
+    const account = ACCOUNTS.find(a => Number(a.id) === accountId);
+    if (!confirm(`确定重新登录并获取新的 AT 吗？\n\n${account?.email || ('账号 #' + accountId)}\n\n任务将在后台使用 Roxy 执行，失败时保留旧 AT。`)) return;
+    atRefreshBtn.disabled = true;
+    try {
+      const r = await api(`/api/accounts/${accountId}/refresh-at`, {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+      showToast(r.message || '已开始重新获取 AT');
+      await loadAccounts();
+      if (r.job?.id) openLog(Number(r.job.id));
+    } catch(err) {
+      showToast('启动 AT 刷新失败: ' + err.message);
+      atRefreshBtn.disabled = false;
+    }
+    return;
+  }
+
+  const atRefreshStopBtn = e.target.closest('[data-at-refresh-stop]');
+  if (atRefreshStopBtn) {
+    const jobId = Number(atRefreshStopBtn.dataset.atRefreshStop);
+    if (!confirm(`确定停止 AT 刷新任务 #${jobId}？\n\n旧 AT 将保持不变。`)) return;
+    atRefreshStopBtn.disabled = true;
+    try {
+      const r = await api(`/api/jobs/${jobId}/stop`, {method:'POST'});
+      showToast(r.message || '已发送停止信号');
+      if (activeLogJob === jobId) pollLog();
+      await loadAccounts();
+    } catch(err) {
+      showToast('停止 AT 刷新失败: ' + err.message);
+      atRefreshStopBtn.disabled = false;
+    }
+    return;
+  }
+
+  const atRefreshLogBtn = e.target.closest('[data-at-refresh-log]');
+  if (atRefreshLogBtn) {
+    openLog(Number(atRefreshLogBtn.dataset.atRefreshLog));
     return;
   }
 
@@ -1637,6 +1745,7 @@ $('#btnExtractSelectedLinks').addEventListener('click', extractSelectedLinks);
 $('#btnGenerateSelectedAgent').addEventListener('click', generateSelectedCodexAgents);
 $('#btnDownloadSelectedAgent').addEventListener('click', downloadSelectedCodexAgents);
 $('#btnUploadSelectedAgentSub2').addEventListener('click', uploadSelectedCodexAgentSub2);
+$('#btnRefreshSelectedAt').addEventListener('click', refreshSelectedAt);
 $('#btnRetrySelectedCodex').addEventListener('click', retrySelectedCodex);
 $('#btnDownloadSelectedCpa').addEventListener('click', downloadSelectedCpa);
 $('#btnStopSelectedCodex').addEventListener('click', stopSelectedCodex);
@@ -1650,6 +1759,13 @@ $('#showArchivedAccounts').addEventListener('change', async (e) => {
 });
 $('#showPlusAccountsOnly').addEventListener('change', async (e) => {
   SHOW_PLUS_ACCOUNTS_ONLY = !!e.target.checked;
+  ACCOUNT_SELECTED.clear();
+  PAGERS.accounts.page = 1;
+  await loadAccounts();
+  await pollAccountPlanStatuses();
+});
+$('#showCodexSuccessOnly').addEventListener('change', async (e) => {
+  SHOW_CODEX_SUCCESS_ONLY = !!e.target.checked;
   ACCOUNT_SELECTED.clear();
   PAGERS.accounts.page = 1;
   await loadAccounts();
@@ -2157,6 +2273,58 @@ async function noteSelectedAccounts() {
   }
 }
 
+async function resumeExtractLink(id, btn) {
+  const acc = ACCOUNTS.find(a => Number(a.id) === Number(id));
+  if (!acc) { showToast('账号不存在'); return; }
+  if (!confirm(`确定恢复原 Masi Job 的轮询吗？\n\n${acc.email || ('#' + id)}\n\n不会创建新 Job，也不会再次消耗 CDK。`)) return;
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '恢复中…';
+  try {
+    const r = await api('/api/accounts/extract-link-resume', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({account_id: id}),
+    });
+    showToast(r.message || '已恢复原 Job 轮询');
+    await pollAccountPlanStatuses();
+  } catch(err) {
+    showToast('恢复轮询失败: ' + err.message);
+    btn.disabled = false;
+    btn.textContent = old;
+  }
+}
+
+async function refreshSelectedAt() {
+  const ids = Array.from(ACCOUNT_SELECTED);
+  if (ids.length === 0) { showToast('请先选择账号'); return; }
+  const activeCount = ids
+    .map(id => ACCOUNTS.find(a => Number(a.id) === Number(id)))
+    .filter(a => a && ['pending','running','stopping'].includes(a.at_refresh_status || '')).length;
+  let message = `确定为选中的 ${ids.length} 个账号批量重新登录并获取 AT 吗？\n\n每个账号都会在后台使用 Roxy 执行，可能消耗一封邮箱 OTP；失败时保留旧 AT。`;
+  if (activeCount) message += `\n\n其中 ${activeCount} 个账号已有刷新任务，会自动跳过。`;
+  if (!confirm(message)) return;
+  const btn = $('#btnRefreshSelectedAt');
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '提交中…';
+  try {
+    const r = await api('/api/accounts/refresh-at-bulk', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({account_ids: ids}),
+    });
+    const skippedCount = r.skipped_count || 0;
+    showToast(skippedCount ? `已开始 ${r.started_count || 0} 个，跳过 ${skippedCount} 个` : `已开始 ${r.started_count || 0} 个 AT 刷新任务`);
+    await loadAccounts();
+  } catch(err) {
+    showToast('批量获取 AT 失败: ' + err.message);
+  } finally {
+    btn.textContent = old;
+    updateAccountSelectionUi();
+  }
+}
+
 
 async function stopSelectedCodex() {
   const ids = Array.from(ACCOUNT_SELECTED);
@@ -2432,7 +2600,8 @@ async function loadCodex() {
   try {
     const p = PAGERS.codex;
     const q = $('#qCodex') ? $('#qCodex').value.trim() : '';
-    const r = await api(`/api/codex?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&q=${encodeURIComponent(q)}`);
+    const exportStatus = $('#codexExportStatus') ? $('#codexExportStatus').value : 'all';
+    const r = await api(`/api/codex?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&q=${encodeURIComponent(q)}&export_status=${encodeURIComponent(exportStatus)}`);
     CODEX = r.accounts || [];
     CODEX_TOTAL = Number(r.total || CODEX.length || 0);
     const totalPages = Math.max(1, Math.ceil(CODEX_TOTAL / p.size));
@@ -2487,6 +2656,11 @@ function renderCodex() {
   _renderPager('codex', total);
 }
 $('#qCodex').addEventListener('input', debounce(() => { PAGERS.codex.page = 1; loadCodex(); }, 250));
+$('#codexExportStatus').addEventListener('change', () => {
+  CODEX_SELECTED.clear();
+  PAGERS.codex.page = 1;
+  loadCodex();
+});
 $('#btnRefreshCodex').addEventListener('click', loadCodex);
 
 // 全选 / 取消全选（仅当前页可见行）
@@ -2678,6 +2852,7 @@ let CONFIG_EMAIL_ACTIVE_SECTION = '通用邮箱 / OTP';
 let CONFIG_SMS_ACTIVE_SECTION = '通用接码';
 let CONFIG_CODEX_ACTIVE_SECTION = '基础配置';
 const CONFIG_PENDING_UPDATES = {};
+let SMSBOWER_METADATA = {services: [], countries: [], loaded: false, loading: false, message: '未加载'};
 
 function configGroups() {
   const groups = {};
@@ -2688,7 +2863,11 @@ function configGroups() {
 function renderConfigField(f) {
   const fv = Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, f.key) ? CONFIG_PENDING_UPDATES[f.key] : f.value;
   let html = `<label class="fld">${esc(f.label)}<span class="hint">${esc(f.help)} · <span class="mono">${esc(f.key)}</span></span>`;
-  if (f.type === 'bool') {
+  const choices = smsbowerFieldChoices(f.key, fv);
+  if (choices.length) {
+    html += `<input class="smsbower-option-search" type="search" data-smsbower-search="${attrEsc(f.key)}" aria-label="搜索${attrEsc(f.label)}" placeholder="搜索名称、代码或 ID" autocomplete="off" spellcheck="false">`;
+    html += `<select data-key="${attrEsc(f.key)}">${choices.map(choice => `<option value="${attrEsc(choice.value)}"${String(choice.value) === String(fv) ? ' selected' : ''}${choice.disabled ? ' disabled' : ''}>${esc(choice.label)}</option>`).join('')}</select>`;
+  } else if (f.type === 'bool') {
     html += `<select data-key="${attrEsc(f.key)}"><option value="true"${fv?' selected':''}>开启 (True)</option><option value="false"${!fv?' selected':''}>关闭 (False)</option></select>`;
   } else if (f.type === 'int') {
     html += `<input type="number" data-key="${attrEsc(f.key)}" value="${attrEsc(fv == null ? '' : fv)}">`;
@@ -2704,6 +2883,42 @@ function renderConfigField(f) {
     html += `<input type="${inputType}" data-key="${attrEsc(f.key)}" value="${attrEsc(shown)}" placeholder="${ph}" autocomplete="off" spellcheck="false">`;
   }
   return html + `</label>`;
+}
+
+function smsbowerFieldChoices(key, currentValue) {
+  if (key !== 'SMSBOWER_SERVICE' && key !== 'SMSBOWER_COUNTRY') return [];
+  const source = key === 'SMSBOWER_SERVICE' ? SMSBOWER_METADATA.services : SMSBOWER_METADATA.countries;
+  const current = String(currentValue == null ? '' : currentValue).trim();
+  const choices = Array.isArray(source) ? source.map(item => ({value: String(item.value), label: String(item.label || item.value)})) : [];
+  if (current && !choices.some(item => item.value === current)) choices.unshift({value: current, label: `当前值 (${current})`});
+  choices.unshift({value: '', label: SMSBOWER_METADATA.loaded ? '请选择' : '请先刷新服务与国家', disabled: true});
+  return choices;
+}
+
+function filterSmsbowerSelect(input) {
+  const key = String(input?.dataset?.smsbowerSearch || '');
+  const select = input?.closest('label.fld')?.querySelector(`select[data-key="${CSS.escape(key)}"]`);
+  if (!select) return;
+  const query = String(input.value || '').trim().toLocaleLowerCase();
+  Array.from(select.options).forEach(option => {
+    const text = `${option.textContent || ''} ${option.value || ''}`.toLocaleLowerCase();
+    option.hidden = !!query && !!option.value && !option.selected && !text.includes(query);
+  });
+}
+
+function renderSmsbowerMetadataTools() {
+  if (CONFIG_ACTIVE_GROUP !== '接码平台' || CONFIG_SMS_ACTIVE_SECTION !== 'SMSBower') return '';
+  const statusStyle = SMSBOWER_METADATA.message.startsWith('获取失败') ? 'color:var(--red);' : '';
+  return `
+    <div class="roxy-workspace-box">
+      <div>
+        <b>SMSBower 服务与国家</b>
+        <div class="hint">使用当前填写或已保存的 API 地址和 API Key 获取可选项。</div>
+      </div>
+      <div class="action-cell"><button class="btn" type="button" id="btnLoadSmsbowerMetadata"${SMSBOWER_METADATA.loading ? ' disabled' : ''}>刷新选项</button></div>
+      <div class="muted" style="font-size:12px;${statusStyle}">${esc(SMSBOWER_METADATA.message)}</div>
+    </div>
+  `;
 }
 
 function configSubhead(title, help = '') {
@@ -2728,6 +2943,7 @@ function smsConfigSectionForKey(key) {
     return ['通用接码', '接码通道选择、国家/服务代码、等待和重试参数；H 通道可复用 SMS_SERVICE/SMS_COUNTRY 作为 projectId/country'];
   }
   if (key === 'SMS_API_KEY') return ['GrizzlySMS', 'GrizzlySMS 平台 API Key 配置'];
+  if (key.startsWith('SMSBOWER_')) return ['SMSBower', 'SMSBower 独立 V1 provider、服务/国家与价格范围配置'];
   if (key.startsWith('H_')) return ['H 接码', 'H_API.md 本地 H 取号服务配置；项目ID/国家留空时复用通用字段'];
   if (key.startsWith('L_')) return ['L 接码', 'L_API.md 本地 L 取号服务配置'];
   return ['其他接码配置', ''];
@@ -2777,6 +2993,7 @@ function renderSectionedConfigFields(fields, activeSectionName, setActiveSection
     html += renderConfigField(f);
     if (f.key === 'CLOUDMAIL_AUTH_TOKEN') html += renderCloudMailTokenTools();
   }
+  if (activeSectionName === 'SMSBower') html += renderSmsbowerMetadataTools();
   return html;
 }
 
@@ -2797,7 +3014,7 @@ function renderConfigFields(fields) {
       CONFIG_SMS_ACTIVE_SECTION,
       v => { CONFIG_SMS_ACTIVE_SECTION = v; },
       smsConfigSectionForKey,
-      ['通用接码', 'GrizzlySMS', 'H 接码', 'L 接码', '其他接码配置'],
+      ['通用接码', 'GrizzlySMS', 'SMSBower', 'H 接码', 'L 接码', '其他接码配置'],
       'sms-config-section'
     );
   }
@@ -2962,6 +3179,51 @@ function renderConfigPanel() {
     </div>
   `;
   bindRoxyWorkspaceTools();
+  bindSmsbowerMetadataTools();
+  if (CONFIG_SMS_ACTIVE_SECTION === 'SMSBower' && !SMSBOWER_METADATA.loaded && !SMSBOWER_METADATA.loading) {
+    const keyField = CONFIG.find(f => f.key === 'SMSBOWER_API_KEY');
+    if (keyField?.configured) loadSmsbowerMetadata({silent: true});
+  }
+}
+
+function bindSmsbowerMetadataTools() {
+  const btn = $('#btnLoadSmsbowerMetadata');
+  if (btn) btn.addEventListener('click', () => loadSmsbowerMetadata());
+}
+
+function configElementValue(key) {
+  const el = document.querySelector(`#configForm [data-key="${CSS.escape(key)}"]`);
+  if (el) return el.value || '';
+  const field = CONFIG.find(f => f.key === key);
+  return String(field?.value || '');
+}
+
+async function loadSmsbowerMetadata({silent = false} = {}) {
+  if (SMSBOWER_METADATA.loading) return;
+  SMSBOWER_METADATA.loading = true;
+  SMSBOWER_METADATA.message = '正在获取服务与国家...';
+  if (!silent) renderConfigPanel();
+  try {
+    const r = await api('/api/smsbower/metadata', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        api_base: configElementValue('SMSBOWER_API_BASE').trim(),
+        api_key: configElementValue('SMSBOWER_API_KEY').trim(),
+      }),
+    });
+    SMSBOWER_METADATA = {
+      services: Array.isArray(r.services) ? r.services : [],
+      countries: Array.isArray(r.countries) ? r.countries : [],
+      loaded: true,
+      loading: false,
+      message: `已加载 ${r.services?.length || 0} 个服务、${r.countries?.length || 0} 个国家`,
+    };
+  } catch(e) {
+    SMSBOWER_METADATA.loading = false;
+    SMSBOWER_METADATA.message = `获取失败：${e.message}`;
+  }
+  renderConfigPanel();
 }
 
 async function loadConfig() {
@@ -3071,6 +3333,11 @@ function readConfigElementValue(el, f) {
 }
 
 $('#configForm').addEventListener('input', (e) => {
+  const search = e.target.closest('[data-smsbower-search]');
+  if (search) {
+    filterSmsbowerSelect(search);
+    return;
+  }
   const el = e.target.closest('[data-key]');
   if (!el) return;
   const f = CONFIG.find(x => x.key === el.dataset.key);

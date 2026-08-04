@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from core import codex_retry_service, db
+from core import codex_retry_service, db, otp_operation_lock
 
 logger = logging.getLogger(__name__)
 
@@ -430,6 +430,83 @@ def _run_codex_retry_job(job_id: int, log_file: str, email: str, account_id: int
         _deactivate_job(job_id)
 
 
+def _run_at_refresh_job(job_id: int, log_file: str, email: str, account_id: int) -> None:
+    """执行已有账户 Roxy 重新登录并原子刷新 session。"""
+    _activate_job(job_id)
+    current = db.get_job(job_id)
+    if not current or current.get("status") == "cancelled":
+        otp_operation_lock.release(email, "at_refresh")
+        _deactivate_job(job_id)
+        return
+
+    now_iso = datetime.now().isoformat(timespec="seconds")
+    db.update_job(job_id, status="running", started_at=now_iso)
+    db.update_account_at_refresh_status(account_id, "running", job_id=job_id)
+    try:
+        with _JobLogContext(log_file):
+            from core.roxy_registration import run_roxy_at_refresh
+
+            account = db.get_account(account_id)
+            if not account or str(account.get("email") or "").strip().casefold() != email.casefold():
+                raise RuntimeError("目标账户不存在或邮箱已变化")
+            old_token = str(account.get("access_token") or "")
+            password = db.get_account_registration_password(account_id)
+            logger.info("[AT刷新] 开始强制重新登录：account_id=%s email=%s password_saved=%s", account_id, email, bool(password))
+            check_stop_requested()
+            result = run_roxy_at_refresh(email, registration_password=password)
+            check_stop_requested()
+            normalized = result.get("normalized") or {}
+            new_token = str(normalized.get("access_token") or "")
+            if old_token and new_token == old_token:
+                logger.warning("[AT刷新] 新登录返回的 AT 与旧值相同，session 校验通过后仍按成功处理")
+
+            updated = db.update_account_session(
+                account_id,
+                expected_email=email,
+                normalized=normalized,
+                auth_method=str(result.get("auth_method") or "unknown"),
+                roxybrowser=result.get("roxybrowser"),
+                invalidate_registration_password=bool(result.get("password_invalid")),
+            )
+            db.update_job(
+                job_id,
+                status="success",
+                email=email,
+                account_id=account_id,
+                completed_at=datetime.now().isoformat(timespec="seconds"),
+            )
+            logger.info("[AT刷新] 新 session 已合并到原账户：account_id=%s auth_method=%s", account_id, updated.get("at_refresh_auth_method"))
+            try:
+                from core.plan_check_service import enqueue_account_plan_check
+
+                queued = enqueue_account_plan_check(
+                    account_id=account_id,
+                    email=email,
+                    access_token=new_token,
+                    trigger="at_refresh",
+                )
+                logger.info("[AT刷新] 套餐查询入队结果：accepted=%s busy=%s", queued.get("accepted"), queued.get("busy"))
+            except Exception as exc:
+                logger.warning("[AT刷新] 套餐查询入队失败，不回滚新 session：%s: %s", type(exc).__name__, str(exc)[:180])
+    except StopRequested as exc:
+        message = str(exc) or "用户手动停止 AT 刷新"
+        db.update_job(job_id, status="stopped", error=message[:500], completed_at=datetime.now().isoformat(timespec="seconds"))
+        db.update_account_at_refresh_status(account_id, "stopped", message[:500], job_id=job_id)
+        logger.warning("[AT刷新] 已停止：account_id=%s", account_id)
+    except Exception as exc:
+        message = f"{type(exc).__name__}: {exc}"[:500]
+        if is_stop_requested(job_id):
+            db.update_job(job_id, status="stopped", error="用户手动停止", completed_at=datetime.now().isoformat(timespec="seconds"))
+            db.update_account_at_refresh_status(account_id, "stopped", "用户手动停止", job_id=job_id)
+        else:
+            db.update_job(job_id, status="failed", error=message, completed_at=datetime.now().isoformat(timespec="seconds"))
+            db.update_account_at_refresh_status(account_id, "failed", message, job_id=job_id)
+            logger.exception("[AT刷新] 失败：account_id=%s", account_id)
+    finally:
+        otp_operation_lock.release(email, "at_refresh")
+        _deactivate_job(job_id)
+
+
 # ============================================================
 # 公共接口
 # ============================================================
@@ -469,6 +546,49 @@ def submit_registration(count: int = 1, email_source: str | None = None, workers
     return jobs
 
 
+def submit_account_at_refresh(account_id: int, workers: int | None = None) -> dict:
+    """创建并提交一个绑定已有账户的 AT 刷新任务。"""
+    account = db.get_account(int(account_id))
+    if not account:
+        return {"ok": False, "error": "账号不存在", "status": 404}
+    email = str(account.get("email") or "").strip()
+    if not email:
+        return {"ok": False, "error": "账号邮箱为空", "status": 409}
+    if str(account.get("codex_status") or "") == "retrying" or codex_retry_service.is_retrying(email):
+        return {"ok": False, "error": "该账号正在补跑 Codex，不能同时刷新 AT", "status": 409}
+    if not otp_operation_lock.reserve(email, "at_refresh"):
+        return {"ok": False, "error": "该账号已有消费邮箱验证码的任务正在运行", "status": 409}
+
+    try:
+        job = db.create_job(
+            email_source=str(account.get("email_source") or "account"),
+            job_type="at_refresh",
+            email=email,
+            account_id=int(account_id),
+        )
+        claimed = db.claim_account_at_refresh(int(account_id), int(job["id"]))
+    except Exception as exc:
+        otp_operation_lock.release(email, "at_refresh")
+        logger.exception("[AT刷新] 创建任务失败：account_id=%s", account_id)
+        return {"ok": False, "error": f"AT 刷新任务创建失败：{type(exc).__name__}", "status": 500}
+    if not claimed:
+        otp_operation_lock.release(email, "at_refresh")
+        db.delete_job(int(job["id"]), delete_log=True, allow_running=True)
+        return {"ok": False, "error": "该账号已有 AT 刷新任务", "status": 409}
+    try:
+        with _executor_lock:
+            executor = get_executor(max_workers=workers)
+            executor.submit(_run_at_refresh_job, int(job["id"]), job["log_file"], email, int(account_id))
+    except Exception as exc:
+        message = f"队列提交失败：{type(exc).__name__}: {exc}"[:500]
+        otp_operation_lock.release(email, "at_refresh")
+        db.update_job(int(job["id"]), status="failed", error=message, completed_at=datetime.now().isoformat(timespec="seconds"))
+        db.update_account_at_refresh_status(int(account_id), "failed", message, job_id=int(job["id"]))
+        logger.exception("[AT刷新] 任务提交失败：account_id=%s", account_id)
+        return {"ok": False, "error": "AT 刷新任务提交失败", "status": 500}
+    return {"ok": True, "message": "已在后台开始重新登录并获取 AT", "job": db.get_job(int(job["id"]))}
+
+
 def _account_for_job(job: dict) -> dict | None:
     account_id = job.get("account_id")
     if account_id is not None:
@@ -492,6 +612,10 @@ def get_retry_info(job: dict) -> dict:
         "retry_reason": None,
         "display_status": status,
     }
+    if str(job.get("job_type") or "registration") == "at_refresh":
+        if status in ("failed", "stopped", "cancelled"):
+            info["retry_reason"] = "请从账号页重新获取 AT"
+        return info
     if status not in ("failed", "stopped", "cancelled"):
         return info
 
@@ -548,7 +672,7 @@ def retry_job(job_id: int, workers: int | None = None) -> dict:
         if not email or account_id is None:
             return {"ok": False, "error": "已注册账号信息不完整，无法补跑 Codex", "status": 409}
         if not codex_retry_service.reserve(email):
-            return {"ok": False, "error": "该账号正在补跑 Codex，请稍候", "status": 409}
+            return {"ok": False, "error": "该账号已有消费邮箱验证码的任务，请稍候", "status": 409}
         reserved_codex = True
 
     try:
@@ -633,6 +757,11 @@ def cancel_pending_jobs() -> int:
                 completed_at=now_iso,
                 error="用户手动取消",
             )
+            if job.get("job_type") == "at_refresh" and job.get("account_id") is not None:
+                db.update_account_at_refresh_status(
+                    int(job["account_id"]), "cancelled", "用户批量取消排队", job_id=int(job["id"])
+                )
+                otp_operation_lock.release(str(job.get("email") or ""), "at_refresh")
             cancelled += 1
     logger.info(f"[Service] 已取消 {cancelled} 个排队任务")
     return cancelled
@@ -647,6 +776,9 @@ def request_stop_job(job_id: int) -> dict:
     now_iso = datetime.now().isoformat(timespec="seconds")
     if status == "pending":
         db.update_job(job_id, status="cancelled", completed_at=now_iso, error="用户手动停止/取消排队")
+        if job.get("job_type") == "at_refresh" and job.get("account_id") is not None:
+            db.update_account_at_refresh_status(int(job["account_id"]), "cancelled", "用户手动取消排队", job_id=job_id)
+            otp_operation_lock.release(str(job.get("email") or ""), "at_refresh")
         _append_job_log(job_id, "用户手动停止：任务尚未运行，已取消排队。")
         return {"ok": True, "message": "排队任务已取消", "job_id": job_id, "state": "cancelled"}
     if status in ("success", "failed", "cancelled", "stopped"):
@@ -669,6 +801,9 @@ def request_stop_job(job_id: int) -> dict:
                 completed_at=now_iso,
                 error="用户手动停止（任务实例不存在）",
             )
+            if job.get("job_type") == "at_refresh" and job.get("account_id") is not None:
+                db.update_account_at_refresh_status(int(job["account_id"]), "stopped", "用户手动停止（任务实例不存在）", job_id=job_id)
+                otp_operation_lock.release(str(job.get("email") or ""), "at_refresh")
             _release_unconsumed_job_email(
                 str(job.get("email") or "").strip() or None,
                 "任务实例不存在，确认未继续执行",
@@ -677,6 +812,8 @@ def request_stop_job(job_id: int) -> dict:
             logger.warning("[Service] 用户停止任务 #%s：任务实例不存在，已直接标记 stopped", job_id)
             return {"ok": True, "message": "任务实例不存在，已直接标记为已停止", "job_id": job_id, "state": "stopped"}
         db.update_job(job_id, status="stopping", error="用户手动停止中")
+        if job.get("job_type") == "at_refresh" and job.get("account_id") is not None:
+            db.update_account_at_refresh_status(int(job["account_id"]), "stopping", "用户手动停止中", job_id=job_id)
         _append_job_log(job_id, "用户手动停止：已发送停止信号，任务会在当前步骤检查点退出。")
         logger.warning("[Service] 用户请求停止任务 #%s", job_id)
         return {"ok": True, "message": "已发送停止信号", "job_id": job_id, "state": "stopping"}

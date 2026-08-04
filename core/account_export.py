@@ -29,6 +29,47 @@ _ACCOUNTS_DIR = _PROJECT_ROOT / "accounts"
 _BATCH_ARCHIVE_LOCK = threading.RLock()
 
 
+def normalize_chatgpt_session(session_info: dict, *, expected_email: str | None = None) -> dict:
+    """校验并转换 /api/auth/session，供注册与已有账户刷新共用。"""
+    if not isinstance(session_info, dict):
+        raise ValueError("ChatGPT session 必须是对象")
+
+    access_token = str(session_info.get("accessToken") or "").strip()
+    user = session_info.get("user")
+    account = session_info.get("account")
+    expires = session_info.get("expires")
+    if not access_token:
+        raise ValueError("ChatGPT session 缺少 accessToken")
+    if not isinstance(user, dict):
+        raise ValueError("ChatGPT session.user 结构无效")
+    if not isinstance(account, dict):
+        raise ValueError("ChatGPT session.account 结构无效")
+    if not isinstance(expires, str) or not expires.strip():
+        raise ValueError("ChatGPT session.expires 结构无效")
+
+    session_email = str(user.get("email") or "").strip()
+    expected = str(expected_email or "").strip()
+    if expected:
+        if not session_email:
+            raise ValueError("ChatGPT session.user 缺少 email，无法确认目标账户")
+        if session_email.casefold() != expected.casefold():
+            raise ValueError("ChatGPT session 邮箱与目标账户不一致")
+
+    return {
+        "access_token": access_token,
+        "user_id": user.get("id"),
+        "user_name": user.get("name"),
+        "plan_type": account.get("planType"),
+        "expires_at": expires.strip(),
+        "session_email": session_email,
+        "extra": {
+            "user": dict(user),
+            "account": dict(account),
+            "expires": expires.strip(),
+        },
+    }
+
+
 def _account_material_line(email: str, row: dict | None = None) -> str:
     """优先输出 Outlook 原始素材；没有素材时退回邮箱地址。"""
     if row:
@@ -395,8 +436,17 @@ def save_account_data(
     """
     from core.db import insert_account
     extra = extra or {}
-    user = extra.get("user") or {}
-    account = extra.get("account") or {}
+    normalized = normalize_chatgpt_session(
+        {
+            "accessToken": access_token,
+            "user": extra.get("user"),
+            "account": extra.get("account"),
+            "expires": extra.get("expires"),
+        },
+        expected_email=email,
+    )
+    user = normalized["extra"]["user"]
+    account = normalized["extra"]["account"]
     # 从 extra.codex 抽出顶层 codex 状态/错误，方便 WebUI 直接读账号字段
     codex = extra.get("codex") or {}
     codex_status = codex.get("status")  # success / failed / skipped
@@ -406,12 +456,12 @@ def save_account_data(
 
     row_id = insert_account(
         email=email,
-        access_token=access_token,
+        access_token=normalized["access_token"],
         totp_secret=totp_secret,
         user_id=user.get("id"),
         user_name=user.get("name"),
         plan_type=account.get("planType"),
-        expires_at=extra.get("expires"),
+        expires_at=normalized["expires_at"],
         device_id=extra.get("device_id"),
         proxy_used=proxy_used,
         email_source=email_source,

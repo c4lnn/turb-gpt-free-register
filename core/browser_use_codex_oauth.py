@@ -903,7 +903,7 @@ def _wait_after_phone_send(page, timeout: int = 18) -> str:
         time.sleep(0.7)
     logger.warning("[Codex][BrowserUse] 提交手机号后未确认进入短信页，最后状态：%s", last_state)
     # 仍然停留在可见手机号输入框，基本就是没发出去/按钮没点中/页面拒绝但未识别。
-    if _read_phone_input_value(page):
+    if _is_add_phone_url(page) or _read_phone_input_value(page):
         return "still_form"
     return "unknown"
 
@@ -1026,7 +1026,7 @@ def _fill_phone(page, phone: str) -> str:
     phone_e164 = _phone_e164(phone)
     if not phone_e164:
         raise RuntimeError(f"手机号为空/格式无效：{phone!r}")
-    logger.info("[Codex][BrowserUse] 准备填写手机号 E.164：%s", phone_e164)
+    logger.info("[Codex][BrowserUse] 准备填写手机号 E.164：%s", sms_provider.phone_for_log(phone_e164))
     if not _wait_phone_form_ready(page, timeout=8):
         raise RuntimeError("找不到手机号输入框；" + _current_state_for_log(page))
     selectors = [
@@ -1050,14 +1050,17 @@ def _fill_phone(page, phone: str) -> str:
     if _phone_digits(actual) != _phone_digits(phone_e164):
         logger.warning(
             "[Codex][BrowserUse] 手机号输入校验不一致，尝试强制重填：expected=%s actual=%r",
-            phone_e164,
-            actual,
+            sms_provider.phone_for_log(phone_e164),
+            sms_provider.phone_for_log(actual),
         )
         _force_set_phone_value(page, phone_e164)
         actual = _read_phone_input_value(page)
     if _phone_digits(actual) != _phone_digits(phone_e164):
-        raise RuntimeError(f"手机号未正确写入页面：expected={phone_e164}, actual={actual!r}")
-    logger.info("[Codex][BrowserUse] 页面手机号输入值：%r", actual)
+        raise RuntimeError(
+            f"手机号未正确写入页面：expected={sms_provider.phone_for_log(phone_e164)}, "
+            f"actual={sms_provider.phone_for_log(actual)!r}"
+        )
+    logger.info("[Codex][BrowserUse] 页面手机号输入值：%r", sms_provider.phone_for_log(actual))
 
     _select_sms_channel(page)
     if not _click_phone_continue(page):
@@ -1198,13 +1201,17 @@ def _do_phone_verification_if_present(page) -> None:
             _t_phone_ready.done()
             logger.info("[Codex][BrowserUse] 需要手机验证，开始取号（%s/%s）", attempt, max_retries)
             activation_id, phone = sms_provider.acquire_number(http)
-            logger.info("[Codex][BrowserUse] 已取号：%s activation=%s", phone, activation_id)
+            logger.info("[Codex][BrowserUse] 已取号：%s activation=%s", sms_provider.phone_for_log(phone), sms_provider.activation_for_log(activation_id))
             _t_phone_send = _StepTimer(f"填写并提交手机号 attempt={attempt}")
             phone_e164 = _fill_phone(page, phone)
             _bu_delay("form")
-            send_state = _wait_after_phone_send(page, timeout=12 if _fast_mode() else 18)
+            current_provider = str(
+                getattr(sms_provider._cfg, "SMS_PROVIDER", "") or ""
+            ).strip().lower()
+            send_timeout = 5 if current_provider == "smsbower" else (12 if _fast_mode() else 18)
+            send_state = _wait_after_phone_send(page, timeout=send_timeout)
             _t_phone_send.done(f"state={send_state}")
-            logger.info("[Codex][BrowserUse] 手机号提交后状态：%s phone=%s", send_state, phone_e164)
+            logger.info("[Codex][BrowserUse] 手机号提交后状态：%s phone=%s", send_state, sms_provider.phone_for_log(phone_e164))
             if send_state == "callback":
                 return
             if send_state != "code_page":
@@ -1213,7 +1220,7 @@ def _do_phone_verification_if_present(page) -> None:
             _t_sms = _StepTimer(f"等待手机短信 attempt={attempt}")
             sms_code = sms_provider.wait_for_sms_code(activation_id, http)
             _t_sms.done()
-            logger.info("[Codex][BrowserUse] 手机 OTP 收到：%s", sms_code)
+            logger.info("[Codex][BrowserUse] 手机 OTP 收到：%s", sms_provider.code_for_log(sms_code))
             _clear_otp_inputs(page)
             _type_otp(page, sms_code)
             _bu_delay("otp_input")

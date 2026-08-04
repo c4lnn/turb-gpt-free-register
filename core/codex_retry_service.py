@@ -6,7 +6,7 @@ import threading
 import time
 from pathlib import Path
 
-from core import db
+from core import db, otp_operation_lock
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +22,17 @@ class CodexRetryStopped(Exception):
     """用户手动停止 Codex 补跑。"""
 
 
+class _ThreadIdFilter(logging.Filter):
+    """仅接收指定 Python 线程 ID 的日志，避免同名补跑线程互相匹配。"""
+
+    def __init__(self, thread_id: int):
+        super().__init__()
+        self.thread_id = int(thread_id)
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return int(record.thread) == self.thread_id
+
+
 def _thread_alive(thread_id: int | None) -> bool:
     if not thread_id:
         return False
@@ -32,10 +43,12 @@ def _thread_alive(thread_id: int | None) -> bool:
     return any(getattr(t, "ident", None) == tid and t.is_alive() for t in threading.enumerate())
 
 
-def _clear_state_locked(key: str) -> None:
+def _clear_state_locked(key: str, *, release_otp: bool = True) -> None:
     _RETRYING.discard(key)
     _RUNNING_THREADS.pop(key, None)
     _RESERVED_AT.pop(key, None)
+    if release_otp:
+        otp_operation_lock.release(key, "codex_retry")
 
 
 def log_path(email: str) -> Path:
@@ -43,10 +56,25 @@ def log_path(email: str) -> Path:
     return _LOG_DIR / f"codex-retry-{safe}.log"
 
 
+def _remove_retry_log_handlers(root_logger: logging.Logger, path: Path) -> int:
+    """清理同一补跑日志路径的残留 handler；同邮箱同一时刻只允许一个 worker。"""
+    normalized = str(path.resolve())
+    removed = 0
+    for handler in list(root_logger.handlers):
+        if getattr(handler, "_codex_retry_log_path", None) != normalized:
+            continue
+        root_logger.removeHandler(handler)
+        handler.close()
+        removed += 1
+    return removed
+
+
 def reserve(email: str) -> bool:
     """进程内防止同一账号被重复补跑。"""
     key = (email or "").strip().lower()
     if not key:
+        return False
+    if not otp_operation_lock.reserve(email, "codex_retry"):
         return False
     with _RETRYING_LOCK:
         if key in _RETRYING:
@@ -59,17 +87,17 @@ def reserve(email: str) -> bool:
                 status = str((acc or {}).get("codex_status") or "").lower()
             except Exception:
                 status = ""
-            # 修复“实际已停止/线程已结束，但进程内占位未释放”导致无法再次补跑。
-            # 用户点停止后，部分浏览器/短信等待步骤可能不会立刻退出，UI 已是 stopped 但进程占位仍在。
-            # 这种场景允许清理占位后重新补跑；旧线程仍保留 stop_requested，会在检查点退出。
-            terminal_status = status in {"stopped", "failed", "success", "deactivated", "skipped", "cancelled"}
-            if ((not alive) and (status != "retrying" or age > 15 * 60)) or (terminal_status and (stop_req or age > 30)):
+            # 只有旧线程已经退出才允许清理占位。状态虽已 stopped，但线程仍在阻塞时
+            # 启动同邮箱新补跑会造成真实的重复授权和重复日志。
+            if (not alive) and (status != "retrying" or age > 15 * 60):
                 logger.warning(
                     "[Codex 补跑] 清理脏占位：email=%s status=%s thread_id=%s alive=%s stop_requested=%s age=%.1fs",
                     email, status or "-", thread_id or "-", alive, stop_req, age,
                 )
-                _clear_state_locked(key)
+                # reserve() 本轮刚取得共享邮箱锁；这里只清旧 Codex 状态，不能释放新锁。
+                _clear_state_locked(key, release_otp=False)
             else:
+                otp_operation_lock.release(email, "codex_retry")
                 return False
         _STOP_REQUESTED.discard(key)
         _RUNNING_THREADS.pop(key, None)
@@ -82,6 +110,7 @@ def release(email: str) -> None:
     key = (email or "").strip().lower()
     with _RETRYING_LOCK:
         _clear_state_locked(key)
+    otp_operation_lock.release(email, "codex_retry")
 
 
 def is_retrying(email: str) -> bool:
@@ -135,8 +164,8 @@ def request_stop(email: str) -> dict:
         if not _thread_alive(thread_id):
             _clear_state_locked(key)
     if injected:
-        # 异常注入通常会很快让线程进入 finally/release；若浏览器/CDP/短信等待阻塞导致线程
-        # 短时间内仍未退出，延迟清理占位，避免 UI 已显示“已停止”但再次补跑仍 409。
+        # 异常注入通常会很快让线程进入 finally/release。若仍阻塞，必须保留占位，
+        # 防止同邮箱新旧补跑并发；旧线程退出时 finally 会正常 release。
         def _delayed_release() -> None:
             time.sleep(5)
             with _RETRYING_LOCK:
@@ -146,9 +175,11 @@ def request_stop(email: str) -> dict:
                         status = str((acc or {}).get("codex_status") or "").lower()
                     except Exception:
                         status = ""
-                    if status == "stopped":
+                    if status == "stopped" and not _thread_alive(thread_id):
                         logger.warning("[Codex 补跑] 停止后延迟释放占位：email=%s thread_id=%s", email, thread_id or "-")
                         _clear_state_locked(key)
+                    elif status == "stopped":
+                        logger.warning("[Codex 补跑] 停止后线程仍在退出，保留占位：email=%s thread_id=%s", email, thread_id or "-")
 
         threading.Thread(target=_delayed_release, name=f"codex-stop-release-{key}", daemon=True).start()
     try:
@@ -187,14 +218,18 @@ def run_worker(
         if clear_log:
             path.write_text("", encoding="utf-8")
 
-        thread_name = threading.current_thread().name
+        thread_id = threading.get_ident()
+        removed_handlers = _remove_retry_log_handlers(root_logger, path)
+        if removed_handlers:
+            logger.warning("[Codex 补跑] 已清理 %s 个残留日志 handler：%s", removed_handlers, path.name)
         fh = logging.FileHandler(str(path), encoding="utf-8")
+        fh._codex_retry_log_path = str(path.resolve())
         fh.setLevel(logging.DEBUG)
         fh.setFormatter(logging.Formatter(
             "%(asctime)s [%(levelname)s] %(message)s",
             datefmt="%H:%M:%S",
         ))
-        fh.addFilter(lambda record: record.threadName == thread_name)
+        fh.addFilter(_ThreadIdFilter(thread_id))
         root_logger.addHandler(fh)
 
         try:

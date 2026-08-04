@@ -860,6 +860,7 @@ def _do_phone_verification(session: BrowserSession) -> None:
 
     实际平台适配在 core.sms_provider：
         - SMS_PROVIDER="grizzly"：GrizzlySMS handler_api.php
+        - SMS_PROVIDER="smsbower"：独立 SMSBower V1 handler API
         - SMS_PROVIDER="l"：L_API.md 的 /take-phone 和 /fetch-code JSON 接口
     """
     http = sms_provider._http()
@@ -873,7 +874,7 @@ def _do_phone_verification(session: BrowserSession) -> None:
                 activation_id, phone = sms_provider.acquire_number(http)
                 logger.info(
                     f"[Codex] 手机验证尝试 {attempt}/{max_retries}，"
-                    f"provider={provider}, activation_id={activation_id}, 号码=+{phone}"
+                    f"provider={provider}, activation_id={sms_provider.activation_for_log(activation_id)}, 号码={sms_provider.phone_for_log(phone)}"
                 )
 
                 # 发短信
@@ -907,7 +908,9 @@ def _do_phone_verification(session: BrowserSession) -> None:
                     )
                     sms_code = sms_provider.wait_for_sms_code(activation_id, http)
                 except sms_provider.SmsCodeTimeout:
-                    logger.warning(f"[Codex] 号码 +{phone} 在 {_cfg.SMS_CODE_WAIT}s 内未收到短信，取消换号")
+                    logger.warning(
+                        f"[Codex] 号码 {sms_provider.phone_for_log(phone)} 在 {_cfg.SMS_CODE_WAIT}s 内未收到短信，取消换号"
+                    )
                     sms_provider.cancel(activation_id, http)
                     _sleep_before_phone_retry(attempt, max_retries)
                     continue

@@ -69,6 +69,7 @@ EMAIL_SOURCE = "outlook,generic_api"
 - 支持 CPA 管理接口生成授权 URL，并提交 OAuth callback。
 - 支持接码平台：
   - GrizzlySMS
+  - SMSBower V1 handler API
   - 本地 L 取号服务，见 `L_API.md`
 - 手机验证支持自动取号、填号、收码、提交、失败换号重试。
 - Codex 凭证落盘到 `codex_accounts/`。
@@ -82,6 +83,44 @@ EMAIL_SOURCE = "outlook,generic_api"
 - 管理账号、邮箱池、Codex 凭证；账号页支持复制全部/选中整行，邮箱池列表展示导入时间、已用时间和状态。
 - 配置页支持热加载，保存后无需重启。
 - Roxy 团队/项目可在配置页获取并保存。
+
+### 提链路由与 Masi CDK 池
+
+提链由三个独立维度决定：
+
+- `EXTRACT_LINK_TYPE`：要提取的链类型，例如 `pix`、`upi`、`kakao_pay`、`ideal`。
+- `EXTRACT_LINK_PROVIDER`：提链服务提供方。目前支持 `legacy` 和 `masi`。
+- `EXTRACT_LINK_UPDATE_MODE`：结果更新方式，支持 `sse` 和 `poll`。
+
+所有 provider 共用可选的 `EXTRACT_LINK_PROXY`。例如本机 Clash HTTP 代理：
+
+```dotenv
+EXTRACT_LINK_PROXY=http://127.0.0.1:7816
+```
+
+该配置同时作用于 legacy 的额度查询、任务创建和 SSE 连接，以及 Masi 的额度查询、Job 创建、Job 查询和取消请求。支持 `http://`、`https://`、`socks5://`、`socks5h://`；留空时应用不显式指定代理。Windows“系统代理”不一定会被底层 HTTP 库自动读取，需要稳定走代理时应填写此字段。
+
+当前合法组合如下：
+
+| Provider | Link type | Update mode | 凭据来源 |
+| --- | --- | --- | --- |
+| `legacy` | `pix` / `upi` / `kakao_pay` / `ideal` | `sse` | `.env` 中的单个 `EXTRACT_LINK_CDK` |
+| `masi` | `kakao_pay` | `poll` | WebUI「账号 → CDK池」维护的 Masi CDK 池 |
+
+未配置新字段时仍使用 `legacy + sse`，兼容原有部署。前端只轮询本地账号状态；`poll` 模式由 WebUI 后端查询远端 Job，浏览器不会直接请求 Masi。
+
+Masi CDK 使用「可选池」和「已用完池」两个业务池。可在 WebUI 中一行一个批量导入，并查看 `total_uses`、`remaining_uses`、`pending_uses`、`available_uses`。导入面板的“导入后立即查询额度”默认不勾选，因此大批量导入只执行本地保存和去重；需要立即取得额度时可手动勾选，或导入后使用“刷新当前池/刷新全部”。
+
+- 只有 `remaining_uses == 0` 才移入已用完池。
+- `available_uses > 0` 才能创建新 Job。
+- `available_uses == 0` 但仍有剩余次数时，CDK 放回可选池队尾等待复查。
+- 网络、TLS、HTTP 或响应解析失败只按配置重试并记录 `last_error`，不改变业务池归属。
+- 已用完池中的 CDK 再次查询到 `remaining_uses > 0` 时会移回可选池。
+- Masi Job 明确返回 `failed` 时会重新提交新 Job，包含首次提交在内最多尝试 3 次；轮询断连只重试查询原 Job，不会创建重复 Job。
+
+同一 CDK 从额度确认到 Job 创建响应期间由进程内租约保护，任务创建后会持久化 CDK ID 和脱敏指纹，后续查询与取消继续使用同一个 CDK。完整 CDK、账号 AT、带认证信息的代理 URL 和付款链接不会写入普通日志；付款链接只保存并展示，不会被后端主动访问或验证。`EXTRACT_LINK_PROXY` 作为 secret 保存在 `.env`，配置读取接口不会返回其完整值。
+
+`EXTRACT_LINK_POLL_INTERVAL`、`EXTRACT_LINK_POLL_MAX_ERRORS`、`MASI_CDK_QUERY_MAX_ATTEMPTS`、`MASI_CDK_QUERY_RETRY_DELAY` 和 `MASI_CDK_SELECTION_TIMEOUT` 可在配置页调整。大多数配置会热加载，但 `EXTRACT_LINK_WORKERS` 在进程启动时创建线程池，修改后必须重启 WebUI。
 
 ---
 
@@ -395,7 +434,7 @@ CODEX_OAUTH_DRIVER = "browser_use"  # 可选 protocol / roxy / cloak / browser_u
 接码配置在 `config/codex.py`：
 
 ```python
-SMS_PROVIDER = "l"        # 可选 grizzly / l / h
+SMS_PROVIDER = "l"        # 可选 grizzly / smsbower / l / h
 SMS_API_KEY = "你的 GrizzlySMS key"  # 仅 GrizzlySMS 需要
 SMS_SERVICE = "openai"
 SMS_COUNTRY = "国家代码"
@@ -409,6 +448,22 @@ SMS_POLL_INTERVAL = 5
 H_API_BASE = "http://localhost:8788"
 H_ADMIN_AUTH_CODE = "你的H后台授权码"
 ```
+
+SMSBower 使用独立配置，不复用 GrizzlySMS 的 API Key、服务代码、国家 ID 或价格：
+
+```env
+SMS_PROVIDER="smsbower"
+SMSBOWER_API_BASE="https://smsbower.page/stubs/handler_api.php"
+SMSBOWER_API_KEY="你的 SMSBower API Key"
+SMSBOWER_SERVICE="通过 getServicesList 确认"
+SMSBOWER_COUNTRY="通过 getCountries 确认"
+SMSBOWER_MIN_PRICE=""
+SMSBOWER_MAX_PRICE="0.15"
+```
+
+WebUI 的“SMSBower”配置页会通过非计费的 `getServicesList` / `getCountries` 接口加载服务代码和国家 ID 下拉选项；首次配置时填写 API Key 后点击“刷新选项”即可，无需先保存。元数据查询不会取号，失败时也不会覆盖当前值。
+
+取号可能计费。系统会在取号前校验价格，且不会自动提高最高价格或移除价格限制。第一版仅使用 V1 `getNumber/getStatus/setStatus` 轮询流程，不包含 `getNumberV2`、Webhook 或价格库存预查询。供应商接口细节见 `docs/vendor/smsbower_client_api.md`。回滚时把 `SMS_PROVIDER` 改回原 provider 即可，SMSBower 配置不会被其他 provider 读取。
 
 CPA 授权地址来源：
 

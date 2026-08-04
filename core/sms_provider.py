@@ -9,6 +9,7 @@
 
 当前支持：
     - GrizzlySMS：GET 文本接口，文档 https://api.grizzlysms.com
+    - SMSBower：独立 V1 handler API，文档 docs/vendor/smsbower_client_api.md
     - L：本地 JSON 管理接口，文档 L_API.md
     - H：本地 JSON 管理接口，文档 H_API.md
 
@@ -64,6 +65,28 @@ def _http() -> CurlSession:
 
 def _provider() -> str:
     return str(getattr(_cfg, "SMS_PROVIDER", "grizzly") or "grizzly").strip().lower()
+
+
+def phone_for_log(value: str) -> str:
+    """SMSBower 模式不把完整手机号写入任务日志。"""
+    text = str(value or "").strip()
+    if _provider() != "smsbower":
+        return text
+    digits = "".join(ch for ch in text if ch.isdigit())
+    return f"+***{digits[-4:]}" if digits else "***"
+
+
+def code_for_log(value: str) -> str:
+    """SMSBower 模式不把手机验证码写入任务日志。"""
+    return "***" if _provider() == "smsbower" and str(value or "").strip() else str(value or "")
+
+
+def activation_for_log(value: str) -> str:
+    """SMSBower 模式只记录脱敏激活 ID。"""
+    text = str(value or "").strip()
+    if _provider() != "smsbower":
+        return text
+    return f"***{text[-3:]}" if len(text) > 3 else "***"
 
 
 def _request_grizzly(http: CurlSession, params: dict) -> str:
@@ -322,6 +345,9 @@ def acquire_number(
     own_http = http is None
     http = http or _http()
     try:
+        if _provider() == "smsbower":
+            from core.smsbower_provider import get_provider
+            return get_provider().acquire_number(http=http, service=service, country=country)
         if _provider() == "l":
             payload = {
                 "service": service or _cfg.SMS_SERVICE,
@@ -433,6 +459,11 @@ def wait_for_sms_code(
     interval = poll_interval or _cfg.SMS_POLL_INTERVAL
     try:
         provider = _provider()
+        if provider == "smsbower":
+            from core.smsbower_provider import get_provider
+            return get_provider().wait_for_sms_code(
+                activation_id, http=http, max_wait=max_wait, poll_interval=poll_interval,
+            )
         total_wait = max_wait or _cfg.SMS_CODE_WAIT
         logger.info(f"[SMS] 等待短信验证码 activation_id={activation_id}，最长 {total_wait}s...")
         round_no = 0
@@ -515,6 +546,9 @@ def set_status(activation_id: str, status: int, http: CurlSession | None = None)
     own_http = http is None
     http = http or _http()
     try:
+        if _provider() == "smsbower":
+            from core.smsbower_provider import get_provider
+            return get_provider().set_status(activation_id, status, http=http)
         if _provider() == "l":
             logger.debug(f"[SMS:L] 忽略状态设置 id={activation_id}, status={status}")
             return "OK"
@@ -526,6 +560,10 @@ def set_status(activation_id: str, status: int, http: CurlSession | None = None)
 
 def complete(activation_id: str, http: CurlSession | None = None) -> None:
     """标记激活完成（status=6）。失败只告警不抛，避免影响主流程。"""
+    if _provider() == "smsbower":
+        from core.smsbower_provider import get_provider
+        get_provider().complete(activation_id, http=http)
+        return
     if _provider() == "l":
         logger.info(f"[SMS:L] 已完成 id={activation_id}")
         _ACQUIRED_AT.pop(activation_id, None)
@@ -592,6 +630,10 @@ def cancel(activation_id: str, http: CurlSession | None = None, background: bool
 
     失败只告警不抛，不影响主流程。
     """
+    if _provider() == "smsbower":
+        from core.smsbower_provider import get_provider
+        get_provider().cancel(activation_id, http=http, background=background)
+        return
     if _provider() == "l":
         try:
             _release_l_number(activation_id, http=http)

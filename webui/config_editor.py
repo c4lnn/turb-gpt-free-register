@@ -293,7 +293,7 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "EMAIL_SOURCE", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
-        "label": "邮箱来源", "help": "可填单个或多个，逗号分隔并按顺序兜底：outlook,generic_api,cloudflare_domain,cloudflare,gptmail,mailnest,cloudmail",
+        "label": "邮箱来源", "help": "可填单个或多个，逗号分隔并按顺序兜底：outlook,generic_api,cloudflare_domain,icloud,cloudflare,gptmail,mailnest,cloudmail",
     },
     {
         "key": "GPTMAIL_API_KEY", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
@@ -484,8 +484,49 @@ EDITABLE_FIELDS = [
         "label": "提链类型", "help": "支持 pix / upi / kakao_pay / ideal",
     },
     {
+        "key": "EXTRACT_LINK_PROVIDER", "file": "extract_link.py", "type": "str", "group": "提链",
+        "label": "提链服务提供方", "help": "legacy=现有 SSE 服务；masi=Masi Kakao Job API",
+    },
+    {
+        "key": "EXTRACT_LINK_UPDATE_MODE", "file": "extract_link.py", "type": "str", "group": "提链",
+        "label": "结果更新方式", "help": "sse=监听服务端事件；poll=由后端主动轮询远端 Job",
+    },
+    {
+        "key": "EXTRACT_LINK_PROXY", "file": "extract_link.py", "type": "str", "group": "提链",
+        "label": "提链代理", "help": "legacy/Masi 共用；例如 http://127.0.0.1:7816，留空不显式指定代理",
+        "storage": "env", "secret": True,
+    },
+    {
+        "key": "MASI_KAKAO_API_BASE", "file": "extract_link.py", "type": "str", "group": "提链",
+        "label": "Masi API 地址", "help": "Masi Kakao Job API Base URL，默认 https://masi.cc.cd",
+    },
+    {
         "key": "EXTRACT_LINK_WORKERS", "file": "extract_link.py", "type": "int", "group": "提链",
-        "label": "提链并发数", "help": "批量提链后台线程数，建议 1-4",
+        "label": "提链并发数", "help": "批量提链后台线程数，建议 1-4；修改后需重启 WebUI 才会重建线程池",
+    },
+    {
+        "key": "EXTRACT_LINK_POLL_INTERVAL", "file": "extract_link.py", "type": "float", "group": "提链",
+        "label": "Job轮询间隔(秒)", "help": "poll 模式下后端查询远端 Job 的间隔，建议 2-5 秒",
+    },
+    {
+        "key": "EXTRACT_LINK_POLL_MAX_ERRORS", "file": "extract_link.py", "type": "int", "group": "提链",
+        "label": "Job连续错误上限", "help": "poll 模式下网络错误、429、5xx 的连续容忍次数",
+    },
+    {
+        "key": "MASI_CDK_QUERY_MAX_ATTEMPTS", "file": "extract_link.py", "type": "int", "group": "提链",
+        "label": "CDK查询尝试次数", "help": "Masi CDK 额度查询失败时的最大尝试次数",
+    },
+    {
+        "key": "MASI_CDK_QUERY_RETRY_DELAY", "file": "extract_link.py", "type": "float", "group": "提链",
+        "label": "CDK查询重试间隔(秒)", "help": "Masi CDK 额度查询失败后的重试间隔",
+    },
+    {
+        "key": "MASI_CDK_SELECTION_TIMEOUT", "file": "extract_link.py", "type": "int", "group": "提链",
+        "label": "CDK选择超时(秒)", "help": "全部 CDK 被占用时等待出现可用次数的最长时间",
+    },
+    {
+        "key": "MASI_CDK_REFRESH_WORKERS", "file": "extract_link.py", "type": "int", "group": "提链",
+        "label": "CDK刷新并发数", "help": "批量刷新 Masi CDK 额度时的并发数，建议 2-6",
     },
     # ---- Codex 配置 ----
     {
@@ -564,6 +605,31 @@ EDITABLE_FIELDS = [
         "key": "SMS_API_KEY", "file": "codex.py", "type": "str", "group": "接码平台",
         "label": "GrizzlySMS API密钥", "help": "GrizzlySMS 平台 API Key，保存在 .env（SMS_API_KEY），不写回 config/*.py",
         "storage": "env", "secret": True,
+    },
+    {
+        "key": "SMSBOWER_API_BASE", "file": "codex.py", "type": "str", "group": "接码平台",
+        "label": "SMSBower API地址", "help": "默认使用官方 V1 handler API；与 GrizzlySMS 配置完全独立",
+    },
+    {
+        "key": "SMSBOWER_API_KEY", "file": "codex.py", "type": "str", "group": "接码平台",
+        "label": "SMSBower API密钥", "help": "保存在 .env；配置读取和日志不会返回明文",
+        "storage": "env", "secret": True,
+    },
+    {
+        "key": "SMSBOWER_SERVICE", "file": "codex.py", "type": "str", "group": "接码平台",
+        "label": "SMSBower服务代码", "help": "必须通过 SMSBower getServicesList 确认，不能复用其他平台代码",
+    },
+    {
+        "key": "SMSBOWER_COUNTRY", "file": "codex.py", "type": "str", "group": "接码平台",
+        "label": "SMSBower国家ID", "help": "必须通过 SMSBower getCountries 确认",
+    },
+    {
+        "key": "SMSBOWER_MIN_PRICE", "file": "codex.py", "type": "str", "group": "接码平台",
+        "label": "SMSBower最低价格", "help": "可留空；使用十进制字符串，不能大于最高价格",
+    },
+    {
+        "key": "SMSBOWER_MAX_PRICE", "file": "codex.py", "type": "str", "group": "接码平台",
+        "label": "SMSBower最高价格", "help": "可留空；系统不会自动提高或移除价格限制",
     },
     {
         "key": "H_API_BASE", "file": "codex.py", "type": "str", "group": "接码平台",
@@ -767,7 +833,11 @@ def get_config() -> list[dict]:
             value = _normalize_config_value(value, field["type"])
         item = dict(field)
         item["storage"] = "env"
-        item["value"] = value
+        if field.get("secret") or key == "EXTRACT_LINK_PROXY":
+            item["configured"] = bool(value)
+            item["value"] = ""
+        else:
+            item["value"] = value
         out.append(item)
     return out
 
@@ -902,17 +972,22 @@ def _format_env_value(value, vtype: str) -> str:
 
 def update_config(updates: dict) -> dict:
     """批量更新配置。所有 WebUI 可编辑项只写项目根 `.env`。"""
-    from config.env_loader import write_env_values, load_env
+    from config.env_loader import write_env_values, load_env, read_env_file
 
-    updated, ignored = [], []
+    updated, ignored, preserved = [], [], []
     env_updates: dict[str, str] = {}
+    existing_env = read_env_file()
 
     for key, value in updates.items():
         field = _FIELD_BY_KEY.get(key)
         if field is None:
             ignored.append(key)
             continue
-        env_updates[key] = _format_env_value(value, field["type"])
+        formatted = _format_env_value(value, field["type"])
+        if field.get("secret") and not formatted and str(existing_env.get(key) or "").strip():
+            preserved.append(key)
+            continue
+        env_updates[key] = formatted
         updated.append(key)
 
 
@@ -920,4 +995,4 @@ def update_config(updates: dict) -> dict:
     if env_updated:
         load_env(override=True)
 
-    return {"updated": updated, "ignored": ignored, "env_updated": env_updated}
+    return {"updated": updated, "ignored": ignored, "preserved": preserved, "env_updated": env_updated}

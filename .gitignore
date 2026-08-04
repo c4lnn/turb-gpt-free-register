@@ -25,6 +25,9 @@ codex_agent_accounts
 注册日志/
 accounts_viewer.html
 
+# 提链 CDK 池（含完整 CDK）
+提链CDK池.json
+
 # Cloudflare 域名邮箱池（运行时数据）
 用于注册的域名邮箱.json
 
@@ -76,6 +79,7 @@ Thumbs.db
 # 本地实验脚本（任何 .local. 前缀的私有文件）
 # ============================================================
 *.local.*
+webui-*.log
 
 # Local secrets
 .env

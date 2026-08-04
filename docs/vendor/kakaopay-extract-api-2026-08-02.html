@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Kakao 纯提炼 API 文档</title>
+<style>
+:root{--bg:#f5f4ee;--card:#fff;--ink:#171717;--muted:#6f736f;--line:#deded8;--yellow:#ffe100;--green:#12b981;--code:#17191d}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,"PingFang SC","Microsoft YaHei",sans-serif;line-height:1.65}.wrap{width:min(1080px,calc(100% - 30px));margin:auto;padding:32px 0 70px}.top{display:flex;justify-content:space-between;align-items:center;gap:18px;margin-bottom:24px}.brand{display:flex;align-items:center;gap:13px}.logo{display:grid;place-items:center;width:52px;height:52px;border-radius:15px;background:var(--yellow);font-size:28px;font-weight:900}.brand h1{margin:0;font-size:25px}.brand p{margin:0;color:var(--muted)}.back{padding:9px 15px;border:1px solid var(--line);border-radius:11px;background:#fff;color:var(--ink);font-weight:750;text-decoration:none}.hero,.card{background:var(--card);border:1px solid var(--line);border-radius:19px;box-shadow:0 12px 34px rgba(25,25,20,.05)}.hero{padding:29px;margin-bottom:19px;background:linear-gradient(135deg,#fff,#fffceb)}.badge{display:inline-flex;padding:4px 10px;border-radius:99px;background:var(--yellow);font-size:12px;font-weight:900}.hero h2{margin:12px 0 7px;font-size:32px}.hero p{margin:0;color:var(--muted)}.grid{display:grid;grid-template-columns:220px 1fr;gap:19px}.nav,.content{padding:21px}.nav{position:sticky;top:15px;height:max-content}.nav a{display:block;padding:8px 10px;border-radius:8px;color:#4e5450;text-decoration:none}.nav a:hover{background:#f3f3ee}section{padding:5px 0 24px;border-bottom:1px solid var(--line);margin-bottom:21px}section:last-child{border:0}h3{margin:0 0 12px;font-size:22px}.method{display:inline-flex;padding:2px 8px;border-radius:6px;background:#e8fff6;color:#087b56;font-size:12px;font-weight:900}.method.post{background:#fff4cf;color:#795900}.path,code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}pre{overflow:auto;padding:16px;border-radius:12px;background:var(--code);color:#e7edf3;font:13px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace}.note{padding:12px 14px;border-left:4px solid var(--yellow);background:#fffbea;border-radius:8px}table{width:100%;border-collapse:collapse}th,td{padding:10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{color:var(--muted);font-size:13px}.ok{color:#087b56;font-weight:800}.bad{color:#bd3546;font-weight:800}@media(max-width:740px){.grid{grid-template-columns:1fr}.nav{position:static}.hero h2{font-size:27px}}
+</style>
+</head>
+<body><main class="wrap">
+<header class="top"><div class="brand"><div class="logo">K</div><div><h1>Kakao Pay Link</h1><p>纯提炼 API 文档</p></div></div><a class="back" href="/kakao/extract/">返回提炼页面</a></header>
+<div class="hero"><span class="badge">PURE EXTRACTION API</span><h2>使用CDK提交AT并获取Kakao/Nicepay链接</h2><p>本接口只进行链接提炼，不创建扫码订单，也不会推送工人端。</p></div>
+<div class="grid"><nav class="card nav"><a href="#base">基础信息</a><a href="#auth">CDK认证</a><a href="#create">创建任务</a><a href="#status">查询任务</a><a href="#cancel">取消任务</a><a href="#quota">查询额度</a><a href="#billing">状态与扣费</a><a href="#python">Python示例</a></nav>
+<article class="card content">
+<section id="base"><h3>基础信息</h3><table><tr><th>Base URL</th><td><code>https://masi.cc.cd</code></td></tr><tr><th>格式</th><td><code>application/json</code></td></tr><tr><th>单请求</th><td>1个AT，可并发提交</td></tr><tr><th>同一CDK并发</th><td>API最多30个任务；网页最多10个任务</td></tr><tr><th>单个AT</th><td>运行期间自动去重，只创建一个任务</td></tr></table></section>
+<section id="auth"><h3>CDK认证</h3><p>请求头携带CDK：</p><pre>X-CDK: KSCAN-XXXX-XXXX-XXXX
+Content-Type: application/json</pre><div class="note">只有任务成功并返回付款链接才扣除1次。失败或取消不扣次数。</div></section>
+<section id="create"><h3><span class="method post">POST</span> <span class="path">/v1/kakao/jobs</span></h3><p>提交一个ChatGPT <code>access_token</code>。</p><pre>curl -X POST 'https://masi.cc.cd/v1/kakao/jobs' \
+  -H 'Content-Type: application/json' \
+  -H 'X-CDK: YOUR_CDK' \
+  -d '{"access_token":"YOUR_ACCESS_TOKEN"}'</pre><pre>{"ok":true,"job":{"job_id":"JOB_ID","status":"queued"}}</pre></section>
+<section id="status"><h3><span class="method">GET</span> <span class="path">/v1/kakao/jobs/{job_id}</span></h3><pre>curl 'https://masi.cc.cd/v1/kakao/jobs/JOB_ID' -H 'X-CDK: YOUR_CDK'</pre><pre>{
+  "ok": true,
+  "job": {
+    "job_id": "JOB_ID",
+    "status": "completed",
+    "output": {"long_url": "https://..."}
+  }
+}</pre></section>
+<section id="cancel"><h3><span class="method post">POST</span> <span class="path">/v1/kakao/jobs/{job_id}/cancel</span></h3><p>取消尚未结束的任务，取消成功不扣CDK。</p><pre>curl -X POST 'https://masi.cc.cd/v1/kakao/jobs/JOB_ID/cancel' \
+  -H 'Content-Type: application/json' \
+  -H 'X-CDK: YOUR_CDK' -d '{}'</pre></section>
+<section id="quota"><h3><span class="method">GET</span> <span class="path">/v1/cdk/status</span></h3><pre>curl 'https://masi.cc.cd/v1/cdk/status' -H 'X-CDK: YOUR_CDK'</pre><pre>{"ok":true,"cdk":{"total_uses":10,"remaining_uses":8,"pending_uses":1,"available_uses":7}}</pre></section>
+<section id="billing"><h3>任务状态与扣费</h3><table><tr><th>状态</th><th>含义</th><th>扣费</th></tr><tr><td><code>queued</code></td><td>排队</td><td>预留额度</td></tr><tr><td><code>running</code></td><td>提炼中</td><td>预留额度</td></tr><tr><td class="ok"><code>completed</code></td><td>成功返回链接</td><td>扣除1次</td></tr><tr><td class="bad"><code>failed</code></td><td>失败</td><td>释放额度</td></tr><tr><td><code>canceled</code></td><td>取消</td><td>释放额度</td></tr></table><p>API 不按邮箱域名限制提交；任务是否成功以账号实时资格和上游返回为准。失败任务会释放预留的CDK额度，不额外扣次数。</p><p>常见HTTP状态：<code>400</code> 参数错误，<code>401</code> CDK无效，<code>429</code> 并发达到上限，<code>502</code> 上游暂不可用。</p></section>
+<section id="python"><h3>Python完整示例</h3><pre>import time
+import requests
+
+base = "https://masi.cc.cd"
+headers = {"X-CDK": "YOUR_CDK", "Content-Type": "application/json"}
+created = requests.post(base + "/v1/kakao/jobs", headers=headers,
+                        json={"access_token": "YOUR_ACCESS_TOKEN"}, timeout=30).json()
+job_id = created["job"]["job_id"]
+
+while True:
+    job = requests.get(base + f"/v1/kakao/jobs/{job_id}",
+                       headers=headers, timeout=30).json()["job"]
+    if job["status"] == "completed":
+        print(job["output"]["long_url"])
+        break
+    if job["status"] in {"failed", "canceled"}:
+        raise RuntimeError(job.get("error") or job["status"])
+    time.sleep(2.5)</pre></section>
+</article></div></main></body></html>

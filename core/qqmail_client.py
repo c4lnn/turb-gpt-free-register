@@ -153,6 +153,7 @@ def _connect_imap() -> imaplib.IMAP4_SSL:
     """连接 QQ 邮箱 IMAP 服务器并返回连接对象。"""
     server = _email_cfg.QQ_IMAP_SERVER
     port = _email_cfg.QQ_IMAP_PORT
+    timeout = max(1, int(getattr(_email_cfg, "QQ_IMAP_TIMEOUT", 15) or 15))
     qq_email = _email_cfg.QQ_EMAIL
     password = _email_cfg.QQ_IMAP_PASSWORD
 
@@ -162,7 +163,9 @@ def _connect_imap() -> imaplib.IMAP4_SSL:
         )
 
     try:
-        mail = imaplib.IMAP4_SSL(server, port)
+        # timeout 会应用到 IMAP socket 的 connect/read/write，避免外层 OTP
+        # deadline 被一次永久阻塞的 search/fetch 绕过。
+        mail = imaplib.IMAP4_SSL(server, port, timeout=timeout)
         mail.login(qq_email, password)
         mail.select("INBOX")
         return mail
