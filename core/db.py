@@ -314,7 +314,7 @@ def _render_static_viewer(outlook_rows: list[dict] | None = None, account_rows: 
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>ID</th><th>邮箱</th><th>来源</th><th>Token</th><th>备注</th><th>2FA</th><th>创建时间</th><th>操作</th></tr></thead>
+        <thead><tr><th>ID</th><th>邮箱</th><th>来源</th><th>AT</th><th>备注</th><th>2FA</th><th>创建时间</th><th>操作</th></tr></thead>
         <tbody id="accountsBody"></tbody>
       </table>
     </div>
@@ -326,7 +326,7 @@ def _render_static_viewer(outlook_rows: list[dict] | None = None, account_rows: 
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>邮箱</th><th>状态</th><th>Token</th><th>导入时间</th><th>已用时间</th><th>操作</th></tr></thead>
+        <thead><tr><th>邮箱</th><th>状态</th><th>AT</th><th>导入时间</th><th>已用时间</th><th>操作</th></tr></thead>
         <tbody id="outlookBody"></tbody>
       </table>
     </div>
@@ -408,7 +408,7 @@ function render() {{
       <td title="${{esc(r.note || '')}}">${{r.note ? esc(short(r.note, 60)) : '<span class="muted">-</span>'}}</td>
       <td>${{r.totp_secret ? '已启用' : '<span class="muted">未启用</span>'}}</td>
       <td class="muted">${{esc(r.created_at || '-')}}</td>
-      <td class="actions">${{btn('复制Token', r.access_token, 'primary')}} ${{btn('复制整行', r.copy_line, 'good')}}</td>
+      <td class="actions">${{btn('复制AT', r.access_token, 'primary')}} ${{btn('复制整行', r.copy_line, 'good')}}</td>
     </tr>`).join('');
   $('#outlookBody').innerHTML = outlook.map((r) => `
     <tr>
@@ -417,7 +417,7 @@ function render() {{
       <td><span class="mono">${{esc(short(r.access_token || '', 36) || '未生成')}}</span></td>
       <td class="muted">${{esc(r.imported_at || r.created_at || '-')}}</td>
       <td class="muted">${{esc(r.used_at || '-')}}</td>
-      <td class="actions">${{btn('复制邮箱', r.copy_line)}} ${{btn('复制Token', r.access_token, 'primary')}} ${{btn('复制整行', r.account_copy_line, 'good')}}</td>
+      <td class="actions">${{btn('复制邮箱', r.copy_line)}} ${{btn('复制AT', r.access_token, 'primary')}} ${{btn('复制整行', r.account_copy_line, 'good')}}</td>
     </tr>`).join('');
 }}
 document.addEventListener('click', (e) => {{
@@ -1473,6 +1473,29 @@ def get_account(acc_id: int) -> dict | None:
         return _decorate_account(row) if row else None
 
 
+def get_retry_account_snapshot() -> dict[str, dict[int | str, dict]]:
+    """Load only the non-sensitive account fields needed by job retry decisions."""
+    with _LOCK:
+        by_id: dict[int, dict] = {}
+        by_email: dict[str, dict] = {}
+        for row in _load_accounts():
+            account = {
+                "id": row.get("id"),
+                "email": row.get("email"),
+                "codex_status": row.get("codex_status"),
+            }
+            try:
+                account_id = int(row.get("id") or 0)
+            except (TypeError, ValueError):
+                account_id = 0
+            if account_id:
+                by_id[account_id] = account
+            email = str(row.get("email") or "").strip().lower()
+            if email:
+                by_email[email] = account
+        return {"by_id": by_id, "by_email": by_email}
+
+
 def get_account_by_email(email: str) -> dict | None:
     with _LOCK:
         row = _find_by_email(_load_accounts(), email)
@@ -1659,6 +1682,27 @@ def import_outlook_accounts(records: list[dict]) -> tuple[int, int]:
         return inserted, skipped
 
 
+def normalize_registered_icloud_import_record(raw: dict) -> tuple[dict | None, str | None]:
+    """校验 iCloud 已注册账号导入行；仅解析 JWT，不验证远端有效性。"""
+    from core.chatgpt_plan import normalize_token, token_claims
+
+    email = str((raw or {}).get("email") or "").strip()
+    access_token = normalize_token(str((raw or {}).get("access_token") or (raw or {}).get("token") or ""))
+    if not email or "@" not in email:
+        return None, "邮箱格式无效"
+    if not access_token:
+        return None, "缺少 AT"
+
+    claim_email = str(token_claims(access_token).get("email") or "").strip()
+    if claim_email and claim_email.casefold() != email.casefold():
+        return None, "AT 邮箱与导入邮箱不一致"
+
+    normalized = dict(raw)
+    normalized["email"] = email
+    normalized["access_token"] = access_token
+    return normalized, None
+
+
 def import_registered_email_accounts(records: list[dict], source: str | None) -> tuple[int, int]:
     """
     把邮箱素材直接导入为“已注册成功账号”，用于跳过注册、直接在账号页补跑 Codex 授权。
@@ -1666,20 +1710,28 @@ def import_registered_email_accounts(records: list[dict], source: str | None) ->
     source:
       - outlook: records 元素 {email,password,client_id,refresh_token[,access_token,totp_secret]}
       - generic_api: records 元素 {email,code_url[,access_token,totp_secret]}
+      - icloud: records 元素 {email,access_token}
 
     返回 (新增账号数, 跳过数)。已存在账号会跳过；邮箱池中已存在的素材会复用并标记 used。
     """
     source = (source or "").strip().lower()
-    if source not in ("outlook", "generic_api"):
-        raise ValueError("source 必须显式传入 outlook / generic_api")
+    if source not in ("outlook", "generic_api", "icloud"):
+        raise ValueError("source 必须显式传入 outlook / generic_api / icloud")
 
     with _LOCK:
         accounts = _load_accounts()
         outlook_rows = _load_outlook()
         generic_rows = _load_generic_api_emails()
+        icloud_rows = _load_icloud_emails()
         inserted = skipped = 0
 
         for raw in records:
+            if source == "icloud":
+                normalized, _reason = normalize_registered_icloud_import_record(raw)
+                if normalized is None:
+                    skipped += 1
+                    continue
+                raw = normalized
             email = (raw.get("email") or "").strip()
             if not email:
                 skipped += 1
@@ -1717,7 +1769,7 @@ def import_registered_email_accounts(records: list[dict], source: str | None) ->
                 pool_row["note"] = pool_row.get("note") or "导入为已注册账号，用于 Codex 授权"
                 pool_row["copy_line"] = _generic_api_email_line(pool_row)
                 original_line = _generic_api_email_line(pool_row)
-            else:
+            elif source == "outlook":
                 password = (raw.get("password") or "").strip()
                 client_id = (raw.get("client_id") or raw.get("clientId") or "").strip()
                 refresh_token = (raw.get("refresh_token") or raw.get("refreshToken") or "").strip()
@@ -1748,6 +1800,22 @@ def import_registered_email_accounts(records: list[dict], source: str | None) ->
                 pool_row["note"] = pool_row.get("note") or "导入为已注册账号，用于 Codex 授权"
                 pool_row["copy_line"] = _outlook_line(pool_row)
                 original_line = _outlook_line(pool_row)
+            else:
+                pool_row = _find_by_email(icloud_rows, email)
+                if pool_row is None:
+                    pool_row = {
+                        "id": _next_id(icloud_rows),
+                        "email": email,
+                        "status": "used",
+                        "used_at": now,
+                        "note": "导入为已注册账号，用于邮箱 OTP",
+                        "imported_at": now,
+                    }
+                    icloud_rows.append(pool_row)
+                pool_row["status"] = "used"
+                pool_row["used_at"] = pool_row.get("used_at") or now
+                pool_row["completed_at"] = pool_row.get("completed_at") or now
+                pool_row["note"] = pool_row.get("note") or "导入为已注册账号，用于邮箱 OTP"
 
             row_id = _next_id(accounts)
             access_token = (raw.get("access_token") or raw.get("token") or "").strip()
@@ -1759,7 +1827,7 @@ def import_registered_email_accounts(records: list[dict], source: str | None) ->
                 "access_token": access_token,
                 "totp_secret": totp_secret,
                 "user_id": raw.get("user_id"),
-                "user_name": raw.get("user_name") or "Imported Account",
+                "user_name": raw.get("user_name") if source == "icloud" else raw.get("user_name") or "Imported Account",
                 "plan_type": raw.get("plan_type"),
                 "expires_at": raw.get("expires_at"),
                 "device_id": raw.get("device_id"),
@@ -1784,8 +1852,12 @@ def import_registered_email_accounts(records: list[dict], source: str | None) ->
                 pool_row["totp_secret"] = totp_secret
             inserted += 1
 
-        _save_outlook(outlook_rows)
-        _save_generic_api_emails(generic_rows)
+        if source == "outlook":
+            _save_outlook(outlook_rows)
+        elif source == "generic_api":
+            _save_generic_api_emails(generic_rows)
+        else:
+            _save_icloud_emails(icloud_rows)
         _save_accounts(accounts)
         return inserted, skipped
 

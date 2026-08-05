@@ -159,8 +159,8 @@
     }
     .extract-link-cell .pill { min-width: auto; padding: 4px 10px; }
     .extract-link-cell .extract-status-label {
-      width: 96px; max-width: 100%; height: 26px; min-height: 26px;
-      flex: 0 0 96px; box-sizing: border-box; justify-content: center;
+      width: auto; max-width: 100%; height: 26px; min-height: 26px;
+      min-width: 0; flex: 0 1 auto; box-sizing: border-box; justify-content: center;
       overflow: visible; text-overflow: clip; white-space: nowrap;
     }
     .extract-link-btn {
@@ -658,7 +658,7 @@
     .accounts-table-v2-wrap { overflow: auto; padding: 0; }
     .accounts-table-v2 {
       width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 14px;
-      min-width: 1280px;
+      min-width: 1800px;
     }
     .accounts-table-v2 th, .accounts-table-v2 td {
       padding: 12px 12px; border-bottom: 1px solid #ebeef5;
@@ -680,7 +680,8 @@
     .accounts-table-v2 .col-email { width: 240px; }
     .accounts-table-v2 .col-source { width: 90px; }
     .accounts-table-v2 .col-token { width: 100px; }
-    .accounts-table-v2 .col-plan { width: 120px; }
+    .accounts-table-v2 .col-plan { width: 240px; min-width: 240px; }
+    .accounts-table-v2 .col-extract-link { width: 240px; min-width: 240px; }
     .accounts-table-v2 .col-note { width: 140px; }
     .accounts-table-v2 .col-small { width: 72px; }
     .accounts-table-v2 .col-status { width: 100px; }
@@ -716,6 +717,7 @@
     .accounts-table-v2 tbody td:last-child { padding-right: 16px; }
     .accounts-table-v2 .col-email,
     .accounts-table-v2 .col-plan,
+    .accounts-table-v2 .col-extract-link,
     .accounts-table-v2 .col-note,
     .accounts-table-v2 .col-agent,
     .accounts-table-v2 .col-actions {
@@ -730,6 +732,27 @@
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
     .accounts-table-v2 .acc-v2-muted { color: #c0c4cc; }
+    .accounts-table-v2 .col-plan .extract-link-error { display: none; }
+    .accounts-table-v2 .extract-link-cell {
+      align-items: flex-start; flex-direction: column; gap: 4px; margin-top: 0;
+      width: 100%;
+    }
+    .accounts-table-v2 .extract-link-actions {
+      display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    }
+    /* Keep status labels at a stable width so long text cannot cover adjacent columns. */
+    .accounts-table-v2 .col-plan .pill {
+      width: 220px; min-width: 220px; max-width: 220px;
+      height: 26px; min-height: 26px; flex: 0 0 auto; justify-content: center;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      box-sizing: border-box;
+    }
+    .accounts-table-v2 .extract-status-label {
+      width: 220px; min-width: 220px; max-width: 220px;
+      flex: 0 0 220px; justify-content: center;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      box-sizing: border-box;
+    }
     .accounts-table-v2 .pill {
       display: inline-flex; align-items: center; justify-content: center;
       height: 26px; padding: 0 10px; border-radius: 4px;
@@ -770,13 +793,15 @@
     .accounts-table-v2 .acc-v2-codex.is-run { color: #e6a23c; }
     .accounts-table-v2 .acc-v2-codex.is-mute { color: #c0c4cc; }
     .accounts-table-v2 .agent-token-cell {
-      display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+      display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 0;
     }
     .accounts-table-v2 .agent-token-cell button,
     .accounts-table-v2 .extract-link-cell button {
-      min-height: 26px; padding: 0 10px; border-radius: 13px;
+      height: 26px; min-height: 26px; padding: 0 10px; border-radius: 4px;
       border: 1px solid #67c23a; background: #fff; color: #67c23a;
-      font: inherit; font-size: 12px; cursor: pointer; line-height: 1;
+      display: inline-flex; align-items: center; justify-content: center;
+      box-sizing: border-box; font: inherit; font-size: 13px; font-weight: 500;
+      cursor: pointer; line-height: 1;
       white-space: nowrap;
     }
     .accounts-table-v2 .agent-token-cell button:hover:not(:disabled),
@@ -2284,8 +2309,8 @@
         <table class="accounts-table-v2">
           <colgroup>
             <col class="col-check"><col class="col-id"><col class="col-email"><col class="col-source">
-            <col class="col-token"><col class="col-plan"><col class="col-note"><col class="col-small">
-            <col class="col-status"><col class="col-agent"><col class="col-time"><col class="col-actions">
+            <col class="col-token"><col class="col-plan"><col class="col-extract-link"><col class="col-small"><col class="col-status">
+            <col class="col-agent"><col class="col-note"><col class="col-time"><col class="col-actions">
           </colgroup>
           <thead>
             <tr>
@@ -2293,12 +2318,13 @@
               <th class="col-id">ID</th>
               <th class="col-email">邮箱</th>
               <th class="col-source">来源</th>
-              <th class="col-token">Token</th>
+              <th class="col-token">AT</th>
               <th class="col-plan">套餐</th>
-              <th class="col-note">备注</th>
+              <th class="col-extract-link">提链</th>
               <th class="col-small">2FA</th>
               <th class="col-status">Codex</th>
               <th class="col-agent">Agent Token</th>
+              <th class="col-note">备注</th>
               <th class="col-time">创建时间</th>
               <th class="col-actions">操作</th>
             </tr>
@@ -2428,7 +2454,7 @@
               <th class="col-email">邮箱</th>
               <th class="col-source">类型</th>
               <th class="col-status">状态</th>
-              <th class="col-token">Token</th>
+              <th class="col-token">AT</th>
               <th class="col-time">导入时间</th>
               <th class="col-time">已用时间</th>
               <th class="col-actions">操作</th>
@@ -2494,7 +2520,7 @@
     <div class="outlook-import-head">
       <div class="outlook-import-head-main">
         <h3 id="outlookImportTitle">导入邮箱素材</h3>
-        <p>Outlook：邮箱----密码----clientId----refreshToken；通用 API：邮箱----取码地址（---- 或 ==== 均可）。默认按「已注册成功账号」导入，方便在账号页补跑 Codex。</p>
+        <p>Outlook、通用 API 与 iCloud 均可导入邮箱素材；勾选已注册账号时，iCloud 使用“邮箱----AT”（---- 或 ==== 均可）。</p>
       </div>
       <button type="button" class="outlook-import-close" id="btnCloseOutlookImport" aria-label="关闭">×</button>
     </div>
@@ -2511,15 +2537,15 @@
           </div>
           <input type="hidden" id="importSourceV2" value="outlook">
         </div>
-        <span class="outlook-import-hint">iCloud 导入格式：每行一个已有隐私邮箱地址；注册来源可在配置里填多个</span>
+        <span class="outlook-import-hint" id="importFormatHintV2">Outlook 已注册账号：邮箱----密码----clientId----refreshToken，可在后面附加 AT</span>
       </label>
       <label class="outlook-import-check">
-        <input id="importAsRegisteredV2" type="checkbox" checked>
+        <input id="importAsRegisteredV2" type="checkbox">
         <span>导入后默认视为「注册成功账号」（邮箱池标记已用，并出现在账号页，可直接批量补跑 Codex）</span>
       </label>
       <label class="outlook-import-field">
         <span>邮箱素材</span>
-        <textarea id="importTextV2" placeholder="Outlook: email----password----clientId----refreshToken&#10;通用API: email----取码地址"></textarea>
+        <textarea id="importTextV2" placeholder="Outlook: email----password----clientId----refreshToken----AT"></textarea>
       </label>
     </div>
     <div class="outlook-import-foot">
@@ -2819,15 +2845,22 @@ function activateTab(tab, persist=true) {
 $$('nav button').forEach(b => b.addEventListener('click', () => activateTab(b.dataset.tab)));
 
 // ---------- 概览 ----------
-async function loadSummary() {
-  try {
-    const s = await api('/api/summary');
-    $('#statAccounts').textContent = s.accounts;
-    $('#statOutlook').textContent = s.outlook_total;
-    $('#statAvailable').textContent = s.outlook_available;
-    $('#statUsed').textContent = s.outlook_used;
-    $('#statFailed').textContent = s.outlook_failed;
-  } catch(e) {}
+let summaryRefreshPromise = null;
+function loadSummary() {
+  if (summaryRefreshPromise) return summaryRefreshPromise;
+  const run = async () => {
+    try {
+      const s = await api('/api/summary');
+      $('#statAccounts').textContent = s.accounts;
+      $('#statOutlook').textContent = s.outlook_total;
+      $('#statAvailable').textContent = s.outlook_available;
+      $('#statUsed').textContent = s.outlook_used;
+      $('#statFailed').textContent = s.outlook_failed;
+    } catch(e) {}
+    finally { summaryRefreshPromise = null; }
+  };
+  summaryRefreshPromise = run();
+  return summaryRefreshPromise;
 }
 
 // ---------- 注册 / 任务 ----------
@@ -3017,23 +3050,35 @@ function updateJobsSelectionUi(pageRows = null) {
   }
 }
 
-async function refreshJobs() {
-  try {
-    const p = PAGERS.jobs;
-    const res = await api(`/api/jobs?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}`);
-    const nextJobs = res.items || [];
-    JOBS_TOTAL = Number(res.total || nextJobs.length || 0);
-    JOB_STATUS_COUNTS = res.status_counts || {};
-    const totalPages = Math.max(1, Math.ceil(JOBS_TOTAL / p.size));
-    if (p.page > totalPages) { p.page = totalPages; return refreshJobs(); }
-    const nextSignature = JSON.stringify({items: nextJobs, total: JOBS_TOTAL, status_counts: JOB_STATUS_COUNTS, page: p.page, size: p.size});
-    JOBS = nextJobs;
-    if (nextSignature !== jobsRenderSignature) {
-      jobsRenderSignature = nextSignature;
-      renderJobs();
-    }
-    loadSummary();
-  } catch(e) {}
+let jobsRefreshPromise = null;
+function refreshJobs() {
+  if (jobsRefreshPromise) return jobsRefreshPromise;
+  const run = async () => {
+    try {
+      const p = PAGERS.jobs;
+      while (true) {
+        const res = await api(`/api/jobs?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}`);
+        const nextJobs = res.items || [];
+        JOBS_TOTAL = Number(res.total || nextJobs.length || 0);
+        JOB_STATUS_COUNTS = res.status_counts || {};
+        const totalPages = Math.max(1, Math.ceil(JOBS_TOTAL / p.size));
+        if (p.page > totalPages) {
+          p.page = totalPages;
+          continue;
+        }
+        const nextSignature = JSON.stringify({items: nextJobs, total: JOBS_TOTAL, status_counts: JOB_STATUS_COUNTS, page: p.page, size: p.size});
+        JOBS = nextJobs;
+        if (nextSignature !== jobsRenderSignature) {
+          jobsRenderSignature = nextSignature;
+          renderJobs();
+        }
+        return;
+      }
+    } catch(e) {}
+    finally { jobsRefreshPromise = null; }
+  };
+  jobsRefreshPromise = run();
+  return jobsRefreshPromise;
 }
 
 let modalScrollY = 0;
@@ -3459,25 +3504,49 @@ function _fmtExtractExpire(v) {
 function _extractLinkProgressLabel(message) {
   const text = String(message || '');
   const attempt = text.match(/Masi Job\s*第\s*(\d+)\s*\/\s*(\d+)\s*次/i);
-  if (!attempt) return '提链进行中';
+  if (!attempt) return '提炼中';
   return `${/(失败|重试|重新提交)/.test(text) ? '重试' : '提炼'} ${attempt[1]}/${attempt[2]}`;
 }
+function _extractLinkStatusLabel(status) {
+  const labels = {
+    queued: '排队', running: '提炼中', success: '提炼成功', failed: '提炼失败',
+    canceled: '已取消', cancelled: '已取消', stopped: '已停止',
+  };
+  const value = String(status || '').trim().toLowerCase();
+  return labels[value] || (value || '-');
+}
+function _extractLinkHasRecord(r) {
+  return Boolean(
+    r.extract_link_status || r.extract_link_type || r.extract_link_provider ||
+    r.extract_link_update_mode || r.extract_link_job_id || r.extract_link_message ||
+    r.extract_link_error || r.extract_link_long_url || r.extract_link_copy_paste ||
+    r.extract_link_image_url_png || r.extract_link_image_url_svg || r.extract_link_resumable
+  );
+}
+function _extractLinkSummary(r, statusText) {
+  const type = String(r.extract_link_type || '-').trim();
+  const provider = String(r.extract_link_provider || '-').trim();
+  return `${type} · ${provider} · ${statusText || '-'}`;
+}
 function _extractLinkCell(r) {
-  const s = r.extract_link_status || '';
+  const s = String(r.extract_link_status || '').toLowerCase();
   const err = r.extract_link_error || '';
   const msg = r.extract_link_message || '';
   const title = esc(err || msg || r.extract_link_job_id || '');
-  if (s === 'queued') return `<span class="pill status-running extract-status-label" title="${title}">提链排队</span>`;
-  if (s === 'running') return `<span class="pill status-running extract-status-label" title="${title}">${esc(_extractLinkProgressLabel(msg))}</span>`;
+  if (!_extractLinkHasRecord(r)) return '';
+  const summary = (statusText) => _extractLinkSummary(r, statusText);
+  const wrap = (controls = '') => `<div class="extract-link-cell"><div class="extract-link-actions">${controls}</div></div>`;
+  if (s === 'queued') return wrap(`<span class="pill status-running extract-status-label" title="${title}">${esc(summary(_extractLinkStatusLabel(s)))}</span>`);
+  if (s === 'running') return wrap(`<span class="pill status-running extract-status-label" title="${title}">${esc(summary(_extractLinkProgressLabel(msg)))}</span>`);
   if (s === 'success') {
     const typ = (r.extract_link_type || '').toUpperCase();
-    const provider = (r.extract_link_provider || 'legacy').toUpperCase();
-    const mode = (r.extract_link_update_mode || 'sse').toUpperCase();
+    const provider = (r.extract_link_provider || '-').toUpperCase();
+    const mode = (r.extract_link_update_mode || '-').toUpperCase();
     const cdk = r.extract_link_cdk_fingerprint ? ` · CDK ${r.extract_link_cdk_fingerprint}` : '';
     const link = r.extract_link_long_url || r.extract_link_copy_paste || '';
     const qr = r.extract_link_image_url_png || r.extract_link_image_url_svg || '';
     const expire = _fmtExtractExpire(r.extract_link_expires_at || '');
-    const successLabel = `提链成功${typ ? '(' + typ + ')' : ''}`;
+    const successLabel = summary(_extractLinkStatusLabel(s));
     const successTitle = [
       successLabel,
       `${provider} · ${mode}${cdk}`,
@@ -3486,17 +3555,16 @@ function _extractLinkCell(r) {
     ].filter(Boolean).join('；');
     const successCopyId = copyId(link);
     const success = link
-      ? `<button type="button" class="pill status-success extract-success-copy extract-status-label" data-copy-id="${successCopyId}" title="${esc(successTitle)}">提链成功</button>`
-      : `<span class="pill status-success extract-status-label" title="${esc(successTitle || title)}">提链成功</span>`;
+      ? `<button type="button" class="pill status-success extract-success-copy extract-status-label" data-copy-id="${successCopyId}" title="${esc(successTitle)}">${esc(successLabel)}</button>`
+      : `<span class="pill status-success extract-status-label" title="${esc(successTitle || title)}">${esc(successLabel)}</span>`;
     const qrBtn = qr ? `<button class="extract-link-btn extract-qr" data-qr-url="${esc(qr)}" title="打开支付二维码图片">查看二维码</button>` : '';
-    return `<div class="extract-link-cell">${success}${qrBtn}</div>`;
+    return wrap(`${success}${qrBtn}`);
   }
-  if (s === 'failed' || s === 'canceled') {
+  if (s === 'failed' || s === 'canceled' || s === 'cancelled' || s === 'stopped') {
     const reason = err || msg || '未知原因';
-    const label = s === 'canceled' ? '已取消' : '提链失败';
-    return `<div class="extract-link-cell"><span class="pill status-failed extract-status-label" title="${esc(reason)}">${label}</span></div>`;
+    return wrap(`<span class="pill status-failed extract-status-label" title="${esc(reason)}">${esc(summary(_extractLinkStatusLabel(s)))}</span>`);
   }
-  return '';
+  return wrap(`<span class="pill status-used extract-status-label" title="${title}">${esc(summary(_extractLinkStatusLabel(s)))}</span>`);
 }
 function _extractLinkAction(r) {
   const s = r.extract_link_status || '';
@@ -3531,9 +3599,9 @@ function _atRefreshAction(r) {
 }
 function _tokenCellV2(r) {
   if (r.has_access_token) {
-    return `<button type="button" class="acc-v2-token-copy" data-account-copy-secret="access_token" data-account-id="${esc(r.id)}" title="复制完整 Token">复制</button>`;
+    return `<button type="button" class="acc-v2-token-copy" data-account-copy-secret="access_token" data-account-id="${esc(r.id)}" title="复制完整 AT">复制</button>`;
   }
-  return `<span class="pill status-failed">无Token</span>`;
+  return `<span class="pill status-failed">无AT</span>`;
 }
 function _accountsV2MoreMenu(r) {
   const parts = [
@@ -3583,11 +3651,12 @@ function renderAccounts() {
       </td>
       <td class="col-source">${esc(r.email_source || '-')}</td>
       <td class="col-token">${_tokenCellV2(r)}</td>
-      <td class="col-plan">${_planCell(r)}<div class="acc-v2-sub">${_extractLinkCell(r)}</div></td>
-      <td class="col-note" title="${esc(r.note || '')}">${r.note ? esc(short(r.note, 80)) : '<span class="acc-v2-muted">-</span>'}</td>
+      <td class="col-plan">${_planCell(r)}</td>
+      <td class="col-extract-link" data-label="提链">${_extractLinkCell(r) || '<span class="acc-v2-muted">-</span>'}</td>
       <td class="col-small">${r.totp_enabled ? '已启用' : '<span class="acc-v2-muted">未启用</span>'}</td>
       <td class="col-status">${_codexCellV2(r)}</td>
       <td class="col-agent">${_codexAgentCell(r)}</td>
+      <td class="col-note" title="${esc(r.note || '')}">${r.note ? esc(short(r.note, 80)) : '<span class="acc-v2-muted">-</span>'}</td>
       <td class="col-time" title="${esc(r.created_at || '-')}">${esc(r.created_at || '-')}</td>
       <td class="col-actions">
         <div class="acc-v2-actions">
@@ -3602,7 +3671,7 @@ function renderAccounts() {
 
   const bodyV2 = $('#accountsBodyV2');
   if (bodyV2) {
-    bodyV2.innerHTML = rows.map(rowHtmlV2).join('') || '<tr><td colspan="12" style="text-align:center;color:#909399;padding:28px;">暂无账号</td></tr>';
+    bodyV2.innerHTML = rows.map(rowHtmlV2).join('') || '<tr><td colspan="13" style="text-align:center;color:#909399;padding:28px;">暂无账号</td></tr>';
   }
   updateAccountSelectionUi(rows);
   _renderPager('accounts', total);
@@ -3704,7 +3773,7 @@ async function onAccountsBodyClick(e) {
       const value = await fetchOneAccountSecret(id, field);
       if (!value) { showToast('可复制内容为空'); return; }
       copyText(value);
-      showToast(field === 'access_token' ? 'Token 已复制' : field === 'codex_agent_token' ? 'Agent Token 已复制' : '账号整行已复制');
+      showToast(field === 'access_token' ? 'AT 已复制' : field === 'codex_agent_token' ? 'Agent Token 已复制' : '账号整行已复制');
     } catch(err) {
       showToast('复制失败: ' + err.message);
     } finally {
@@ -4856,7 +4925,7 @@ async function copySelectedAccountTokens() {
   if (!ids.length) { showToast('请先选择账号'); return; }
   try {
     const lines = await fetchAccountSecrets(ids, 'access_token');
-    if (!lines.length) { showToast('选中账号没有可复制 Token'); return; }
+    if (!lines.length) { showToast('选中账号没有可复制 AT'); return; }
     copyText(lines.join('\n'));
     showToast(`已复制 ${lines.length} 个 Token`);
   } catch(e) { showToast('复制失败: ' + e.message); }
@@ -4952,15 +5021,15 @@ function positionOutlookV2MoreMenu(wrap) {
 function _outlookTokenCell(r) {
   if (r.access_token) {
     const id = copyId(r.access_token);
-    return `<button type="button" class="acc-v2-token-copy" data-copy-id="${id}" title="复制 Token">复制</button>`;
+    return `<button type="button" class="acc-v2-token-copy" data-copy-id="${id}" title="复制 AT">复制</button>`;
   }
-  return `<span class="acc-v2-token-none">无Token</span>`;
+  return `<span class="acc-v2-token-none">无AT</span>`;
 }
 function _outlookMoreMenu(r) {
   const src = esc(r.source || 'outlook');
   const email = esc(r.email);
   const items = [
-    cbtn('复制Token', r.access_token, 'good'),
+    cbtn('复制AT', r.access_token, 'good'),
     cbtn('复制整行', r.account_copy_line, 'good'),
     r.status !== 'available' ? `<button type="button" data-pool-act="available" data-email="${email}" data-source="${src}">恢复可用</button>` : '',
     r.status !== 'disabled' ? `<button type="button" data-pool-act="disabled" data-email="${email}" data-source="${src}">停用</button>` : '',
@@ -5144,6 +5213,26 @@ const IMPORT_SOURCE_LABELS = {
   generic_api: '通用 API 取码邮箱',
   icloud: 'iCloud 隐私邮箱',
 };
+function updateImportFormatV2() {
+  const source = $('#importSourceV2')?.value || 'outlook';
+  const asRegistered = $('#importAsRegisteredV2')?.checked ?? false;
+  const hint = $('#importFormatHintV2');
+  const textarea = $('#importTextV2');
+  const formats = {
+    outlook: asRegistered
+      ? ['Outlook 已注册账号：邮箱----密码----clientId----refreshToken，可在后面附加 AT', 'email----password----clientId----refreshToken----AT']
+      : ['Outlook 邮箱素材：邮箱----密码----clientId----refreshToken', 'email----password----clientId----refreshToken'],
+    generic_api: asRegistered
+      ? ['通用 API 已注册账号：邮箱----取码地址，可在后面附加 AT', 'email----取码地址----AT']
+      : ['通用 API 邮箱素材：邮箱----取码地址', 'email----取码地址'],
+    icloud: asRegistered
+      ? ['iCloud 已注册账号：邮箱----AT；后续 OTP 自动使用配置的 QQ IMAP', 'email----accessToken']
+      : ['iCloud 邮箱素材：每行一个已有隐私邮箱地址', 'email@privaterelay.appleid.com'],
+  };
+  const selected = formats[source] || formats.outlook;
+  if (hint) hint.textContent = selected[0];
+  if (textarea) textarea.placeholder = selected[1];
+}
 function setImportSourceV2(val) {
   const hidden = document.getElementById('importSourceV2');
   const btn = document.getElementById('importSourceV2Btn');
@@ -5157,6 +5246,7 @@ function setImportSourceV2(val) {
       item.classList.toggle('is-active', item.dataset.value === next);
     });
   }
+  updateImportFormatV2();
 }
 function openOutlookImportModal() {
   const modal = $('#outlookImportModal');
@@ -5186,8 +5276,10 @@ function bindOutlookImportModal() {
   const closeBtn = $('#btnCloseOutlookImport');
   const cancelBtn = $('#btnCancelOutlookImport');
   const submitBtn = $('#btnSubmitOutlookImport');
+  const registered = $('#importAsRegisteredV2');
   if (closeBtn) closeBtn.addEventListener('click', closeOutlookImportModal);
   if (cancelBtn) cancelBtn.addEventListener('click', closeOutlookImportModal);
+  if (registered) registered.addEventListener('change', updateImportFormatV2);
   modal.addEventListener('click', (e) => {
     if (e.target === modal) closeOutlookImportModal();
   });
@@ -5230,10 +5322,11 @@ async function doImportOutlook() {
   if (submitBtn) submitBtn.disabled = true;
   try {
     const source = sourceEl ? sourceEl.value : 'outlook';
-    const as_registered = registeredEl ? !!registeredEl.checked : true;
+    const as_registered = registeredEl ? !!registeredEl.checked : false;
     const r = await api('/api/outlook/import', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({text, source, as_registered}) });
     const mode = r.as_registered ? '已注册账号' : '邮箱池素材';
-    const msg = `按 ${mode} 导入：解析 ${r.parsed} 行，新增 ${r.inserted}，跳过 ${r.skipped}${r.as_registered ? '；可到“账号”页选择后批量补跑 Codex' : ''}`;
+    const errorSummary = (r.errors || []).map(item => `第 ${item.line} 行：${item.reason}`).join('；');
+    const msg = `按 ${mode} 导入：解析 ${r.parsed} 行，新增 ${r.inserted}，跳过 ${r.skipped}${r.as_registered ? '；可到“账号”页选择后批量补跑 Codex' : ''}${errorSummary ? `；${errorSummary}` : ''}`;
     if (resultEl) resultEl.innerHTML = `<div class="banner info">${esc(msg)}</div>`;
     if (textEl) textEl.value = '';
     setPoolSourceV2(source);

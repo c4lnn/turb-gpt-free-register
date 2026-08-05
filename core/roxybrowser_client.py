@@ -1,10 +1,15 @@
 # -*- coding: utf-8 -*-
-"""RoxyBrowser 本地 API 客户端。"""
+"""RoxyBrowser 本地 API 客户端。
+
+项目内所有 /browser/create 调用必须经过本客户端，以共享进程内串行调度。
+"""
 from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from urllib.parse import unquote, urljoin, urlparse
 
@@ -13,6 +18,34 @@ import requests
 from config import roxybrowser as _cfg
 
 logger = logging.getLogger(__name__)
+
+_CREATE_LOCK = threading.Lock()
+_NEXT_CREATE_AT = 0.0
+
+
+def _create_interval_seconds() -> float:
+    try:
+        return max(0.0, float(getattr(_cfg, "ROXY_CREATE_INTERVAL", 0.5) or 0.0))
+    except (TypeError, ValueError):
+        logger.warning("[Roxy] ROXY_CREATE_INTERVAL 配置无效，回退到 0.5 秒")
+        return 0.5
+
+
+@contextmanager
+def _create_slot():
+    """Serialize Roxy Profile creation within this Python process."""
+    global _NEXT_CREATE_AT
+    _CREATE_LOCK.acquire()
+    try:
+        wait_for = _NEXT_CREATE_AT - time.monotonic()
+        if wait_for > 0:
+            time.sleep(wait_for)
+        try:
+            yield
+        finally:
+            _NEXT_CREATE_AT = time.monotonic() + _create_interval_seconds()
+    finally:
+        _CREATE_LOCK.release()
 
 
 @dataclass
@@ -164,13 +197,14 @@ class RoxyBrowserClient:
                     "[Roxy] %s %s params=%s body=%s attempt=%s/%s",
                     method, url, params, json_body, attempt, max_attempts,
                 )
-                resp = self.http.request(
-                    method_u,
-                    url,
-                    params=params or None,
-                    json=json_body if json_body is not None else None,
-                    timeout=max(5, int(getattr(_cfg, "ROXY_SELENIUM_TIMEOUT", 90) or 90)),
-                )
+                with (_create_slot() if is_create else nullcontext()):
+                    resp = self.http.request(
+                        method_u,
+                        url,
+                        params=params or None,
+                        json=json_body if json_body is not None else None,
+                        timeout=max(5, int(getattr(_cfg, "ROXY_SELENIUM_TIMEOUT", 90) or 90)),
+                    )
                 text = resp.text or ""
                 try:
                     payload = resp.json()

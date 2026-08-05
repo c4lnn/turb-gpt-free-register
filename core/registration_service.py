@@ -589,7 +589,21 @@ def submit_account_at_refresh(account_id: int, workers: int | None = None) -> di
     return {"ok": True, "message": "已在后台开始重新登录并获取 AT", "job": db.get_job(int(job["id"]))}
 
 
-def _account_for_job(job: dict) -> dict | None:
+def _account_for_job(job: dict, account_snapshot: dict | None = None) -> dict | None:
+    if account_snapshot is not None:
+        by_id = account_snapshot.get("by_id") or {}
+        by_email = account_snapshot.get("by_email") or {}
+        account_id = job.get("account_id")
+        if account_id is not None:
+            try:
+                account = by_id.get(int(account_id))
+            except (TypeError, ValueError):
+                account = None
+            if account is not None:
+                return account
+        email = str(job.get("email") or "").strip().lower()
+        return by_email.get(email) if email else None
+
     account_id = job.get("account_id")
     if account_id is not None:
         try:
@@ -602,7 +616,7 @@ def _account_for_job(job: dict) -> dict | None:
     return db.get_account_by_email(email) if email else None
 
 
-def get_retry_info(job: dict) -> dict:
+def get_retry_info(job: dict, *, account_snapshot: dict | None = None) -> dict:
     """返回给 API/UI 的重试能力描述，不依赖前端猜测错误阶段。"""
     status = str(job.get("status") or "")
     info = {
@@ -625,7 +639,7 @@ def get_retry_info(job: dict) -> dict:
         info["successful_retry_job_id"] = successful_retry.get("id")
         return info
 
-    account = _account_for_job(job)
+    account = _account_for_job(job, account_snapshot=account_snapshot)
     if account and job.get("account_id") is not None and status in ("failed", "stopped"):
         info["display_status"] = "success" if (account.get("codex_status") or "") == "success" else "partial_success"
 

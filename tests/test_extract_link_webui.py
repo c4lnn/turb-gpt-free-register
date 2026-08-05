@@ -204,6 +204,27 @@ class ExtractLinkWebUiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.get_json()["items"][0]["extract_link_resumable"])
 
+    def test_account_list_exposes_extract_route_fields(self):
+        self.accounts_path.write_text(json.dumps([{
+            "id": 1,
+            "email": "test@example.invalid",
+            "extract_link_status": "failed",
+            "extract_link_type": "kakao_pay",
+            "extract_link_provider": "masi",
+            "extract_link_job_id": "job-1",
+            "extract_link_message": "任务失败",
+            "extract_link_error": "MasiJobFailed: Kakao 提炼失败",
+        }]), encoding="utf-8")
+        response = self.client.get("/api/accounts?paged=1&page=1&page_size=20", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        item = response.get_json()["items"][0]
+        self.assertEqual(
+            {item[key] for key in ("extract_link_status", "extract_link_type", "extract_link_provider", "extract_link_job_id")},
+            {"failed", "kakao_pay", "masi", "job-1"},
+        )
+        self.assertEqual(item["extract_link_message"], "任务失败")
+        self.assertEqual(item["extract_link_error"], "MasiJobFailed: Kakao 提炼失败")
+
     def test_templates_offer_resume_without_vendor_job_api(self):
         template_dir = Path(__file__).parents[1] / "webui" / "templates"
         for name in ("index.html", "index_legacy.html"):

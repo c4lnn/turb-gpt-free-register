@@ -91,6 +91,13 @@ def acquire_email() -> str:
 
 def resolve_email_source(email: str) -> str:
     """根据邮箱在各池中的归属判断实际来源。"""
+    from core import db
+
+    account = db.get_account_by_email(email)
+    account_source = str((account or {}).get("email_source") or "").strip()
+    if account_source in _VALID_SOURCES:
+        return account_source
+
     from core.gptmail_client import get_account_context as get_gptmail_context
     if get_gptmail_context(email):
         return "gptmail"
@@ -104,7 +111,6 @@ def resolve_email_source(email: str) -> str:
     if get_cloudmail_context(email):
         return "cloudmail"
 
-    from core import db
     if db.get_generic_api_email_by_email(email):
         return "generic_api"
     if db.get_icloud_email_by_email(email):

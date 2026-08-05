@@ -103,11 +103,12 @@ def _compact_account_for_list(row: dict) -> dict:
     # 下面字段仅在有值时返回，避免每行堆满 null/空字符串/内部状态。
     optional_keys = (
         # 套餐展示补充：付费到期/折扣/失败原因。
-        "plan_check_error", "plan_expires_at", "plan_renews_at", "renews_at",
+        "plan_check_error", "plan_last_success_at", "plan_expires_at", "plan_renews_at", "renews_at",
         "billing_period", "billing_currency", "discount_amount", "discount_type",
         "discount_expires_at", "discount_promo_campaign_id",
         # 提链成功/失败时才需要。
         "extract_link_status", "extract_link_type", "extract_link_message", "extract_link_error",
+        "extract_link_job_id",
         "extract_link_provider", "extract_link_update_mode", "extract_link_cdk_fingerprint",
         "extract_link_long_url", "extract_link_copy_paste", "extract_link_image_url_png",
         "extract_link_image_url_svg", "extract_link_expires_at",
@@ -174,6 +175,19 @@ def _job_status_counts(rows: list[dict]) -> dict:
         counts[status] = counts.get(status, 0) + 1
     counts["active"] = sum(int(counts.get(s, 0) or 0) for s in ("pending", "running", "stopping"))
     return counts
+
+
+def _enrich_job_rows(rows: list[dict], manual_otp_required: bool) -> None:
+    terminal_statuses = {"failed", "stopped", "cancelled"}
+    needs_account_snapshot = any(
+        str(row.get("status") or "") in terminal_statuses
+        and str(row.get("job_type") or "registration") != "at_refresh"
+        for row in rows
+    )
+    account_snapshot = db.get_retry_account_snapshot() if needs_account_snapshot else None
+    for row in rows:
+        row["manual_otp_required"] = manual_otp_required
+        row.update(svc.get_retry_info(row, account_snapshot=account_snapshot))
 
 def create_app(auth_code: str | None = None) -> Flask:
     app = Flask(__name__, template_folder="templates")
@@ -1497,6 +1511,7 @@ def create_app(auth_code: str | None = None) -> Flask:
         粘贴文本导入邮箱素材。
         Outlook：email----password----clientId----refreshToken
         通用 API：email----code_url
+        iCloud 已注册账号：email----accessToken
         分隔符兼容 ---- 与 ====。
         """
         data = request.get_json(silent=True) or {}
@@ -1506,14 +1521,37 @@ def create_app(auth_code: str | None = None) -> Flask:
         text = data.get("text") or ""
         as_registered = bool(data.get("as_registered", False))
         records = []
-        for line in text.splitlines():
+        errors = []
+        parsed = 0
+        for line_no, line in enumerate(text.splitlines(), start=1):
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            parts = line.split("----") if "----" in line else line.split("====")
+            parsed += 1
+            separator = "----" if "----" in line else "====" if "====" in line else None
+            parts = (
+                line.split(separator, 1)
+                if separator and source == "icloud" and as_registered
+                else line.split(separator)
+                if separator
+                else [line]
+            )
             parts = [p.strip() for p in parts]
             if source == "icloud":
-                records.append({"email": line})
+                if not as_registered:
+                    records.append({"email": line})
+                    continue
+                if len(parts) != 2 or not parts[0] or not parts[1] or separator in parts[1]:
+                    errors.append({"line": line_no, "reason": "需填写邮箱----AT"})
+                    continue
+                normalized, reason = db.normalize_registered_icloud_import_record({
+                    "email": parts[0],
+                    "access_token": parts[1],
+                })
+                if normalized is None:
+                    errors.append({"line": line_no, "reason": reason or "导入数据无效"})
+                    continue
+                records.append(normalized)
                 continue
             if source == "generic_api":
                 if len(parts) < 2:
@@ -1535,24 +1573,29 @@ def create_app(auth_code: str | None = None) -> Flask:
                 "access_token": parts[4] if len(parts) > 4 else "",
                 "totp_secret": parts[5] if len(parts) > 5 else "",
             })
-        if not records:
-            need = "每行一个 iCloud 邮箱地址" if source == "icloud" else ("2 段：邮箱----取码地址" if source == "generic_api" else "4 段：email----password----clientId----refreshToken")
+        if not records and not (source == "icloud" and as_registered and parsed):
+            need = "2 段：邮箱----AT" if source == "icloud" and as_registered else "每行一个 iCloud 邮箱地址" if source == "icloud" else ("2 段：邮箱----取码地址" if source == "generic_api" else "4 段：email----password----clientId----refreshToken")
             return jsonify({"ok": False, "error": f"未解析到有效邮箱行（需 {need}，---- 或 ==== 分隔）"}), 400
+        inserted = db_skipped = 0
         if as_registered:
-            inserted, skipped = db.import_registered_email_accounts(records, source=source)
+            if records:
+                inserted, db_skipped = db.import_registered_email_accounts(records, source=source)
         elif source == "icloud":
-            inserted, skipped = db.import_icloud_emails(records)
+            inserted, db_skipped = db.import_icloud_emails(records)
         elif source == "generic_api":
-            inserted, skipped = db.import_generic_api_emails(records)
+            inserted, db_skipped = db.import_generic_api_emails(records)
         else:
-            inserted, skipped = db.import_outlook_accounts(records)
-        return jsonify({
+            inserted, db_skipped = db.import_outlook_accounts(records)
+        result = {
             "ok": True,
             "inserted": inserted,
-            "skipped": skipped,
-            "parsed": len(records),
+            "skipped": len(errors) + db_skipped,
+            "parsed": parsed,
             "as_registered": as_registered,
-        })
+        }
+        if errors:
+            result["errors"] = errors
+        return jsonify(result)
 
     @app.post("/api/outlook/status")
     def api_outlook_status():
@@ -2231,17 +2274,16 @@ def create_app(auth_code: str | None = None) -> Flask:
         from config import email as _email_cfg
         manual_otp_required = not bool(getattr(_email_cfg, "USE_EMAIL_SERVICE", True))
         rows = db.list_jobs(limit=fetch_limit)
-        for row in rows:
-            row["manual_otp_required"] = manual_otp_required
-            row.update(svc.get_retry_info(row))
         if paged or page_arg is not None or page_size_arg is not None:
             page = max(1, int(page_arg or 1))
             page_size = max(1, min(500, int(page_size_arg or limit or 50)))
             result = _paginate_items(rows, page=page, page_size=page_size)
+            _enrich_job_rows(result.get("items") or [], manual_otp_required)
             result["items"] = [_compact_job_for_list(r) for r in (result.get("items") or [])]
             result["status_counts"] = _job_status_counts(rows)
             result["compact"] = True
             return jsonify(result)
+        _enrich_job_rows(rows, manual_otp_required)
         return jsonify(rows)
 
     @app.post("/api/jobs")
