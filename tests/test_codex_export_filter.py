@@ -45,16 +45,12 @@ class CodexExportFilterTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("export_status 仅支持", response.get_json()["error"])
 
-    def test_modern_and_legacy_pages_expose_export_filter(self):
-        modern = self.client.get("/?ui=modern")
-        legacy = self.client.get("/?ui=legacy")
+    def test_account_page_exposes_export_filter(self):
+        response = self.client.get("/")
 
-        self.assertEqual(modern.status_code, 200)
-        self.assertIn(b'id="codexExportFilterV2"', modern.data)
-        self.assertIn(b'data-codex-export-status="pending"', modern.data)
-        self.assertEqual(legacy.status_code, 200)
-        self.assertIn(b'id="codexExportStatus"', legacy.data)
-        self.assertIn(b'<option value="pending">', legacy.data)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'id="codexExportFilterV2"', response.data)
+        self.assertIn(b'data-codex-export-status="pending"', response.data)
 
 
 if __name__ == "__main__":

@@ -421,18 +421,16 @@ class AtRefreshServiceAndApiTests(unittest.TestCase):
         self.assertNotIn("untrusted-at", body)
         self.assertNotIn("untrusted-password", body)
 
-    def test_templates_expose_at_refresh_without_sensitive_fields(self):
+    def test_template_exposes_at_refresh_without_sensitive_fields(self):
         template_dir = Path(__file__).parents[1] / "webui" / "templates"
-        for name in ("index.html", "index_legacy.html"):
-            with self.subTest(template=name):
-                source = (template_dir / name).read_text(encoding="utf-8")
-                self.assertIn("data-at-refresh", source)
-                self.assertIn("data-at-refresh-log", source)
-                self.assertIn("data-at-refresh-stop", source)
-                self.assertIn("/refresh-at", source)
-                self.assertIn("refresh-at-bulk", source)
-                self.assertIn("批量重新获取 AT", source)
-                self.assertNotIn("registration_password", source)
+        source = (template_dir / "index.html").read_text(encoding="utf-8")
+        self.assertIn("data-at-refresh", source)
+        self.assertIn("data-at-refresh-log", source)
+        self.assertIn("data-at-refresh-stop", source)
+        self.assertIn("/refresh-at", source)
+        self.assertIn("refresh-at-bulk", source)
+        self.assertIn("批量重新获取 AT", source)
+        self.assertNotIn("registration_password", source)
 
 
 if __name__ == "__main__":

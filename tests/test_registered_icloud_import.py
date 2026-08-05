@@ -225,28 +225,16 @@ class RegisteredICloudOtpRoutingTests(unittest.TestCase):
 
 
 class RegisteredICloudTemplateTests(unittest.TestCase):
-    def test_modern_and_legacy_templates_expose_registered_icloud_format(self):
+    def test_template_exposes_registered_icloud_format(self):
         root = Path(__file__).resolve().parents[1] / "webui" / "templates"
-        modern = (root / "index.html").read_text(encoding="utf-8")
-        legacy = (root / "index_legacy.html").read_text(encoding="utf-8")
-        for html in (modern, legacy):
-            self.assertIn("iCloud 已注册账号：邮箱----AT", html)
-            self.assertIn("email----accessToken", html)
-            self.assertIn('value="icloud"', html)
-        self.assertIn('<input id="importAsRegisteredV2" type="checkbox">', modern)
-        self.assertIn("const as_registered = registeredEl ? !!registeredEl.checked : false;", modern)
-        self.assertIn("const as_registered = $('#importAsRegistered')?.checked ?? false;", legacy)
-        self.assertIn('<th class="col-token">AT</th>', modern)
-        self.assertIn('<th>ID</th><th>邮箱</th><th>来源</th><th>AT</th>', legacy)
-        self.assertNotIn('<th class="col-token">Token</th>', modern)
-
-    def test_legacy_pool_filter_can_follow_icloud_import(self):
-        html = (
-            Path(__file__).resolve().parents[1] / "webui" / "templates" / "index_legacy.html"
-        ).read_text(encoding="utf-8")
-        pool_start = html.index('<select id="poolSource"')
-        pool_end = html.index("</select>", pool_start)
-        self.assertIn('<option value="icloud">', html[pool_start:pool_end])
+        html = (root / "index.html").read_text(encoding="utf-8")
+        self.assertIn("iCloud 已注册账号：邮箱----AT", html)
+        self.assertIn("email----accessToken", html)
+        self.assertIn('value="icloud"', html)
+        self.assertIn('<input id="importAsRegisteredV2" type="checkbox">', html)
+        self.assertIn("const as_registered = registeredEl ? !!registeredEl.checked : false;", html)
+        self.assertIn('<th class="col-token">AT</th>', html)
+        self.assertNotIn('<th class="col-token">Token</th>', html)
 
 
 if __name__ == "__main__":

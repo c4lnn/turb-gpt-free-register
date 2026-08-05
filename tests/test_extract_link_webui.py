@@ -225,14 +225,12 @@ class ExtractLinkWebUiTests(unittest.TestCase):
         self.assertEqual(item["extract_link_message"], "任务失败")
         self.assertEqual(item["extract_link_error"], "MasiJobFailed: Kakao 提炼失败")
 
-    def test_templates_offer_resume_without_vendor_job_api(self):
+    def test_template_offers_resume_without_vendor_job_api(self):
         template_dir = Path(__file__).parents[1] / "webui" / "templates"
-        for name in ("index.html", "index_legacy.html"):
-            with self.subTest(template=name):
-                template = (template_dir / name).read_text(encoding="utf-8")
-                self.assertIn('data-extract-link-resume="${esc(r.id)}"', template)
-                self.assertIn("/api/accounts/extract-link-resume", template)
-                self.assertNotIn("/v1/kakao/jobs", template)
+        template = (template_dir / "index.html").read_text(encoding="utf-8")
+        self.assertIn('data-extract-link-resume="${esc(r.id)}"', template)
+        self.assertIn("/api/accounts/extract-link-resume", template)
+        self.assertNotIn("/v1/kakao/jobs", template)
 
     def test_cdk_template_has_enablement_controls_and_exact_page_ids(self):
         template = (Path(__file__).parents[1] / "webui" / "templates" / "index.html").read_text(encoding="utf-8")
@@ -251,35 +249,29 @@ class ExtractLinkWebUiTests(unittest.TestCase):
 
     def test_extract_success_label_is_the_copy_control(self):
         template_dir = Path(__file__).parents[1] / "webui" / "templates"
-        for name in ("index.html", "index_legacy.html"):
-            with self.subTest(template=name):
-                template = (template_dir / name).read_text(encoding="utf-8")
-                self.assertNotIn("cbtn('复制提链'", template)
-                self.assertIn("pill status-success extract-success-copy", template)
-                self.assertIn('title="${esc(successTitle)}"', template)
+        template = (template_dir / "index.html").read_text(encoding="utf-8")
+        self.assertNotIn("cbtn('复制提链'", template)
+        self.assertIn("pill status-success extract-success-copy", template)
+        self.assertIn('title="${esc(successTitle)}"', template)
 
     def test_extract_status_uses_fixed_short_labels_and_hover_details(self):
         template_dir = Path(__file__).parents[1] / "webui" / "templates"
-        for name in ("index.html", "index_legacy.html"):
-            with self.subTest(template=name):
-                template = (template_dir / name).read_text(encoding="utf-8")
-                start = template.index("function _extractLinkProgressLabel")
-                end = template.index("function _extractLinkAction", start)
-                renderer = template[start:end]
-                self.assertIn("extract-status-label", renderer)
-                self.assertIn("_extractLinkProgressLabel(msg)", renderer)
-                self.assertIn('title="${esc(reason)}"', renderer)
-                self.assertNotIn('<div class="extract-link-error"', renderer)
-                self.assertNotIn("${esc(reason)}</div>", renderer)
+        template = (template_dir / "index.html").read_text(encoding="utf-8")
+        start = template.index("function _extractLinkProgressLabel")
+        end = template.index("function _extractLinkAction", start)
+        renderer = template[start:end]
+        self.assertIn("extract-status-label", renderer)
+        self.assertIn("_extractLinkProgressLabel(msg)", renderer)
+        self.assertIn('title="${esc(reason)}"', renderer)
+        self.assertNotIn('<div class="extract-link-error"', renderer)
+        self.assertNotIn("${esc(reason)}</div>", renderer)
 
-    def test_account_templates_include_codex_success_filter(self):
+    def test_account_template_includes_codex_success_filter(self):
         template_dir = Path(__file__).parents[1] / "webui" / "templates"
-        for name in ("index.html", "index_legacy.html"):
-            with self.subTest(template=name):
-                template = (template_dir / name).read_text(encoding="utf-8")
-                self.assertIn("SHOW_CODEX_SUCCESS_ONLY", template)
-                self.assertIn("codex_status=${encodeURIComponent(codexStatus)}", template)
-                self.assertIn("Codex已通过", template)
+        template = (template_dir / "index.html").read_text(encoding="utf-8")
+        self.assertIn("SHOW_CODEX_SUCCESS_ONLY", template)
+        self.assertIn("codex_status=${encodeURIComponent(codexStatus)}", template)
+        self.assertIn("Codex已通过", template)
 
     def test_capabilities_endpoint(self):
         response = self.client.get("/api/extract-link/capabilities", headers=self.headers)
