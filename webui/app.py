@@ -103,7 +103,8 @@ def _compact_account_for_list(row: dict) -> dict:
     # 下面字段仅在有值时返回，避免每行堆满 null/空字符串/内部状态。
     optional_keys = (
         # 套餐展示补充：付费到期/折扣/失败原因。
-        "plan_check_error", "plan_last_success_at", "plan_expires_at", "plan_renews_at", "renews_at",
+        "plan_check_error", "plan_checked_at", "plan_check_updated_at", "plan_last_success_at",
+        "plan_expires_at", "plan_renews_at", "renews_at",
         "billing_period", "billing_currency", "discount_amount", "discount_type",
         "discount_expires_at", "discount_promo_campaign_id",
         # 提链成功/失败时才需要。

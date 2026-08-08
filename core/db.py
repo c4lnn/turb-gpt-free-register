@@ -996,6 +996,7 @@ def claim_account_plan_check(
         row["plan_check_status"] = "queued"
         row["plan_check_trigger"] = str(trigger or "manual")
         row["plan_check_queued_at"] = now
+        row["plan_check_updated_at"] = now
         row["plan_check_started_at"] = None
         row["plan_check_completed_at"] = None
         row["plan_check_error"] = None
@@ -1011,10 +1012,12 @@ def mark_account_plan_check_running(acc_id: int) -> bool:
         row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
         if row is None or row.get("plan_check_status") not in {"queued", "running"}:
             return False
+        now = _now()
         row["plan_check_status"] = "running"
-        row["plan_check_started_at"] = _now()
+        row["plan_check_started_at"] = now
+        row["plan_check_updated_at"] = now
         row["plan_check_error"] = None
-        row["updated_at"] = _now()
+        row["updated_at"] = now
         _save_accounts(accounts)
         return True
 
@@ -1032,6 +1035,7 @@ def recover_interrupted_plan_checks() -> int:
             row["plan_check_ok"] = False
             row["plan_check_error"] = "WebUI 重启导致套餐查询中断，请重新查询"
             row["plan_check_completed_at"] = now
+            row["plan_check_updated_at"] = now
             row["updated_at"] = now
             recovered += 1
         if recovered:
@@ -1054,10 +1058,12 @@ def update_account_plan_check(acc_id: int | None = None, email: str | None = Non
             return False
 
         ok = bool(result.get("ok"))
+        now = _now()
         row["plan_check_status"] = "success" if ok else "failed"
         row["plan_check_ok"] = ok
-        row["plan_checked_at"] = result.get("checked_at") or _now()
-        row["plan_check_completed_at"] = _now()
+        row["plan_checked_at"] = result.get("checked_at") or now
+        row["plan_check_completed_at"] = now
+        row["plan_check_updated_at"] = now
         row["plan_check_http_status"] = result.get("http_status")
         row["plan_check_error"] = None if ok else result.get("error")
 
@@ -1114,7 +1120,7 @@ def update_account_plan_check(acc_id: int | None = None, email: str | None = Non
         row["token_expired"] = result.get("token_expired")
         row["token_expires_at"] = result.get("token_expires_at")
         row["plan_check_result_json"] = json.dumps(result, ensure_ascii=False)
-        row["updated_at"] = _now()
+        row["updated_at"] = now
         _save_accounts(accounts)
         return True
 
@@ -1349,7 +1355,7 @@ def list_account_plan_check_statuses(
         "plan_type", "current_plan_type", "plus_trial_eligible",
         "plan_check_status", "plan_check_ok", "plan_check_error",
         "plan_check_trigger", "plan_check_queued_at", "plan_check_started_at",
-        "plan_check_completed_at", "plan_checked_at", "plan_last_success_at",
+        "plan_check_completed_at", "plan_check_updated_at", "plan_checked_at", "plan_last_success_at",
         "plan_check_network_route", "plan_check_proxy_used", "plan_check_proxy_fallback_reason",
         "expires_at", "plan_expires_at", "plan_renews_at", "renews_at",
         "billing_period", "billing_currency", "discount_amount", "discount_type",
@@ -1407,6 +1413,7 @@ def list_account_plan_check_statuses(
                     "plan_check_status": row.get("plan_check_status"),
                     "plan_check_ok": row.get("plan_check_ok"),
                     "plan_check_error": row.get("plan_check_error"),
+                    "plan_check_updated_at": row.get("plan_check_updated_at"),
                     "current_plan_type": row.get("current_plan_type"),
                     "plan_type": row.get("plan_type"),
                     "plus_trial_eligible": row.get("plus_trial_eligible"),

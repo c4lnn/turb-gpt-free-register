@@ -260,7 +260,9 @@ class RoxyAtRefreshTests(unittest.TestCase):
         client.open_profile.return_value = opened
         driver = MagicMock()
         payload = session_payload()
-        with patch.object(roxy_registration, "RoxyBrowserClient", return_value=client), patch.object(
+        with patch.object(roxy_registration._cfg, "ROXY_KEEP_BROWSER_OPEN", False), patch.object(
+            roxy_registration, "RoxyBrowserClient", return_value=client
+        ), patch.object(
             roxy_registration, "_build_driver", return_value=driver
         ), patch.object(roxy_registration, "_center_browser_window"), patch.object(
             roxy_registration, "_clear_roxy_auth_state"

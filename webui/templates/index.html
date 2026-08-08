@@ -731,6 +731,9 @@
       margin-top: 2px; color: #909399; font-size: 12px; line-height: 1.3;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
+    .accounts-table-v2 .plan-cell {
+      display: flex; flex-direction: column; align-items: flex-start; min-width: 0;
+    }
     .accounts-table-v2 .acc-v2-muted { color: #c0c4cc; }
     .accounts-table-v2 .col-plan .extract-link-error { display: none; }
     .accounts-table-v2 .extract-link-cell {
@@ -3412,6 +3415,19 @@ function _discountLabel(r) {
   if (!Number.isNaN(n)) return `${n}折扣`;
   return `${amount}折扣`;
 }
+function _planStatusMeta(r) {
+  const labels = {
+    queued: '查询排队中',
+    running: '查询中',
+    success: '查询成功',
+    failed: '查询失败',
+  };
+  const label = labels[(r.plan_check_status || '').toString()];
+  const updated = r.plan_check_updated_at || '';
+  if (!label || !updated) return '';
+  const text = `${label}|${_fmtPlanTime(updated)}`;
+  return `<div class="acc-v2-sub" title="${esc(text)}">${esc(text)}</div>`;
+}
 function _planCell(r) {
   const ok = r.plan_check_ok;
   const err = r.plan_check_error || '';
@@ -3422,13 +3438,14 @@ function _planCell(r) {
     route === 'direct_fallback' ? `网络: 直连回退${r.plan_check_proxy_fallback_reason ? ` (${r.plan_check_proxy_fallback_reason})` : ''}` :
     route === 'direct' ? '网络: 直连' : '';
   const title = [err ? esc(err) : checked, routeLabel].filter(Boolean).join('；');
+  const wrap = main => `<div class="plan-cell">${main}${_planStatusMeta(r)}</div>`;
   if (['queued','running'].includes(r.plan_check_status)) {
     const automatic = r.plan_check_trigger === 'registration_auto';
     const queued = r.plan_check_status === 'queued';
     const label = automatic ? (queued ? '自动查询排队中' : '自动查询中') : (queued ? '查询排队中' : '查询中');
     const stamp = queued ? r.plan_check_queued_at : r.plan_check_started_at;
     const detail = stamp ? `${queued ? '入队' : '开始'}: ${esc(stamp)}` : '';
-    return `<span class="pill status-running" title="${detail}">${label}</span>`;
+    return wrap(`<span class="pill status-running" title="${detail}">${label}</span>`);
   }
   if (err || r.plan_check_status === 'failed') {
     const reason = err || '套餐查询失败，未返回具体原因';
@@ -3436,38 +3453,33 @@ function _planCell(r) {
     const lastPlan = hasLastSuccess ? `${plan}${r.plus_trial_eligible ? '/可Plus试用' : ''}` : '';
     const lastText = lastPlan ? `（上次: ${lastPlan}）` : '';
     const lastTitle = hasLastSuccess ? `上次成功: ${esc(r.plan_last_success_at)}` : '';
-    return `<div class="extract-link-cell"><span class="pill status-failed" title="${[esc(reason), lastTitle].filter(Boolean).join('；')}">查询失败${esc(lastText)}</span><div class="extract-link-error" title="${esc(reason)}">${esc(reason)}</div></div>`;
+    return wrap(`<span class="pill status-failed" title="${[esc(reason), lastTitle].filter(Boolean).join('；')}">查询失败${esc(lastText)}</span><div class="extract-link-error" title="${esc(reason)}">${esc(reason)}</div>`);
   }
   const lower = plan.toLowerCase();
 
   if (lower === 'free') {
     const checkedOk = ok === true || r.plan_check_status === 'success';
     if (!checkedOk) {
-      return `<span class="pill status-running" title="${title}">${esc(plan)}（待查资格）</span>`;
+      return wrap(`<span class="pill status-running" title="${title}">${esc(plan)}（待查资格）</span>`);
     }
-    const text = r.plus_trial_eligible ? 'free(可Plus试用)' : 'free';
-    const cls = r.plus_trial_eligible ? 'status-success' : 'status-used';
-    const t = r.plus_trial_eligible ? `${title}；Plus 试用资格可用` : title;
-    return `<span class="pill ${cls}" title="${t}">${esc(text)}</span>`;
   }
 
-  const cls = 'status-success';
+  const cls = lower === 'free' && !r.plus_trial_eligible ? 'status-used' : 'status-success';
   const expireRaw = r.plan_expires_at || r.expires_at || r.plan_renews_at || r.renews_at || '';
-  const expire = _fmtPlanTime(expireRaw, true);
-  const parts = [];
-  const billing = _billingLabel(r.billing_period);
-  if (billing) parts.push(billing);
-  if (r.billing_currency) parts.push(r.billing_currency);
-  if (expire) parts.push(`到期 ${expire}`);
-  const discount = _discountLabel(r);
-  if (discount) parts.push(discount);
-  const text = parts.length ? `${plan}（${parts.join('/')}）` : plan;
+  const planSuffix = lower === 'free' ? (r.plus_trial_eligible ? '资格' : '') : r.billing_currency;
+  const text = [plan, planSuffix].filter(Boolean).join('|') || '-';
   const detail = [title];
+  const billing = _billingLabel(r.billing_period);
+  if (billing) detail.push(`计费周期: ${billing}`);
+  if (r.billing_currency) detail.push(`账单币种: ${r.billing_currency}`);
   if (expireRaw) detail.push(`到期时间: ${expireRaw}`);
   if (r.plan_renews_at) detail.push(`续费时间: ${r.plan_renews_at}`);
+  const discount = _discountLabel(r);
+  if (discount) detail.push(`折扣: ${discount}`);
   if (r.discount_expires_at) detail.push(`折扣结束: ${r.discount_expires_at}`);
   if (r.discount_promo_campaign_id) detail.push(`优惠: ${r.discount_promo_campaign_id}`);
-  return `<span class="pill ${cls}" title="${esc(detail.join('；'))}">${esc(text)}</span>`;
+  if (r.plus_trial_eligible) detail.push('Plus 试用资格可用');
+  return wrap(`<span class="pill ${cls}" title="${esc(detail.filter(Boolean).join('；'))}">${esc(text)}</span>`);
 }
 function _planAction(r) {
   if (['queued','running'].includes(r.plan_check_status)) {
