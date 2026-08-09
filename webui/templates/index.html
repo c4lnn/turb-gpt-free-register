@@ -2423,8 +2423,19 @@
           </div>
           <input type="hidden" id="poolSourceV2" value="all">
         </div>
+        <div class="outlook-v2-select" id="poolStatusV2Wrap">
+          <button type="button" class="outlook-v2-select-btn" id="poolStatusV2Btn" aria-haspopup="listbox" aria-expanded="false">全部状态</button>
+          <div class="outlook-v2-select-menu" role="listbox">
+            <button type="button" class="outlook-v2-select-item is-active" data-value="all" role="option">全部状态</button>
+            <button type="button" class="outlook-v2-select-item" data-value="available" role="option">可用</button>
+            <button type="button" class="outlook-v2-select-item" data-value="used" role="option">已用</button>
+            <button type="button" class="outlook-v2-select-item" data-value="failed" role="option">失败</button>
+            <button type="button" class="outlook-v2-select-item" data-value="disabled" role="option">已停用</button>
+          </div>
+          <input type="hidden" id="poolStatusV2" value="all">
+        </div>
         <div class="acc-v2-btn-group acc-v2-search-wrap">
-          <input id="qOutlookV2" type="search" placeholder="搜索邮箱、状态…" autocomplete="off">
+          <input id="qOutlookV2" type="search" placeholder="搜索邮箱" autocomplete="off">
         </div>
         <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnMarkSelectedOutlookAvailableV2" disabled title="把选中的邮箱批量标记为未使用/可用">标记未使用</button>
         <button type="button" class="jobs-tb-btn" id="btnDisableSelectedOutlookV2" disabled title="批量停用选中的邮箱；停用后不会被注册任务领取">停用选中</button>
@@ -4978,6 +4989,32 @@ function setPoolSourceV2(val) {
     });
   }
 }
+function getPoolStatus() {
+  const el = document.getElementById('poolStatusV2');
+  const value = (el && el.value) || 'all';
+  return value === 'all' ? '' : value;
+}
+const POOL_STATUS_LABELS = {
+  all: '全部状态',
+  available: '可用',
+  used: '已用',
+  failed: '失败',
+  disabled: '已停用',
+};
+function setPoolStatusV2(val) {
+  const hidden = document.getElementById('poolStatusV2');
+  const btn = document.getElementById('poolStatusV2Btn');
+  const wrap = document.getElementById('poolStatusV2Wrap');
+  if (!hidden) return;
+  const next = POOL_STATUS_LABELS[val] ? val : 'all';
+  hidden.value = next;
+  if (btn) btn.textContent = POOL_STATUS_LABELS[next];
+  if (wrap) {
+    wrap.querySelectorAll('.outlook-v2-select-item').forEach(item => {
+      item.classList.toggle('is-active', item.dataset.value === next);
+    });
+  }
+}
 function getOutlookQuery() {
   const el = document.getElementById('qOutlookV2');
   return (el ? el.value : '').trim();
@@ -4989,9 +5026,10 @@ function poolLabel(src) {
 async function loadOutlook() {
   try {
     const source = getPoolSource();
+    const status = getPoolStatus();
     const q = getOutlookQuery();
     const p = PAGERS.outlook;
-    const res = await api(`/api/outlook?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&source=${encodeURIComponent(source)}&q=${encodeURIComponent(q)}`);
+    const res = await api(`/api/outlook?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&source=${encodeURIComponent(source)}&status=${encodeURIComponent(status)}&q=${encodeURIComponent(q)}`);
     OUTLOOK = res.items || [];
     OUTLOOK_TOTAL = Number(res.total || OUTLOOK.length || 0);
     const totalPages = Math.max(1, Math.ceil(OUTLOOK_TOTAL / p.size));
@@ -5103,6 +5141,11 @@ function onPoolSourceChange(el) {
   if (val === 'outlook' || val === 'generic_api' || val === 'icloud') setImportSourceV2(val);
   loadOutlook();
 }
+function onPoolStatusChange() {
+  PAGERS.outlook.page = 1;
+  OUTLOOK_SELECTED.clear();
+  loadOutlook();
+}
 function syncOutlookSelectAll(checked) {
   const pageRows = OUTLOOK;
   if (checked) pageRows.forEach(r => r.email && OUTLOOK_SELECTED.add(poolKey(r)));
@@ -5168,6 +5211,10 @@ async function onOutlookBodyClick(e) {
       const willOpen = !srcWrap.classList.contains('open');
       srcWrap.classList.toggle('open', willOpen);
       btn.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+      const statusWrap = $('#poolStatusV2Wrap');
+      const statusBtn = $('#poolStatusV2Btn');
+      if (statusWrap) statusWrap.classList.remove('open');
+      if (statusBtn) statusBtn.setAttribute('aria-expanded', 'false');
     });
     srcWrap.querySelectorAll('.outlook-v2-select-item').forEach(item => {
       item.addEventListener('click', (e) => {
@@ -5182,6 +5229,34 @@ async function onOutlookBodyClick(e) {
     document.addEventListener('click', (e) => {
       if (srcWrap.contains(e.target)) return;
       srcWrap.classList.remove('open');
+      if (btn) btn.setAttribute('aria-expanded', 'false');
+    });
+  }
+  const statusWrap = $('#poolStatusV2Wrap');
+  const statusHidden = $('#poolStatusV2');
+  if (statusWrap && statusHidden) {
+    const btn = $('#poolStatusV2Btn');
+    if (btn) btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const willOpen = !statusWrap.classList.contains('open');
+      statusWrap.classList.toggle('open', willOpen);
+      btn.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+      if (srcWrap) srcWrap.classList.remove('open');
+      const srcBtn = $('#poolSourceV2Btn');
+      if (srcBtn) srcBtn.setAttribute('aria-expanded', 'false');
+    });
+    statusWrap.querySelectorAll('.outlook-v2-select-item').forEach(item => {
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setPoolStatusV2(item.dataset.value);
+        statusWrap.classList.remove('open');
+        if (btn) btn.setAttribute('aria-expanded', 'false');
+        onPoolStatusChange();
+      });
+    });
+    document.addEventListener('click', (e) => {
+      if (statusWrap.contains(e.target)) return;
+      statusWrap.classList.remove('open');
       if (btn) btn.setAttribute('aria-expanded', 'false');
     });
   }

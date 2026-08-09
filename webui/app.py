@@ -56,6 +56,13 @@ def _matches_query(row: dict, q: str | None) -> bool:
         return False
 
 
+def _matches_email_query(row: dict, q: str | None) -> bool:
+    q = str(q or "").strip().lower()
+    if not q:
+        return True
+    return q in str(row.get("email") or "").lower()
+
+
 def _paginate_items(items: list[dict], *, page: int, page_size: int) -> dict:
     page = max(1, int(page or 1))
     page_size = max(1, min(500, int(page_size or 50)))
@@ -1487,7 +1494,7 @@ def create_app(auth_code: str | None = None) -> Flask:
         else:
             rows = _with_pool_source(db.list_outlook_pool(status=status, limit=fetch_limit), "outlook")
         if q:
-            rows = [r for r in rows if _matches_query(r, q)]
+            rows = [r for r in rows if _matches_email_query(r, q)]
         if paged or page_arg is not None or page_size_arg is not None:
             page = max(1, int(page_arg or 1))
             page_size = max(1, min(500, int(page_size_arg or limit or 50)))
