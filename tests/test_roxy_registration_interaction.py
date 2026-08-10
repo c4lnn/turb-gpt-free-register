@@ -42,15 +42,18 @@ class FakeDriver:
 
 
 class RoxyRegistrationInteractionTests(unittest.TestCase):
-    def test_roxy_input_uses_native_keys_character_by_character(self):
+    def test_roxy_input_uses_human_keys_character_by_character_and_blurs(self):
         driver = FakeDriver()
         element = FakeElement()
 
-        with patch.object(registration, "_native_click") as native_click, \
-             patch.object(registration, "_typing_pause"):
+        with patch.object(registration, "_human_click") as human_click, \
+             patch.object(registration, "_human_scroll_to"), \
+             patch.object(registration, "_browser_actions_enabled", return_value=True), \
+             patch.object(registration.random, "random", return_value=1.0), \
+             patch.object(registration, "human_delay"):
             registration._set_element_value(driver, element, "ab")
 
-        native_click.assert_called_once_with(driver, element)
+        human_click.assert_called_once_with(driver, element, label="input_focus")
         self.assertEqual(
             element.keys,
             [
@@ -61,30 +64,31 @@ class RoxyRegistrationInteractionTests(unittest.TestCase):
                 (Keys.TAB,),
             ],
         )
-        self.assertEqual(driver.scripts, [])
+        self.assertEqual(len(driver.scripts), 1)
+        self.assertIn("new Event('input'", driver.scripts[0][0])
 
     def test_cloak_input_keeps_dom_setter_compatibility(self):
         driver = FakeDriver()
         element = CloakElement()
 
-        with patch.object(registration, "_type_element") as native_type:
+        with patch.object(registration, "_human_type_text") as human_type:
             registration._set_element_value(driver, element, "value")
 
-        native_type.assert_not_called()
+        human_type.assert_not_called()
         self.assertEqual(len(driver.scripts), 1)
         self.assertEqual(driver.scripts[0][1], (element, "value"))
 
-    def test_email_submit_uses_native_click_after_safe_dom_selection(self):
+    def test_email_submit_uses_human_click_after_safe_dom_selection(self):
         target = FakeElement()
-        driver = FakeDriver({"ok": True, "reason": "native_primary_submit", "target": target})
+        driver = FakeDriver({"ok": True, "reason": "primary_submit", "target": target})
 
         with patch.object(registration, "_is_oauth_consent_like", return_value=False), \
-             patch.object(registration, "_native_click") as native_click, \
+             patch.object(registration, "_human_click") as human_click, \
              patch.object(registration, "_assert_not_external_idp"), \
              patch.object(registration.time, "sleep"):
             self.assertTrue(registration._submit_nearest_form_for_active_input(driver))
 
-        native_click.assert_called_once_with(driver, target)
+        human_click.assert_called_once_with(driver, target, label="email_submit")
 
 
 if __name__ == "__main__":

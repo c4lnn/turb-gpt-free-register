@@ -100,3 +100,4 @@ webui.log
 webui.pid
 logs/
 run/
+AGENTS.md

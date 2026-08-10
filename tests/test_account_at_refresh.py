@@ -295,8 +295,8 @@ class RoxyAtRefreshTests(unittest.TestCase):
         driver.execute_script.return_value = MagicMock()
         common = [
             patch.object(roxy_registration, "_visible", return_value=True),
-            patch.object(roxy_registration, "_type_element"),
-            patch.object(roxy_registration, "_native_click"),
+            patch.object(roxy_registration, "_human_type_text"),
+            patch.object(roxy_registration, "_human_click"),
             patch.object(roxy_registration, "_check_manual_stop"),
             patch.object(roxy_registration.time, "sleep"),
         ]
@@ -350,8 +350,8 @@ class RoxyAtRefreshTests(unittest.TestCase):
         driver.find_elements.return_value = [password_input]
         driver.execute_script.return_value = MagicMock()
         with patch.object(roxy_registration, "_visible", return_value=True), patch.object(
-            roxy_registration, "_type_element"
-        ), patch.object(roxy_registration, "_native_click"), patch.object(
+            roxy_registration, "_human_type_text"
+        ), patch.object(roxy_registration, "_human_click"), patch.object(
             roxy_registration, "_check_manual_stop"
         ), patch.object(roxy_registration, "_has_access_token", return_value=False), patch.object(
             roxy_registration, "_is_email_verification_page", return_value=False
