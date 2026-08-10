@@ -96,3 +96,5 @@ webui-*.log
 .env
 .env.*
 !.env.example
+webui.log
+webui.pid
