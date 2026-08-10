@@ -98,3 +98,5 @@ webui-*.log
 !.env.example
 webui.log
 webui.pid
+logs/
+run/
