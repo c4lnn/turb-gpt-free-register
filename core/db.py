@@ -1177,11 +1177,32 @@ def _account_matches_query(row: dict, q: str | None) -> bool:
         return False
 
 
+def _parse_iso_dt(value: str | None, end_of_day: bool = False) -> datetime | None:
+    """宽松解析 ISO 日期/时间字符串；支持 YYYY-MM-DD 或完整 ISO；解析失败返回 None。
+
+    end_of_day=True 时，纯日期（YYYY-MM-DD）按当天 23:59:59.999999 解析，
+    用于 date_to 过滤（保证包含截止当天）；完整时间串原样返回。
+    """
+    if not value:
+        return None
+    text = str(value).strip()
+    try:
+        if len(text) == 10 and text[4] == "-":
+            if end_of_day:
+                return datetime.fromisoformat(text + "T23:59:59.999999")
+            return datetime.fromisoformat(text + "T00:00:00")
+        return datetime.fromisoformat(text)
+    except Exception:
+        return None
+
+
 def _filtered_decorated_accounts(
     archived: str | bool | None = False,
     plan_filter: str | None = None,
     q: str | None = None,
     codex_status_filter: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
 ) -> list[dict]:
     rows = _load_accounts()
     if archived in (True, "1", "true", "yes", "only"):
@@ -1196,6 +1217,22 @@ def _filtered_decorated_accounts(
     if codex_status_filter:
         decorated = [r for r in decorated if str(r.get("codex_status") or "").strip().lower() == codex_status_filter]
     decorated = [r for r in decorated if _account_matches_query(r, q)]
+    # 按创建时间筛选（date_from/date_to 为 ISO 字符串或 YYYY-MM-DD）
+    if date_from or date_to:
+        d_from = _parse_iso_dt(date_from)
+        d_to = _parse_iso_dt(date_to, end_of_day=True)
+        if d_from or d_to:
+            filtered = []
+            for r in decorated:
+                ct = _parse_iso_dt(str(r.get("created_at") or ""))
+                if ct is None:
+                    continue
+                if d_from and ct < d_from:
+                    continue
+                if d_to and ct > d_to:
+                    continue
+                filtered.append(r)
+            decorated = filtered
     return sorted(decorated, key=lambda x: int(x.get("id") or 0), reverse=True)
 
 
@@ -1293,6 +1330,8 @@ def list_accounts(
     plan_filter: str | None = None,
     q: str | None = None,
     codex_status_filter: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
 ) -> list[dict]:
     with _LOCK:
         rows = _filtered_decorated_accounts(
@@ -1300,6 +1339,8 @@ def list_accounts(
             plan_filter=plan_filter,
             q=q,
             codex_status_filter=codex_status_filter,
+            date_from=date_from,
+            date_to=date_to,
         )
         return rows[max(0, int(offset or 0)): max(0, int(offset or 0)) + max(1, int(limit))]
 
@@ -1311,6 +1352,8 @@ def list_accounts_page(
     plan_filter: str | None = None,
     q: str | None = None,
     codex_status_filter: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
 ) -> dict:
     with _LOCK:
         rows = _filtered_decorated_accounts(
@@ -1318,6 +1361,8 @@ def list_accounts_page(
             plan_filter=plan_filter,
             q=q,
             codex_status_filter=codex_status_filter,
+            date_from=date_from,
+            date_to=date_to,
         )
         total = len(rows)
         limit = max(1, int(limit))
@@ -2065,16 +2110,20 @@ def _save_codex_export_state(state: dict) -> None:
     _write_json(_CODEX_EXPORT_STATE, state)
 
 
-def list_codex_accounts() -> list[dict]:
+def list_codex_accounts(archived: str | bool | None = "0", date_from: str | None = None, date_to: str | None = None) -> list[dict]:
     """
     扫 codex_accounts/ 目录，每个 codex-*.json 是一条 CPA 兼容凭证。
     返回带元信息的列表（含导出状态、文件大小、token 预览等）。
+    archived: '0'=仅未归档（默认）/ 'only'=仅归档 / 'all'=全部；
+    date_from/date_to 按文件修改时间（mtime）筛选（ISO 或 YYYY-MM-DD）。
     """
     with _LOCK:
         out = []
         if not _CODEX_DIR.exists():
             return out
         export_state = _load_codex_export_state()
+        d_from = _parse_iso_dt(date_from)
+        d_to = _parse_iso_dt(date_to, end_of_day=True)
         for path in sorted(_CODEX_DIR.glob("codex-*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
             try:
                 content = json.loads(path.read_text(encoding="utf-8"))
@@ -2082,6 +2131,20 @@ def list_codex_accounts() -> list[dict]:
                 continue
             fname = path.name
             es = export_state.get(fname) or {}
+            rec_archived = bool(es.get("archived"))
+            if archived in (True, "1", "true", "yes", "only"):
+                if not rec_archived:
+                    continue
+            elif archived in ("all", "include"):
+                pass
+            else:
+                if rec_archived:
+                    continue
+            mtime_dt = datetime.fromtimestamp(path.stat().st_mtime)
+            if d_from and mtime_dt < d_from:
+                continue
+            if d_to and mtime_dt > d_to:
+                continue
             # 从文件名抽 email 和 plan：codex-{email}.json 或 codex-{email}-{plan}.json
             stem = path.stem  # codex-邮箱-plan
             without_prefix = stem[len("codex-"):] if stem.startswith("codex-") else stem
@@ -2113,11 +2176,32 @@ def list_codex_accounts() -> list[dict]:
                 "expired": content.get("expired", ""),
                 "access_token_preview": (content.get("access_token", "") or "")[:32],
                 "size": path.stat().st_size,
-                "mtime": datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="seconds"),
+                "mtime": mtime_dt.isoformat(timespec="seconds"),
                 "exported_at": es.get("exported_at"),
                 "exported_count": es.get("exported_count", 0),
+                "archived": rec_archived,
+                "archived_at": es.get("archived_at"),
             })
         return out
+
+
+def archive_codex(filename: str, archived: bool = True) -> dict | None:
+    """归档/取消归档一条 Codex 授权凭证（状态记录在导出状态文件）。不存在返回 None。"""
+    with _LOCK:
+        if not filename.startswith("codex-") or not filename.endswith(".json"):
+            raise ValueError(f"非法文件名: {filename}")
+        if "/" in filename or "\\" in filename or ".." in filename:
+            raise ValueError(f"非法文件名: {filename}")
+        path = _CODEX_DIR / filename
+        if not path.exists() or not path.is_file():
+            return None
+        state = _load_codex_export_state()
+        rec = state.get(filename) or {}
+        rec["archived"] = bool(archived)
+        rec["archived_at"] = _now() if archived else None
+        state[filename] = rec
+        _save_codex_export_state(state)
+        return rec
 
 
 def read_codex_credential(filename: str) -> tuple[str, str]:
