@@ -691,148 +691,6 @@ def _parse_extra_json(value: object) -> dict:
     return dict(parsed) if isinstance(parsed, dict) else {}
 
 
-def _sync_account_token_to_email_pools(account_id: int, email: str, access_token: str, now: str) -> None:
-    """同步关联邮箱池的 AT，不改变邮箱池领取状态。调用方必须持有 _LOCK。"""
-    loaders_and_savers = [
-        (_load_outlook, _save_outlook),
-        (_load_generic_api_emails, _save_generic_api_emails),
-        (_load_domain_pool, _save_domain_pool),
-        (_load_icloud_emails, _save_icloud_emails),
-    ]
-    for loader, saver in loaders_and_savers:
-        rows = loader()
-        row = _find_by_email(rows, email)
-        if row is None:
-            continue
-        row["registered_account_id"] = int(account_id)
-        row["access_token"] = access_token
-        row["completed_at"] = now
-        saver(rows)
-
-
-def update_account_session(
-    acc_id: int,
-    *,
-    expected_email: str,
-    normalized: dict,
-    auth_method: str,
-    roxybrowser: dict | None = None,
-    invalidate_registration_password: bool = False,
-) -> dict:
-    """按 account_id 原子合并新的 ChatGPT session，不创建新账户。"""
-    access_token = str(normalized.get("access_token") or "").strip()
-    if not access_token:
-        raise ValueError("新的 ChatGPT session 缺少 access_token")
-    session_extra = normalized.get("extra")
-    if not isinstance(session_extra, dict):
-        raise ValueError("新的 ChatGPT session extra 结构无效")
-
-    with _LOCK:
-        accounts = _load_accounts()
-        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
-        if row is None:
-            raise LookupError("账号不存在")
-        current_email = str(row.get("email") or "").strip()
-        if not current_email or current_email.casefold() != str(expected_email or "").strip().casefold():
-            raise ValueError("账号邮箱已变化，拒绝写入新的 session")
-
-        extra = _parse_extra_json(row.get("extra_json"))
-        extra.update({
-            "user": dict(session_extra.get("user") or {}),
-            "account": dict(session_extra.get("account") or {}),
-            "expires": session_extra.get("expires"),
-        })
-        if roxybrowser:
-            extra["roxybrowser"] = dict(roxybrowser)
-        if invalidate_registration_password:
-            extra.pop("registration_password", None)
-
-        now = _now()
-        row.update({
-            "access_token": access_token,
-            "user_id": normalized.get("user_id") if normalized.get("user_id") is not None else row.get("user_id"),
-            "user_name": normalized.get("user_name") if normalized.get("user_name") is not None else row.get("user_name"),
-            "plan_type": normalized.get("plan_type") if normalized.get("plan_type") is not None else row.get("plan_type"),
-            "expires_at": normalized.get("expires_at"),
-            "extra_json": json.dumps(extra, ensure_ascii=False),
-            "at_refresh_status": "success",
-            "at_refresh_error": None,
-            "at_refresh_completed_at": now,
-            "at_refreshed_at": now,
-            "at_refresh_auth_method": str(auth_method or "").strip() or "unknown",
-            "updated_at": now,
-        })
-        _sync_account_token_to_email_pools(int(acc_id), current_email, access_token, now)
-        _save_accounts(accounts)
-        return dict(row)
-
-
-def claim_account_at_refresh(acc_id: int, job_id: int) -> bool:
-    """原子占用账户 AT 刷新状态。"""
-    with _LOCK:
-        accounts = _load_accounts()
-        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
-        if row is None or row.get("at_refresh_status") in {"pending", "running", "stopping"}:
-            return False
-        now = _now()
-        row.update({
-            "at_refresh_status": "pending",
-            "at_refresh_error": None,
-            "at_refresh_job_id": int(job_id),
-            "at_refresh_started_at": None,
-            "at_refresh_completed_at": None,
-            "updated_at": now,
-        })
-        _save_accounts(accounts)
-        return True
-
-
-def update_account_at_refresh_status(
-    acc_id: int,
-    status: str,
-    error: str | None = None,
-    *,
-    job_id: int | None = None,
-) -> bool:
-    with _LOCK:
-        accounts = _load_accounts()
-        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
-        if row is None:
-            return False
-        now = _now()
-        row["at_refresh_status"] = str(status or "")
-        row["at_refresh_error"] = error
-        if job_id is not None:
-            row["at_refresh_job_id"] = int(job_id)
-        if status == "running":
-            row["at_refresh_started_at"] = now
-        if status in {"success", "failed", "stopped", "cancelled"}:
-            row["at_refresh_completed_at"] = now
-        row["updated_at"] = now
-        _save_accounts(accounts)
-        return True
-
-
-def recover_interrupted_at_refreshes() -> int:
-    with _LOCK:
-        accounts = _load_accounts()
-        recovered = 0
-        now = _now()
-        for row in accounts:
-            if row.get("at_refresh_status") not in {"pending", "running", "stopping"}:
-                continue
-            row.update({
-                "at_refresh_status": "failed",
-                "at_refresh_error": "WebUI 重启导致 AT 刷新中断，可重新执行",
-                "at_refresh_completed_at": now,
-                "updated_at": now,
-            })
-            recovered += 1
-        if recovered:
-            _save_accounts(accounts)
-        return recovered
-
-
 def update_account_codex_status(email: str, codex_status: str, codex_error: str | None = None) -> bool:
     """
     单独更新某账号的 codex_status / codex_error（手动补跑 Codex 时用）。
@@ -1370,9 +1228,6 @@ def list_account_plan_check_statuses(
         "codex_agent_status", "codex_agent_message",
         "codex_agent_runtime_id", "codex_agent_sub2api_url",
         "codex_agent_sub2api_mode", "codex_agent_sub2api_total",
-        "at_refresh_status", "at_refresh_error", "at_refresh_job_id",
-        "at_refresh_started_at", "at_refresh_completed_at", "at_refreshed_at",
-        "at_refresh_auth_method",
     )
     with _LOCK:
         all_rows = _filtered_decorated_accounts(
@@ -1420,8 +1275,6 @@ def list_account_plan_check_statuses(
                     "extract_link_status": row.get("extract_link_status"),
                     "codex_status": row.get("codex_status"),
                     "codex_agent_status": row.get("codex_agent_status"),
-                    "at_refresh_status": row.get("at_refresh_status"),
-                    "at_refresh_job_id": row.get("at_refresh_job_id"),
                 }
                 for row in all_rows
             ],
@@ -2401,26 +2254,6 @@ def create_job(
         return dict(row)
 
 
-def recover_interrupted_at_refresh_jobs() -> int:
-    """把服务重启后失去 worker 的 AT 刷新任务收敛为失败。"""
-    with _LOCK:
-        rows = _load_jobs()
-        recovered = 0
-        now = _now()
-        for row in rows:
-            if row.get("job_type") != "at_refresh" or row.get("status") not in {"pending", "running", "stopping"}:
-                continue
-            row.update({
-                "status": "failed",
-                "error_message": "WebUI 重启导致 AT 刷新任务中断，可重新执行",
-                "completed_at": now,
-            })
-            recovered += 1
-        if recovered:
-            _save_jobs(rows)
-        return recovered
-
-
 def create_retry_job(
     source_job_id: int,
     *,
@@ -2543,10 +2376,7 @@ def delete_job(job_id: int, *, delete_log: bool = True, allow_running: bool = Fa
         idx = next((i for i, r in enumerate(rows) if int(r.get("id") or 0) == int(job_id)), None)
         if idx is None:
             return False
-        if not allow_running and (
-            rows[idx].get("status") in ("running", "stopping")
-            or (rows[idx].get("job_type") == "at_refresh" and rows[idx].get("status") == "pending")
-        ):
+        if not allow_running and rows[idx].get("status") in ("running", "stopping"):
             return False
         row = rows.pop(idx)
         _save_jobs(rows)
@@ -2938,12 +2768,3 @@ def get_icloud_email_by_email(email: str) -> dict | None:
     with _LOCK:
         row = _find_by_email(_load_icloud_emails(), email)
         return dict(row) if row else None
-
-
-def get_account_registration_password(acc_id: int) -> str:
-    """仅供服务端认证流程读取 ChatGPT 注册密码。"""
-    with _LOCK:
-        row = next((r for r in _load_accounts() if int(r.get("id") or 0) == int(acc_id)), None)
-        if row is None:
-            raise LookupError("账号不存在")
-        return str(_parse_extra_json(row.get("extra_json")).get("registration_password") or "")

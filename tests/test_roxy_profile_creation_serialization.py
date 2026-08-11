@@ -79,9 +79,9 @@ class RoxyProfileCreationSerializationTests(unittest.TestCase):
                     client.request("POST", "/browser/create", json_body={})
                 sleep.assert_called_once_with(interval)
 
-    def test_registration_codex_and_at_refresh_share_create_scheduler(self):
+    def test_registration_and_codex_share_create_scheduler(self):
         state_lock = threading.Lock()
-        start = threading.Barrier(4)
+        start = threading.Barrier(3)
         active = 0
         max_active = 0
         sequence = 0
@@ -112,7 +112,6 @@ class RoxyProfileCreationSerializationTests(unittest.TestCase):
         workflows = (
             lambda: roxy_registration.run_roxy_registration("reg@example.com", "Reg User", "1990-01-01"),
             lambda: roxy_codex_oauth.run_roxy_codex_oauth("codex@example.com", force=True),
-            lambda: roxy_registration.run_roxy_at_refresh("refresh@example.com"),
         )
         with patch.object(roxy_config, "ROXY_CREATE_INTERVAL", 0.0), patch.object(
             roxy_config, "ROXY_PROFILE_ID", ""
@@ -120,13 +119,13 @@ class RoxyProfileCreationSerializationTests(unittest.TestCase):
             roxy_registration, "_build_driver", side_effect=RuntimeError("stop after profile creation")
         ), patch.object(
             roxy_codex_oauth, "_build_driver", side_effect=RuntimeError("stop after profile creation")
-        ), ThreadPoolExecutor(max_workers=3) as executor:
+        ), ThreadPoolExecutor(max_workers=2) as executor:
             futures = [executor.submit(run_after_barrier, workflow) for workflow in workflows]
             start.wait()
             results = [future.result(timeout=2) for future in futures]
 
         self.assertEqual(max_active, 1)
-        self.assertEqual(len(results), 3)
+        self.assertEqual(len(results), 2)
 
     def test_create_failures_release_lock_and_are_not_retried(self):
         failures = (

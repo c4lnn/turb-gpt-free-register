@@ -99,7 +99,7 @@ def _compact_account_for_list(row: dict) -> dict:
     for key in (
         "user_name", "email_source", "note", "archived", "created_at",
         "plan_type", "current_plan_type", "plus_trial_eligible",
-        "plan_check_status", "codex_status", "codex_agent_status", "at_refresh_status",
+        "plan_check_status", "codex_status", "codex_agent_status",
     ):
         if key in row:
             out[key] = row.get(key)
@@ -126,9 +126,6 @@ def _compact_account_for_list(row: dict) -> dict:
         # Codex / Agent 状态提示。
         "codex_error", "codex_agent_message", "codex_agent_runtime_id",
         "codex_agent_sub2api_url", "codex_agent_sub2api_mode", "codex_agent_sub2api_total",
-        # ChatGPT AT 强制重新登录状态。
-        "at_refresh_error", "at_refresh_job_id", "at_refresh_started_at",
-        "at_refresh_completed_at", "at_refreshed_at", "at_refresh_auth_method",
     )
     for key in optional_keys:
         value = row.get(key)
@@ -190,11 +187,7 @@ def _job_status_counts(rows: list[dict]) -> dict:
 
 def _enrich_job_rows(rows: list[dict], manual_otp_required: bool) -> None:
     terminal_statuses = {"failed", "stopped", "cancelled"}
-    needs_account_snapshot = any(
-        str(row.get("status") or "") in terminal_statuses
-        and str(row.get("job_type") or "registration") != "at_refresh"
-        for row in rows
-    )
+    needs_account_snapshot = any(str(row.get("status") or "") in terminal_statuses for row in rows)
     account_snapshot = db.get_retry_account_snapshot() if needs_account_snapshot else None
     for row in rows:
         row["manual_otp_required"] = manual_otp_required
@@ -254,15 +247,6 @@ def create_app(auth_code: str | None = None) -> Flask:
     recovered_codex_agents = db.recover_interrupted_codex_agents()
     if recovered_codex_agents:
         logger.warning("已恢复 %s 个因 WebUI 重启中断的 Codex Agent Token 状态", recovered_codex_agents)
-    recovered_at_refresh_jobs = db.recover_interrupted_at_refresh_jobs()
-    recovered_at_refreshes = db.recover_interrupted_at_refreshes()
-    if recovered_at_refresh_jobs or recovered_at_refreshes:
-        logger.warning(
-            "已恢复因 WebUI 重启中断的 AT 刷新：jobs=%s accounts=%s",
-            recovered_at_refresh_jobs,
-            recovered_at_refreshes,
-        )
-
     # ----------------------------------------------------------
     # 页面
     # ----------------------------------------------------------
@@ -373,60 +357,6 @@ def create_app(auth_code: str | None = None) -> Flask:
             )
         snapshot["queue"] = plan_check_service.queue_settings()
         return jsonify(snapshot)
-
-    @app.post("/api/accounts/<int:acc_id>/refresh-at")
-    def api_account_refresh_at(acc_id: int):
-        """为已有账户创建 Roxy 强制重新登录任务。客户端账户资料不参与认证。"""
-        result = svc.submit_account_at_refresh(acc_id)
-        status = int(result.pop("status", 200) or 200)
-        job = result.get("job")
-        if isinstance(job, dict):
-            result["job"] = _compact_job_for_list(job)
-        return jsonify(result), status
-
-    @app.post("/api/accounts/refresh-at-bulk")
-    def api_accounts_refresh_at_bulk():
-        """为选中账户逐项创建 AT 刷新任务。Body {account_ids:[...]}。"""
-        data = request.get_json(silent=True) or {}
-        ids = data.get("account_ids") or data.get("ids") or []
-        if not isinstance(ids, list) or not ids:
-            return jsonify({"ok": False, "error": "account_ids 必须是非空数组"}), 400
-        if len(ids) > 500:
-            return jsonify({"ok": False, "error": "单次最多提交 500 个账号"}), 400
-
-        started = []
-        skipped = []
-        seen = set()
-        for raw in ids:
-            try:
-                acc_id = int(raw)
-            except (TypeError, ValueError):
-                skipped.append({"id": raw, "reason": "ID 非法"})
-                continue
-            if acc_id in seen:
-                continue
-            seen.add(acc_id)
-            try:
-                result = svc.submit_account_at_refresh(acc_id)
-            except Exception as exc:
-                skipped.append({"id": acc_id, "reason": f"{type(exc).__name__}: {str(exc)[:180]}"})
-                continue
-            status = int(result.pop("status", 200) or 200)
-            if not result.get("ok"):
-                skipped.append({"id": acc_id, "status": status, "reason": result.get("error") or "提交失败"})
-                continue
-            job = result.get("job")
-            started.append({
-                "id": acc_id,
-                "job": _compact_job_for_list(job) if isinstance(job, dict) else None,
-            })
-        return jsonify({
-            "ok": True,
-            "started": started,
-            "started_count": len(started),
-            "skipped": skipped,
-            "skipped_count": len(skipped),
-        }), 202
 
 
     @app.get("/api/accounts/<int:acc_id>/secret")

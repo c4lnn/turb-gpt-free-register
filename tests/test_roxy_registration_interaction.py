@@ -90,6 +90,25 @@ class RoxyRegistrationInteractionTests(unittest.TestCase):
 
         human_click.assert_called_once_with(driver, target, label="email_submit")
 
+    def test_otp_submit_timeout_without_error_is_accepted(self):
+        driver = FakeDriver()
+        with patch.object(registration.time, "time", side_effect=[0, 31]), \
+             patch.object(registration, "_is_email_verification_page", return_value=True), \
+             patch.object(registration.logger, "warning"):
+            result = registration._wait_after_email_otp_submit(driver, timeout=30)
+
+        self.assertEqual(result, "accepted")
+
+    def test_otp_submit_timeout_with_error_is_invalid(self):
+        driver = FakeDriver()
+        with patch.object(registration.time, "time", side_effect=[0, 0, 31]), \
+             patch.object(registration.time, "sleep"), \
+             patch.object(registration, "_is_email_verification_page", return_value=True), \
+             patch.object(registration, "_email_otp_page_state", return_value={"errors": ["invalid"], "inputs": []}):
+            result = registration._wait_after_email_otp_submit(driver, timeout=30)
+
+        self.assertEqual(result, "invalid")
+
 
 if __name__ == "__main__":
     unittest.main()

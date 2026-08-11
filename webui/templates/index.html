@@ -2272,10 +2272,6 @@
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnUploadSelectedAgentSub2V2" disabled title="把选中账号已生成的 Codex Agent Token 上传到 sub2api">上传sub2</button>
         </div>
         <div class="acc-v2-btn-group">
-          <span class="acc-v2-btn-group-title">AT</span>
-          <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnRefreshSelectedAtV2" disabled title="为选中的账号批量创建 Roxy 重新登录任务">批量重新获取 AT</button>
-        </div>
-        <div class="acc-v2-btn-group">
           <span class="acc-v2-btn-group-title">Codex</span>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnRetrySelectedCodexV2" disabled title="给选中的账号批量补跑 Codex 授权">补跑</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnDownloadSelectedCpaV2" disabled title="从 CPA auth-files 下载选中账号的 Codex JSON，并打包 ZIP">下载CPA</button>
@@ -3353,12 +3349,9 @@ async function pollAccountPlanStatuses() {
         const isExtracting = ['queued', 'running'].includes(item.extract_link_status);
         const wasAgenting = ['queued', 'running'].includes(account?.codex_agent_status);
         const isAgenting = ['queued', 'running'].includes(item.codex_agent_status);
-        const wasRefreshingAt = ['pending', 'running', 'stopping'].includes(account?.at_refresh_status);
-        const isRefreshingAt = ['pending', 'running', 'stopping'].includes(item.at_refresh_status);
         if (wasChecking && !isChecking) needsFullReload = true;
         if (wasExtracting && !isExtracting) needsFullReload = true;
         if (wasAgenting && !isAgenting) needsFullReload = true;
-        if (wasRefreshingAt && !isRefreshingAt) needsFullReload = true;
         Object.assign(account, item);
       });
       planStatusRevision = snapshot.revision || '';
@@ -3611,18 +3604,6 @@ function _codexAction(r) {
   const label = s === 'success' ? '重新补跑 Codex' : '补跑 Codex';
   return `<button data-codex-retry="${esc(r.email)}" title="重新跑一次 Codex 授权（会消耗 1 封邮箱 OTP + 1 个接码短信）">${label}</button>`;
 }
-function _atRefreshAction(r) {
-  const s = r.at_refresh_status || '';
-  const jobId = Number(r.at_refresh_job_id || 0);
-  const err = r.at_refresh_error || '';
-  const log = jobId ? `<button type="button" data-at-refresh-log="${esc(jobId)}" title="查看该账号最近一次 AT 刷新日志">AT 日志</button>` : '';
-  if (['pending','running','stopping'].includes(s)) {
-    const stop = jobId ? `<button type="button" class="danger" data-at-refresh-stop="${esc(jobId)}" title="停止正在进行的 AT 刷新">${s === 'stopping' ? '停止中…' : '停止获取 AT'}</button>` : '';
-    return `${stop}${log}`;
-  }
-  const title = err ? `重新登录获取 AT；上次失败：${err}` : '使用 Roxy 强制重新登录，获取新的 ChatGPT session 和 AT';
-  return `<button type="button" data-at-refresh="${esc(r.id)}" title="${esc(title)}">重新获取 AT</button>${log}`;
-}
 function _tokenCellV2(r) {
   const live = r.live_check_status || '';
   const liveErr = r.live_check_error || '';
@@ -3646,7 +3627,6 @@ function _accountsV2MoreMenu(r) {
     `<button type="button" data-account-live-log="${esc(r.email)}" title="查看该账号最近一次查活日志">查活日志</button>`,
     _planAction(r),
     _extractLinkAction(r),
-    _atRefreshAction(r),
     _codexAction(r),
     `<button type="button" data-codex-log="${esc(r.email)}" title="查看该账号最近一次 Codex 补跑日志">补跑日志</button>`,
     `<button type="button" data-account-archive="${esc(r.id)}" data-archived="${r.archived ? '0' : '1'}" title="${r.archived ? '恢复到默认账号列表' : '归档后默认账号列表不再显示'}">${r.archived ? '恢复' : '归档'}</button>`,
@@ -3724,7 +3704,6 @@ function updateAccountSelectionUi(pageRows = null) {
   const v2Ids = [
     'btnCheckSelectedPlansV2', 'btnExtractSelectedLinksV2',
     'btnGenerateSelectedAgentV2', 'btnDownloadSelectedAgentV2', 'btnUploadSelectedAgentSub2V2',
-    'btnRefreshSelectedAtV2',
     'btnRetrySelectedCodexV2', 'btnDownloadSelectedCpaV2', 'btnStopSelectedCodexV2',
     'btnNoteSelectedAccountsV2', 'btnCopySelectedLinesV2',
     'btnDownloadSelectedTxtV2', 'btnArchiveSelectedAccountsV2', 'btnDeleteSelectedAccountsV2',
@@ -3893,47 +3872,6 @@ async function onAccountsBodyClick(e) {
   const extractResumeBtn = e.target.closest('[data-extract-link-resume]');
   if (extractResumeBtn) {
     await resumeExtractLink(Number(extractResumeBtn.dataset.extractLinkResume), extractResumeBtn);
-    return;
-  }
-
-  const atRefreshBtn = e.target.closest('[data-at-refresh]');
-  if (atRefreshBtn) {
-    const accountId = Number(atRefreshBtn.dataset.atRefresh);
-    const account = ACCOUNTS.find(a => Number(a.id) === accountId);
-    if (!confirm(`确定重新登录并获取新的 AT 吗？\n\n${account?.email || ('账号 #' + accountId)}\n\n任务将在后台使用 Roxy 执行，失败时保留旧 AT。`)) return;
-    atRefreshBtn.disabled = true;
-    try {
-      const r = await api(`/api/accounts/${accountId}/refresh-at`, {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
-      showToast(r.message || '已开始重新获取 AT');
-      await loadAccounts();
-      if (r.job?.id) openLog(Number(r.job.id));
-    } catch(err) {
-      showToast('启动 AT 刷新失败: ' + err.message);
-      atRefreshBtn.disabled = false;
-    }
-    return;
-  }
-
-  const atRefreshStopBtn = e.target.closest('[data-at-refresh-stop]');
-  if (atRefreshStopBtn) {
-    const jobId = Number(atRefreshStopBtn.dataset.atRefreshStop);
-    if (!confirm(`确定停止 AT 刷新任务 #${jobId}？\n\n旧 AT 将保持不变。`)) return;
-    atRefreshStopBtn.disabled = true;
-    try {
-      const r = await api(`/api/jobs/${jobId}/stop`, {method:'POST'});
-      showToast(r.message || '已发送停止信号');
-      if (activeLogJob === jobId) pollLog();
-      await loadAccounts();
-    } catch(err) {
-      showToast('停止 AT 刷新失败: ' + err.message);
-      atRefreshStopBtn.disabled = false;
-    }
-    return;
-  }
-
-  const atRefreshLogBtn = e.target.closest('[data-at-refresh-log]');
-  if (atRefreshLogBtn) {
-    openLog(Number(atRefreshLogBtn.dataset.atRefreshLog));
     return;
   }
 
@@ -4699,38 +4637,6 @@ async function resumeExtractLink(id, btn) {
   }
 }
 
-async function refreshSelectedAt() {
-  const ids = Array.from(ACCOUNT_SELECTED);
-  if (ids.length === 0) { showToast('请先选择账号'); return; }
-  const activeCount = ids
-    .map(id => ACCOUNTS.find(a => Number(a.id) === Number(id)))
-    .filter(a => a && ['pending','running','stopping'].includes(a.at_refresh_status || '')).length;
-  let message = `确定为选中的 ${ids.length} 个账号批量重新登录并获取 AT 吗？\n\n每个账号都会在后台使用 Roxy 执行，可能消耗一封邮箱 OTP；失败时保留旧 AT。`;
-  if (activeCount) message += `\n\n其中 ${activeCount} 个账号已有刷新任务，会自动跳过。`;
-  if (!confirm(message)) return;
-  const btn = $('#btnRefreshSelectedAtV2');
-  if (!btn) return;
-  const old = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = '提交中…';
-  try {
-    const r = await api('/api/accounts/refresh-at-bulk', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({account_ids: ids}),
-    });
-    const skippedCount = r.skipped_count || 0;
-    showToast(skippedCount ? `已开始 ${r.started_count || 0} 个，跳过 ${skippedCount} 个` : `已开始 ${r.started_count || 0} 个 AT 刷新任务`);
-    await loadAccounts();
-  } catch(err) {
-    showToast('批量获取 AT 失败: ' + err.message);
-  } finally {
-    btn.textContent = old;
-    updateAccountSelectionUi();
-  }
-}
-
-
 async function stopSelectedCodex() {
   const ids = Array.from(ACCOUNT_SELECTED);
   if (ids.length === 0) { showToast('请先选择账号'); return; }
@@ -5059,7 +4965,6 @@ async function copySelectedAccountTokens() {
   bind('btnGenerateSelectedAgentV2', generateSelectedCodexAgents);
   bind('btnDownloadSelectedAgentV2', downloadSelectedCodexAgents);
   bind('btnUploadSelectedAgentSub2V2', uploadSelectedCodexAgentSub2);
-  bind('btnRefreshSelectedAtV2', refreshSelectedAt);
   bind('btnRetrySelectedCodexV2', retrySelectedCodex);
   bind('btnDownloadSelectedCpaV2', downloadSelectedCpa);
   bind('btnStopSelectedCodexV2', stopSelectedCodex);
