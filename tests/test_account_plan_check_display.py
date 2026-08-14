@@ -99,7 +99,7 @@ class AccountPlanCellTemplateTests(unittest.TestCase):
 
     def test_success_label_uses_trial_eligibility_for_free_and_currency_for_paid(self):
         self.assertIn(
-            "lower === 'free' ? (r.plus_trial_eligible ? '资格' : '') : r.billing_currency",
+            "lower === 'free' ? (r.plus_trial_eligible ? 'Plus 试用资格可用' : '') : r.billing_currency",
             self.renderer,
         )
         self.assertIn("[plan, planSuffix].filter(Boolean).join('|')", self.renderer)

@@ -3605,13 +3605,13 @@ function _planCell(r) {
   if (lower === 'free') {
     const checkedOk = ok === true || r.plan_check_status === 'success';
     if (!checkedOk) {
-      return wrap(`<span class="pill status-running" title="${title}">${esc(plan)}（待查资格）</span>`);
+      return wrap(`<span class="pill status-running" title="${title}">${esc(plan)}（待查 Plus 试用资格）</span>`);
     }
   }
 
   const cls = lower === 'free' && !r.plus_trial_eligible ? 'status-used' : 'status-success';
   const expireRaw = r.plan_expires_at || r.expires_at || r.plan_renews_at || r.renews_at || '';
-  const planSuffix = lower === 'free' ? (r.plus_trial_eligible ? '资格' : '') : r.billing_currency;
+  const planSuffix = lower === 'free' ? (r.plus_trial_eligible ? 'Plus 试用资格可用' : '') : r.billing_currency;
   const text = [plan, planSuffix].filter(Boolean).join('|') || '-';
   const detail = [title];
   const billing = _billingLabel(r.billing_period);
