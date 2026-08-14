@@ -6,8 +6,39 @@ from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import patch
 
-from core import db
+from core import account_liveness, db
 from webui import app as web_app
+
+
+class AccountLivenessNetworkTests(unittest.TestCase):
+    def _run_preflight(self, proxy):
+        created_with = []
+
+        class FakeBrowserSession:
+            def __init__(self, proxy=None):
+                created_with.append(proxy)
+                self.proxy = proxy
+                self.device_id = "test-device"
+
+        with (
+            patch.object(account_liveness, "BrowserSession", FakeBrowserSession),
+            patch.object(account_liveness, "get_providers"),
+            patch.object(account_liveness, "get_csrf_token", return_value="test-csrf"),
+            patch.object(account_liveness, "signin_openai", return_value="https://auth.openai.com/test"),
+        ):
+            account_liveness._network_preflight_with_retry(
+                "user@example.com", proxy, max_attempts=1,
+            )
+        return created_with
+
+    def test_preflight_preserves_explicit_direct_connection(self):
+        self.assertEqual(self._run_preflight(""), [""])
+
+    def test_preflight_preserves_explicit_proxy(self):
+        self.assertEqual(
+            self._run_preflight("http://proxy.example:8080"),
+            ["http://proxy.example:8080"],
+        )
 
 
 class AccountLivenessDbTests(unittest.TestCase):
