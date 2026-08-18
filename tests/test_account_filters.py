@@ -43,6 +43,37 @@ class AccountFilterTests(unittest.TestCase):
         self.assertEqual(snapshot["total"], 2)
         self.assertEqual([item["id"] for item in snapshot["items"]], [3, 1])
 
+    def test_checkout_type_filter_runs_before_pagination(self):
+        self.accounts_path.write_text(json.dumps([
+            {"id": 1, "email": "oaics@example.invalid", "checkout_session_type": "oaics"},
+            {"id": 2, "email": "live-one@example.invalid", "checkout_session_type": "cs_live"},
+            {"id": 3, "email": "not-checked@example.invalid"},
+            {"id": 4, "email": "live-two@example.invalid", "checkout_session_type": "cs_live"},
+        ]), encoding="utf-8")
+
+        page = db.list_accounts_page(
+            limit=1,
+            offset=1,
+            checkout_type_filter="cs_live",
+        )
+
+        self.assertEqual(page["total"], 2)
+        self.assertEqual([item["id"] for item in page["items"]], [2])
+
+    def test_checkout_type_snapshot_supports_unchecked_accounts(self):
+        self.accounts_path.write_text(json.dumps([
+            {"id": 1, "email": "oaics@example.invalid", "checkout_session_type": "oaics"},
+            {"id": 2, "email": "not-checked@example.invalid"},
+        ]), encoding="utf-8")
+
+        snapshot = db.list_account_plan_check_statuses(
+            limit=20,
+            checkout_type_filter="none",
+        )
+
+        self.assertEqual(snapshot["total"], 1)
+        self.assertEqual([item["id"] for item in snapshot["items"]], [2])
+
 
 if __name__ == "__main__":
     unittest.main()

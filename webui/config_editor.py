@@ -450,7 +450,7 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "PLAN_CHECK_PROXY_MODE", "file": "proxy.py", "type": "str", "group": "代理池",
-        "label": "套餐/Agent网络模式", "help": "用于查套餐和生成 Agent Token；auto=本地代理可用则走代理、未监听则直连；proxy=强制代理；direct=强制直连",
+        "label": "套餐/Agent网络模式", "help": "auto=专用代理优先并允许回退；proxy=专用代理优先且强制代理；pool=仅使用 PROXY_POOL、忽略专用代理且不直连；direct=强制直连",
     },
     {
         "key": "PLAN_CHECK_PROXY", "file": "proxy.py", "type": "str", "group": "代理池",
@@ -488,6 +488,56 @@ EDITABLE_FIELDS = [
     {
         "key": "PLAN_CHECK_JITTER", "file": "proxy.py", "type": "float", "group": "代理池",
         "label": "套餐/Agent请求随机抖动(秒)", "help": "在查套餐和生成 Agent Token 的最小间隔上增加随机延迟，避免请求过于规律",
+    },
+    # ---- Checkout Session ----
+    {
+        "key": "CHECKOUT_SESSION_AUTO_CHECK", "file": "checkout_session.py", "type": "bool", "group": "Checkout Session",
+        "label": "自动查 Checkout 类型", "help": "开启后仅在 registration_auto 的最终套餐结果确认 free + plus-1-month-free + 100% 试用资格时自动入队；默认关闭",
+    },
+    {
+        "key": "CHECKOUT_SESSION_PROXY_MODE", "file": "checkout_session.py", "type": "str", "group": "Checkout Session",
+        "label": "Checkout网络模式", "help": "只允许 proxy 或 direct；proxy 必须填写下方专用代理，不会复用 PROXY_POOL，也不会自动回退直连",
+    },
+    {
+        "key": "CHECKOUT_SESSION_PROXY", "file": "checkout_session.py", "type": "str", "group": "Checkout Session",
+        "label": "Checkout专用代理", "help": "只用于初始 Checkout POST，可能包含认证信息，仅保存到 .env；proxy 模式为空时会拒绝发送",
+        "storage": "env", "secret": True,
+    },
+    {
+        "key": "CHECKOUT_SESSION_BILLING_COUNTRY", "file": "checkout_session.py", "type": "str", "group": "Checkout Session",
+        "label": "Checkout账单国家", "help": "必须填写两位大写 ASCII 国家代码，例如 DE；需与代理出口地区策略一致",
+    },
+    {
+        "key": "CHECKOUT_SESSION_BILLING_CURRENCY", "file": "checkout_session.py", "type": "str", "group": "Checkout Session",
+        "label": "Checkout账单货币", "help": "必须填写三位大写 ASCII 货币代码，例如 EUR",
+    },
+    {
+        "key": "CHECKOUT_SESSION_TIMEOUT", "file": "checkout_session.py", "type": "float", "group": "Checkout Session",
+        "label": "Checkout单次超时(秒)", "help": "初始 Checkout POST 的单次超时，范围 1-60 秒",
+    },
+    {
+        "key": "CHECKOUT_SESSION_MAX_ATTEMPTS", "file": "checkout_session.py", "type": "int", "group": "Checkout Session",
+        "label": "Checkout最大尝试次数", "help": "仅网络错误、408/409/425/5xx 或 2xx 解析失败可重试，范围 1-4",
+    },
+    {
+        "key": "CHECKOUT_SESSION_RETRY_DELAY", "file": "checkout_session.py", "type": "float", "group": "Checkout Session",
+        "label": "Checkout重试间隔(秒)", "help": "Retry-After 合法时优先使用，否则按尝试次数递增；范围 0-30 秒",
+    },
+    {
+        "key": "CHECKOUT_SESSION_WORKERS", "file": "checkout_session.py", "type": "int", "group": "Checkout Session",
+        "label": "Checkout并发数", "help": "独立后台线程数，默认 1；修改后需重启 WebUI 才会重建线程池",
+    },
+    {
+        "key": "CHECKOUT_SESSION_QUEUE_LIMIT", "file": "checkout_session.py", "type": "int", "group": "Checkout Session",
+        "label": "Checkout队列上限", "help": "独立后台队列容量，默认 100；修改后需重启 WebUI 才会重建队列",
+    },
+    {
+        "key": "CHECKOUT_SESSION_MIN_INTERVAL", "file": "checkout_session.py", "type": "float", "group": "Checkout Session",
+        "label": "Checkout请求最小间隔(秒)", "help": "限制独立队列启动请求的频率，范围 0-30 秒",
+    },
+    {
+        "key": "CHECKOUT_SESSION_JITTER", "file": "checkout_session.py", "type": "float", "group": "Checkout Session",
+        "label": "Checkout请求随机抖动(秒)", "help": "在最小间隔上增加随机等待，范围 0-30 秒",
     },
     # ---- 提链 ----
     {

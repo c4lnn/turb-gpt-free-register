@@ -58,6 +58,68 @@ def _registration_recheck_delay() -> float:
     return _float_setting("PLAN_CHECK_REGISTRATION_RECHECK_DELAY", 2.0, 0.0, 30.0)
 
 
+def _checkout_auto_eligible(result: dict | None) -> bool:
+    """只接受最终套餐结果中的严格 0 元 Plus 试用资格组合。"""
+    result = result or {}
+    if not bool(result.get("ok")):
+        return False
+    if str(result.get("current_plan_type") or "").strip().lower() != "free":
+        return False
+    if result.get("plus_trial_eligible") is not True:
+        return False
+    if str(result.get("plus_trial_campaign_id") or "").strip() != "plus-1-month-free":
+        return False
+    discount = result.get("plus_trial_discount_percentage")
+    if isinstance(discount, bool):
+        return False
+    try:
+        return float(discount) == 100.0
+    except (TypeError, ValueError):
+        return False
+
+
+def _maybe_enqueue_checkout_session(
+    *,
+    account_id: int,
+    email: str,
+    access_token: str,
+    trigger: str,
+    result: dict,
+) -> None:
+    """自动入队失败只记录脱敏警告，不影响已落库的注册/套餐结果。"""
+    if trigger != "registration_auto" or not _checkout_auto_eligible(result):
+        return
+    try:
+        from config import checkout_session as checkout_cfg
+
+        if not bool(getattr(checkout_cfg, "CHECKOUT_SESSION_AUTO_CHECK", False)):
+            return
+        from core.checkout_session_service import enqueue_checkout_session_check
+
+        queued = enqueue_checkout_session_check(
+            account_id=account_id,
+            email=email,
+            access_token=access_token,
+            trigger="registration_auto",
+        )
+        if queued.get("accepted"):
+            logger.info("[Checkout] 注册后自动检测已入队: id=%s email=%s", account_id, email)
+        elif queued.get("busy"):
+            logger.info("[Checkout] 账号已有检测任务，不重复入队: id=%s email=%s", account_id, email)
+        else:
+            logger.warning(
+                "[Checkout] 注册后自动检测入队失败（不影响注册/套餐结果）: id=%s code=%s",
+                account_id,
+                str(queued.get("error_code") or "queue_error")[:80],
+            )
+    except Exception as exc:
+        logger.warning(
+            "[Checkout] 注册后自动检测入队异常（不影响注册/套餐结果）: id=%s error_type=%s",
+            account_id,
+            type(exc).__name__,
+        )
+
+
 def _run_plan_check(
     *,
     account_id: int,
@@ -105,7 +167,15 @@ def _run_plan_check(
                     recheck_result.get("error") or "未知错误",
                 )
 
-        db.update_account_plan_check(acc_id=account_id, result=result)
+        saved = db.update_account_plan_check(acc_id=account_id, result=result)
+        if saved is not False:
+            _maybe_enqueue_checkout_session(
+                account_id=account_id,
+                email=email,
+                access_token=access_token,
+                trigger=trigger,
+                result=result,
+            )
         if result.get("ok"):
             logger.info(
                 "[Plan] 后台查询成功: %s, plan=%s, plus_trial=%s, trigger=%s",

@@ -56,7 +56,7 @@ def _run_live_check(*, account_id: int, email: str, proxy: str | None, trigger: 
         )
         result = check_account_liveness(email, proxy=selected_proxy, clear_log=False)
         # 早期 providers/csrf 403 通常是该出口被 CF 拦截，不代表账号死亡。
-        # auto/proxy 模式下如果用了代理，额外直连兜底一次，便于和套餐查询的 auto 语义保持接近。
+        # pool 模式禁止绕过代理池；其他既有代理路径继续保留 403 直连兜底。
         err_text = str(result.get("error") or "")
         if (
             not result.get("ok")
@@ -64,6 +64,7 @@ def _run_live_check(*, account_id: int, email: str, proxy: str | None, trigger: 
             and "403" in err_text
             and selected_proxy
             and str(route.get("network_route") or "") == "proxy"
+            and bool(route.get("allow_direct_fallback"))
         ):
             _append_log(email, "[查活] 代理出口收到 403，尝试直连兜底一次")
             result = check_account_liveness(email, proxy="", clear_log=False)

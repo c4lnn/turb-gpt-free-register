@@ -753,7 +753,7 @@
     .accounts-table-v2-wrap { overflow: auto; padding: 0; }
     .accounts-table-v2 {
       width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 14px;
-      min-width: 1800px;
+      min-width: 1990px;
     }
     .accounts-table-v2 th, .accounts-table-v2 td {
       padding: 12px 12px; border-bottom: 1px solid #ebeef5;
@@ -775,6 +775,7 @@
     .accounts-table-v2 .col-email { width: 240px; }
     .accounts-table-v2 .col-source { width: 90px; }
     .accounts-table-v2 .col-token { width: 100px; }
+    .accounts-table-v2 .col-checkout { width: 190px; min-width: 190px; }
     .accounts-table-v2 .col-plan { width: 240px; min-width: 240px; }
     .accounts-table-v2 .col-extract-link { width: 240px; min-width: 240px; }
     .accounts-table-v2 .col-note { width: 140px; }
@@ -811,12 +812,23 @@
     .accounts-table-v2 tbody td:first-child { padding-left: 16px; }
     .accounts-table-v2 tbody td:last-child { padding-right: 16px; }
     .accounts-table-v2 .col-email,
+    .accounts-table-v2 .col-checkout,
     .accounts-table-v2 .col-plan,
     .accounts-table-v2 .col-extract-link,
     .accounts-table-v2 .col-note,
     .accounts-table-v2 .col-agent,
     .accounts-table-v2 .col-actions {
       white-space: normal; overflow: visible; text-overflow: clip; vertical-align: middle;
+    }
+    .accounts-table-v2 .checkout-session-cell {
+      display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+      min-width: 0; width: 100%;
+    }
+    .accounts-table-v2 .col-checkout .pill {
+      width: 150px; min-width: 150px; max-width: 150px;
+      height: 26px; min-height: 26px; justify-content: center;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      box-sizing: border-box;
     }
     .accounts-table-v2 .acc-v2-email {
       font-weight: 700; color: #303133; line-height: 1.35;
@@ -1060,6 +1072,21 @@
     }
     .accounts-filter-v2 .acc-v2-toggle.is-active:hover {
       background: #dce8ff; border-color: #3A7FFF; color: #3A7FFF;
+    }
+    .accounts-filter-v2 .acc-v2-select-field {
+      display: inline-flex; align-items: center; gap: 6px;
+      min-height: 32px; padding: 0 4px;
+      color: #606266; font-size: 13px; white-space: nowrap;
+    }
+    .accounts-filter-v2 .acc-v2-select-field select {
+      width: 148px; height: 32px; min-height: 32px; margin: 0;
+      border: 1px solid #dcdfe6; border-radius: 6px; background: #fff;
+      color: #606266; padding: 0 28px 0 10px; font: inherit; font-size: 13px;
+      cursor: pointer; box-sizing: border-box;
+    }
+    .accounts-filter-v2 .acc-v2-select-field select:hover,
+    .accounts-filter-v2 .acc-v2-select-field select:focus {
+      outline: none; border-color: #409eff;
     }
     .accounts-filter-v2 .jobs-tb-btn {
       min-height: 32px; border: 1px solid #dcdfe6; border-radius: 6px;
@@ -2357,6 +2384,17 @@
           <button type="button" class="acc-v2-toggle" id="showArchivedAccountsV2" aria-pressed="false" title="默认只显示未归档账号；开启后单独查看归档账号">查看归档</button>
           <button type="button" class="acc-v2-toggle" id="showPlusAccountsOnlyV2" aria-pressed="false" title="只查询/显示已开通 Plus 的账号">已开通Plus</button>
           <button type="button" class="acc-v2-toggle" id="showCodexSuccessOnlyV2" aria-pressed="false" title="只查询/显示 Codex 授权已通过的账号">Codex已通过</button>
+          <label class="acc-v2-select-field" for="checkoutTypeFilterV2" title="按已保存的 Checkout Session 类型筛选账号">
+            <span>Checkout类型</span>
+            <select id="checkoutTypeFilterV2" aria-label="筛选 Checkout 类型">
+              <option value="">全部</option>
+              <option value="none">未检测</option>
+              <option value="oaics">oaics</option>
+              <option value="cs_live">cs_live</option>
+              <option value="other_cs">other_cs</option>
+              <option value="unknown">unknown</option>
+            </select>
+          </label>
           <div class="acc-v2-date-select" id="dateSelectAccountsV2">
             <button type="button" class="acc-v2-date-select-btn" id="btnDateFilterAccountsV2" title="按注册时间筛选日期范围">📅 日期筛选</button>
             <div class="acc-v2-date-select-menu" id="dateFilterPanelAccountsV2"></div>
@@ -2392,6 +2430,7 @@
         </div>
         <div class="acc-v2-btn-group">
           <span class="acc-v2-btn-group-title">批量</span>
+          <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCheckSelectedCheckoutV2" disabled title="批量查询选中账号的 Checkout Session 类型">查Checkout类型</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnNoteSelectedAccountsV2" disabled title="给选中的账号统一设置备注，留空可清空备注">备注</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnCopySelectedLinesV2" disabled title="按所选格式复制选中账号的 AT，每个账号一行">复制AT</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnCopySelectedEmailsV2" disabled title="复制选中账号的邮箱，每个账号一行">复制邮箱</button>
@@ -2412,7 +2451,7 @@
         <table class="accounts-table-v2">
           <colgroup>
             <col class="col-check"><col class="col-id"><col class="col-email"><col class="col-source">
-            <col class="col-token"><col class="col-plan"><col class="col-extract-link"><col class="col-small"><col class="col-status">
+            <col class="col-token"><col class="col-plan"><col class="col-checkout"><col class="col-extract-link"><col class="col-small"><col class="col-status">
             <col class="col-agent"><col class="col-note"><col class="col-time"><col class="col-actions">
           </colgroup>
           <thead>
@@ -2423,6 +2462,7 @@
               <th class="col-source">来源</th>
               <th class="col-token">AT</th>
               <th class="col-plan">套餐</th>
+              <th class="col-checkout">Checkout类型</th>
               <th class="col-extract-link">提链</th>
               <th class="col-small">2FA</th>
               <th class="col-status">Codex</th>
@@ -2762,6 +2802,7 @@ let OUTLOOK_TOTAL = 0;
 let SHOW_ARCHIVED_ACCOUNTS = false;
 let SHOW_PLUS_ACCOUNTS_ONLY = false;
 let SHOW_CODEX_SUCCESS_ONLY = false;
+let CHECKOUT_TYPE_FILTER = '';
 const ACCOUNT_SELECTED = new Set();
 const OUTLOOK_SELECTED = new Set();
 let JOBS = [];
@@ -3434,11 +3475,12 @@ async function loadAccounts() {
     const archived = SHOW_ARCHIVED_ACCOUNTS ? 'only' : '0';
     const plan = SHOW_PLUS_ACCOUNTS_ONLY ? 'plus' : '';
     const codexStatus = SHOW_CODEX_SUCCESS_ONLY ? 'success' : '';
+    const checkoutType = CHECKOUT_TYPE_FILTER;
     const q = getAccountsQuery();
     const dateFrom = document.getElementById('dateFromAccountsV2')?.value || '';
     const dateTo = document.getElementById('dateToAccountsV2')?.value || '';
     const p = PAGERS.accounts;
-    const res = await api(`/api/accounts?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&codex_status=${encodeURIComponent(codexStatus)}&q=${encodeURIComponent(q)}&date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}`);
+    const res = await api(`/api/accounts?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&codex_status=${encodeURIComponent(codexStatus)}&checkout_type=${encodeURIComponent(checkoutType)}&q=${encodeURIComponent(q)}&date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}`);
     ACCOUNTS = res.items || [];
     ACCOUNTS_TOTAL = Number(res.total || ACCOUNTS.length || 0);
     const totalPages = Math.max(1, Math.ceil(ACCOUNTS_TOTAL / p.size));
@@ -3454,9 +3496,10 @@ async function pollAccountPlanStatuses() {
     const archived = SHOW_ARCHIVED_ACCOUNTS ? 'only' : '0';
     const plan = SHOW_PLUS_ACCOUNTS_ONLY ? 'plus' : '';
     const codexStatus = SHOW_CODEX_SUCCESS_ONLY ? 'success' : '';
+    const checkoutType = CHECKOUT_TYPE_FILTER;
     const q = getAccountsQuery();
     const p = PAGERS.accounts;
-    const snapshot = await api(`/api/accounts/plan-check-status?page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&codex_status=${encodeURIComponent(codexStatus)}&q=${encodeURIComponent(q)}`);
+    const snapshot = await api(`/api/accounts/plan-check-status?page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&codex_status=${encodeURIComponent(codexStatus)}&checkout_type=${encodeURIComponent(checkoutType)}&q=${encodeURIComponent(q)}`);
     const items = snapshot.items || [];
     const accountById = new Map(ACCOUNTS.map(r => [Number(r.id), r]));
     const hasUnknown = items.some(item => !accountById.has(Number(item.id)));
@@ -3475,9 +3518,12 @@ async function pollAccountPlanStatuses() {
         const isExtracting = ['queued', 'running'].includes(item.extract_link_status);
         const wasAgenting = ['queued', 'running'].includes(account?.codex_agent_status);
         const isAgenting = ['queued', 'running'].includes(item.codex_agent_status);
+        const wasCheckouting = ['queued', 'running'].includes(account?.checkout_check_status);
+        const isCheckouting = ['queued', 'running'].includes(item.checkout_check_status);
         if (wasChecking && !isChecking) needsFullReload = true;
         if (wasExtracting && !isExtracting) needsFullReload = true;
         if (wasAgenting && !isAgenting) needsFullReload = true;
+        if (wasCheckouting && !isCheckouting) needsFullReload = true;
         Object.assign(account, item);
       });
       planStatusRevision = snapshot.revision || '';
@@ -3572,6 +3618,63 @@ function _planStatusMeta(r) {
   if (!label || !updated) return '';
   const text = `${label}|${_fmtPlanTime(updated)}`;
   return `<div class="acc-v2-sub" title="${esc(text)}">${esc(text)}</div>`;
+}
+function _checkoutStatusMeta(r) {
+  const labels = {
+    queued: '查询排队中',
+    running: '查询中',
+    success: '查询成功',
+    failed: '查询失败',
+  };
+  const status = String(r.checkout_check_status || '').toLowerCase();
+  const label = labels[status];
+  const updated = r.checkout_check_updated_at || r.checkout_session_last_success_at || '';
+  if (!label || !updated) return '';
+  const text = `${label}|${_fmtPlanTime(updated)}`;
+  return `<div class="acc-v2-sub" title="${esc(text)}">${esc(text)}</div>`;
+}
+function _checkoutSessionErrorTitle(r) {
+  const status = r.checkout_check_http_status !== undefined && r.checkout_check_http_status !== null && r.checkout_check_http_status !== ''
+    ? `HTTP ${r.checkout_check_http_status}` : '';
+  const code = r.checkout_check_error_code ? `错误码: ${r.checkout_check_error_code}` : '';
+  const message = r.checkout_check_error_message || r.checkout_check_error || r.checkout_check_message || '';
+  const transport = !status && message ? `传输错误: ${message}` : message;
+  return [status, code, transport].filter(Boolean).join('；') || '暂无 Checkout 检测详情';
+}
+function _checkoutSessionAction(r) {
+  const status = String(r.checkout_check_status || '').toLowerCase();
+  if (['queued', 'running'].includes(status)) {
+    const automatic = r.checkout_check_trigger === 'registration_auto';
+    const label = automatic ? (status === 'queued' ? '自动排队中…' : '自动检测中…') : (status === 'queued' ? '排队中…' : '检测中…');
+    return `<button type="button" data-checkout-session="${esc(r.id)}" disabled title="Checkout 检测正在执行，完成后可再次检测">${label}</button>`;
+  }
+  if (!r.has_access_token) {
+    return `<button type="button" disabled title="该账号没有 access_token">无AT</button>`;
+  }
+  const label = status === 'success' ? '重查' : '查类型';
+  return `<button type="button" data-checkout-session="${esc(r.id)}" title="只创建初始 Checkout Session 并识别类型">${label}</button>`;
+}
+function _checkoutSessionCell(r) {
+  const status = String(r.checkout_check_status || '').toLowerCase();
+  const type = ['oaics', 'cs_live', 'other_cs', 'unknown'].includes(String(r.checkout_session_type || '').toLowerCase())
+    ? String(r.checkout_session_type).toLowerCase() : '';
+  const wrap = main => `<div class="checkout-session-cell">${main}${_checkoutStatusMeta(r)}</div>`;
+  let main;
+  if (status === 'queued' || status === 'running') {
+    const automatic = r.checkout_check_trigger === 'registration_auto';
+    const label = automatic ? (status === 'queued' ? '自动检测排队中' : '自动检测中') : (status === 'queued' ? '检测排队中' : '检测中');
+    const stamp = status === 'queued' ? r.checkout_check_queued_at : r.checkout_check_started_at;
+    const detail = stamp ? `${label}；${status === 'queued' ? '入队' : '开始'}: ${stamp}` : label;
+    main = `<span class="pill status-running" title="${esc(detail)}">${esc(label)}</span>`;
+  } else if (status === 'success' && type) {
+    const detail = r.checkout_session_last_success_at ? `成功时间: ${r.checkout_session_last_success_at}` : 'Checkout Session 类型检测成功';
+    main = `<span class="pill status-success" title="${esc(detail)}">${esc(type)}</span>`;
+  } else if (status === 'failed') {
+    main = `<span class="pill status-failed" title="${esc(_checkoutSessionErrorTitle(r))}">检测失败</span>`;
+  } else {
+    main = `<span class="pill status-used" title="尚未检测 Checkout Session 类型">-</span>`;
+  }
+  return wrap(main);
 }
 function _planCell(r) {
   const ok = r.plan_check_ok;
@@ -3752,6 +3855,7 @@ function _accountsV2MoreMenu(r) {
     `<button type="button" onclick="checkSelectedLive([Number('${esc(r.id)}')], this); return false;" title="重新登录该账号，成功则刷新最新 AT/accessToken">查活刷新AT</button>`,
     `<button type="button" data-account-live-log="${esc(r.email)}" title="查看该账号最近一次查活日志">查活日志</button>`,
     _planAction(r),
+    _checkoutSessionAction(r),
     _extractLinkAction(r),
     _codexAction(r),
     `<button type="button" data-codex-log="${esc(r.email)}" title="查看该账号最近一次 Codex 补跑日志">补跑日志</button>`,
@@ -3795,6 +3899,7 @@ function renderAccounts() {
       <td class="col-source">${esc(r.email_source || '-')}</td>
       <td class="col-token">${_tokenCellV2(r)}</td>
       <td class="col-plan">${_planCell(r)}</td>
+      <td class="col-checkout">${_checkoutSessionCell(r)}</td>
       <td class="col-extract-link" data-label="提链">${_extractLinkCell(r) || '<span class="acc-v2-muted">-</span>'}</td>
       <td class="col-small">${r.totp_enabled ? '已启用' : '<span class="acc-v2-muted">未启用</span>'}</td>
       <td class="col-status">${_codexCellV2(r)}</td>
@@ -3814,7 +3919,7 @@ function renderAccounts() {
 
   const bodyV2 = $('#accountsBodyV2');
   if (bodyV2) {
-    bodyV2.innerHTML = rows.map(rowHtmlV2).join('') || '<tr><td colspan="13" style="text-align:center;color:#909399;padding:28px;">暂无账号</td></tr>';
+    bodyV2.innerHTML = rows.map(rowHtmlV2).join('') || '<tr><td colspan="14" style="text-align:center;color:#909399;padding:28px;">暂无账号</td></tr>';
   }
   updateAccountSelectionUi(rows);
   _renderPager('accounts', total);
@@ -3828,7 +3933,7 @@ function updateAccountSelectionUi(pageRows = null) {
   const archiveLabel = SHOW_ARCHIVED_ACCOUNTS ? '恢复选中' : '归档选中';
   const archiveTitle = SHOW_ARCHIVED_ACCOUNTS ? '把选中的归档账号恢复到默认账号列表' : '归档选中的账号；默认账号列表将不再查询/显示这些账号';
   const v2Ids = [
-    'btnCheckSelectedPlansV2', 'btnExtractSelectedLinksV2',
+    'btnCheckSelectedPlansV2', 'btnCheckSelectedCheckoutV2', 'btnExtractSelectedLinksV2',
     'btnGenerateSelectedAgentV2', 'btnDownloadSelectedAgentV2', 'btnUploadSelectedAgentSub2V2',
     'btnRetrySelectedCodexV2', 'btnDownloadSelectedCpaV2', 'btnStopSelectedCodexV2',
     'btnNoteSelectedAccountsV2', 'btnCopySelectedLinesV2', 'btnCopySelectedEmailsV2',
@@ -3956,6 +4061,12 @@ async function onAccountsBodyClick(e) {
   const planBtn = e.target.closest('[data-plan-check]');
   if (planBtn) {
     await checkOnePlan(Number(planBtn.dataset.planCheck), planBtn);
+    return;
+  }
+
+  const checkoutBtn = e.target.closest('[data-checkout-session]');
+  if (checkoutBtn) {
+    await checkOneCheckoutSession(Number(checkoutBtn.dataset.checkoutSession), checkoutBtn);
     return;
   }
 
@@ -4148,6 +4259,14 @@ async function applyAccountsCodexFilter(on) {
   await loadAccounts();
   await pollAccountPlanStatuses();
 }
+async function applyAccountsCheckoutTypeFilter(value) {
+  CHECKOUT_TYPE_FILTER = String(value || '').trim().toLowerCase();
+  ACCOUNT_SELECTED.clear();
+  PAGERS.accounts.page = 1;
+  planStatusRevision = '';
+  await loadAccounts();
+  await pollAccountPlanStatuses();
+}
 async function refreshAccountsList(btn) {
   if (!btn) return;
   const old = btn.textContent;
@@ -4185,6 +4304,10 @@ async function refreshAccountsList(btn) {
   const codexV2 = $('#showCodexSuccessOnlyV2');
   if (codexV2) codexV2.addEventListener('click', () => {
     applyAccountsCodexFilter(!SHOW_CODEX_SUCCESS_ONLY);
+  });
+  const checkoutTypeV2 = $('#checkoutTypeFilterV2');
+  if (checkoutTypeV2) checkoutTypeV2.addEventListener('change', () => {
+    applyAccountsCheckoutTypeFilter(checkoutTypeV2.value);
   });
   const refreshV2 = $('#btnRefreshAccountsV2');
   if (refreshV2) refreshV2.addEventListener('click', () => refreshAccountsList(refreshV2));
@@ -4480,6 +4603,26 @@ async function checkOnePlan(id, btn) {
   }
 }
 
+async function checkOneCheckoutSession(id, btn) {
+  btn.disabled = true;
+  const old = btn.textContent;
+  btn.textContent = '检测中…';
+  try {
+    const r = await api('/api/accounts/check-checkout-session', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({account_id: id}),
+    });
+    showToast(r.message || 'Checkout 类型检测已加入后台队列');
+    await pollAccountPlanStatuses();
+  } catch (err) {
+    showToast(err.message);
+    await pollAccountPlanStatuses();
+    btn.disabled = false;
+    btn.textContent = old;
+  }
+}
+
 async function extractOneLink(id, btn) {
   const acc = ACCOUNTS.find(a => Number(a.id) === Number(id));
   if (!acc) { showToast('账号不存在'); return; }
@@ -4721,6 +4864,34 @@ async function checkSelectedPlans() {
     updateAccountSelectionUi();
   } finally {
     btn.textContent = old;
+  }
+}
+
+async function checkSelectedCheckoutSessions() {
+  const ids = Array.from(ACCOUNT_SELECTED);
+  if (ids.length === 0) { showToast('请先选择账号'); return; }
+  const btn = $('#btnCheckSelectedCheckoutV2');
+  if (!btn) return;
+  btn.disabled = true;
+  const old = btn.textContent;
+  btn.textContent = '查询中…';
+  try {
+    const r = await api('/api/accounts/check-checkout-session-bulk', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({account_ids: ids}),
+    });
+    const failed = r.failed_count || 0;
+    const busy = r.busy_count || 0;
+    const skipped = r.skipped_count || 0;
+    showToast(`已入队 ${r.started_count || 0} 个，检测中跳过 ${busy} 个，跳过 ${skipped} 个，入队失败 ${failed} 个`);
+    await pollAccountPlanStatuses();
+  } catch(err) {
+    showToast('批量查 Checkout 类型失败: ' + err.message);
+    updateAccountSelectionUi();
+  } finally {
+    btn.textContent = old;
+    updateAccountSelectionUi();
   }
 }
 
@@ -5243,6 +5414,7 @@ async function copySelectedAccountTokens() {
     if (el) el.addEventListener('click', fn);
   };
   bind('btnCheckSelectedPlansV2', checkSelectedPlans);
+  bind('btnCheckSelectedCheckoutV2', checkSelectedCheckoutSessions);
   bind('btnExtractSelectedLinksV2', extractSelectedLinks);
   bind('btnGenerateSelectedAgentV2', generateSelectedCodexAgents);
   bind('btnDownloadSelectedAgentV2', downloadSelectedCodexAgents);
@@ -6491,6 +6663,14 @@ function smsbowerFieldChoices(key, currentValue) {
   return choices;
 }
 function configFieldChoices(key, currentValue) {
+  if (key === 'PLAN_CHECK_PROXY_MODE') {
+    return [
+      {value:'auto', label:'自动（专用代理优先）'},
+      {value:'proxy', label:'强制代理（专用代理优先）'},
+      {value:'pool', label:'强制代理池'},
+      {value:'direct', label:'强制直连'},
+    ];
+  }
   if (key === 'SMS_PROVIDER') {
     return [
       {value:'grizzly', label:'GrizzlySMS'},

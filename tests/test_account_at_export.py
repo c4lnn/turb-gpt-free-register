@@ -109,6 +109,17 @@ class AccountAtExportTests(unittest.TestCase):
         self.assertEqual(list_accounts_page.call_args.kwargs["codex_status_filter"], "success")
         self.assertEqual(list_accounts_page.call_args.kwargs["offset"], 20)
 
+    @patch("webui.app.db.list_accounts_page")
+    def test_account_list_passes_checkout_type_filter_before_pagination(self, list_accounts_page):
+        list_accounts_page.return_value = {"items": [], "total": 0}
+
+        response = self.client.get(
+            "/api/accounts?paged=1&page=1&page_size=20&checkout_type=cs_live"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(list_accounts_page.call_args.kwargs["checkout_type_filter"], "cs_live")
+
     @patch("webui.app.db.list_account_plan_check_statuses")
     def test_account_status_poll_uses_same_codex_filter(self, list_statuses):
         list_statuses.return_value = {"items": [], "total": 0, "revision": "0"}
@@ -119,6 +130,17 @@ class AccountAtExportTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(list_statuses.call_args.kwargs["codex_status_filter"], "success")
+
+    @patch("webui.app.db.list_account_plan_check_statuses")
+    def test_account_status_poll_uses_checkout_type_filter(self, list_statuses):
+        list_statuses.return_value = {"items": [], "total": 0, "revision": "0"}
+
+        response = self.client.get(
+            "/api/accounts/plan-check-status?page=1&page_size=20&checkout_type=unknown"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(list_statuses.call_args.kwargs["checkout_type_filter"], "unknown")
 
 
 if __name__ == "__main__":

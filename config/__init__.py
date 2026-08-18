@@ -106,6 +106,22 @@ from config.proxy import (
     PROXY,
 )
 
+# ---------- Checkout Session 检测 ----------
+from config.checkout_session import (
+    CHECKOUT_SESSION_AUTO_CHECK,
+    CHECKOUT_SESSION_PROXY_MODE,
+    CHECKOUT_SESSION_PROXY,
+    CHECKOUT_SESSION_BILLING_COUNTRY,
+    CHECKOUT_SESSION_BILLING_CURRENCY,
+    CHECKOUT_SESSION_TIMEOUT,
+    CHECKOUT_SESSION_MAX_ATTEMPTS,
+    CHECKOUT_SESSION_RETRY_DELAY,
+    CHECKOUT_SESSION_WORKERS,
+    CHECKOUT_SESSION_QUEUE_LIMIT,
+    CHECKOUT_SESSION_MIN_INTERVAL,
+    CHECKOUT_SESSION_JITTER,
+)
+
 # ---------- 注册默认信息 ----------
 from config.register import (
     REGISTER_EMAIL,
@@ -166,6 +182,7 @@ _RELOADABLE_SUBMODULES = (
     "config.browser",
     "config.openai_protocol",
     "config.proxy",
+    "config.checkout_session",
     "config.register",
     "config.email",
     "config.twofa",
@@ -207,9 +224,9 @@ def reload_all() -> list[str]:
 def _refresh_top_level_constants() -> None:
     """把刚 reload 的子模块的常量重新拷一份到 config 包顶层。"""
     import config as _self
-    from config import browser, openai_protocol, proxy as _proxy, register, email, twofa, roxybrowser, cloakbrowser, browser_use, skyvern, codex, extract_link, sub2api, humanize, flow_trigger
+    from config import browser, openai_protocol, proxy as _proxy, checkout_session, register, email, twofa, roxybrowser, cloakbrowser, browser_use, skyvern, codex, extract_link, sub2api, humanize, flow_trigger
     # 简单粗暴：枚举一遍重要常量，覆盖到 _self
-    for src in (browser, openai_protocol, _proxy, register, email, twofa, roxybrowser, cloakbrowser, browser_use, skyvern, codex, extract_link, sub2api, humanize, flow_trigger):
+    for src in (browser, openai_protocol, _proxy, checkout_session, register, email, twofa, roxybrowser, cloakbrowser, browser_use, skyvern, codex, extract_link, sub2api, humanize, flow_trigger):
         for k in dir(src):
             if k.isupper() or k in ("pick_proxy", "pick_browser_profile", "build_browser_environment", "validate_browser_profile"):
                 setattr(_self, k, getattr(src, k))
@@ -241,6 +258,12 @@ __all__ = [
     "PLAN_CHECK_TIMEOUT", "PLAN_CHECK_MAX_ATTEMPTS", "PLAN_CHECK_RETRY_DELAY",
     "PLAN_CHECK_REGISTRATION_RECHECK_DELAY", "PLAN_CHECK_WORKERS", "PLAN_CHECK_QUEUE_LIMIT",
     "PLAN_CHECK_MIN_INTERVAL", "PLAN_CHECK_JITTER", "pick_proxy", "PROXY",
+    # checkout session
+    "CHECKOUT_SESSION_AUTO_CHECK", "CHECKOUT_SESSION_PROXY_MODE", "CHECKOUT_SESSION_PROXY",
+    "CHECKOUT_SESSION_BILLING_COUNTRY", "CHECKOUT_SESSION_BILLING_CURRENCY",
+    "CHECKOUT_SESSION_TIMEOUT", "CHECKOUT_SESSION_MAX_ATTEMPTS", "CHECKOUT_SESSION_RETRY_DELAY",
+    "CHECKOUT_SESSION_WORKERS", "CHECKOUT_SESSION_QUEUE_LIMIT",
+    "CHECKOUT_SESSION_MIN_INTERVAL", "CHECKOUT_SESSION_JITTER",
     # register
     "REGISTER_EMAIL", "REGISTER_PASSWORD", "REGISTER_NAME",
     # email

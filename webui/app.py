@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 
 from flask import Flask, Response, jsonify, render_template, request
 
-from core import codex_retry_service, db, plan_check_service, extract_link_service, codex_agent_service, live_check_service, masi_cdk_pool
+from core import codex_retry_service, db, plan_check_service, checkout_session_service, extract_link_service, codex_agent_service, live_check_service, masi_cdk_pool
 from webui.auth import init_auth, register_auth_routes
 from core import registration_service as svc
 from webui import config_editor
@@ -100,6 +100,7 @@ def _compact_account_for_list(row: dict) -> dict:
         "user_name", "email_source", "note", "archived", "created_at",
         "plan_type", "current_plan_type", "plus_trial_eligible",
         "plan_check_status", "codex_status", "codex_agent_status",
+        "checkout_check_status", "checkout_session_type",
     ):
         if key in row:
             out[key] = row.get(key)
@@ -115,6 +116,15 @@ def _compact_account_for_list(row: dict) -> dict:
         "billing_period", "billing_currency", "discount_amount", "discount_type",
         "discount_expires_at", "discount_promo_campaign_id",
         "token_expired", "token_expires_at",
+        # Checkout 类型检测仅返回状态/脱敏诊断，不返回完整 Session ID。
+        "checkout_check_ok", "checkout_check_trigger", "checkout_check_queued_at",
+        "checkout_check_started_at", "checkout_check_completed_at", "checkout_check_updated_at",
+        "checkout_check_checked_at", "checkout_check_http_status", "checkout_check_error_code",
+        "checkout_check_error_message", "checkout_check_error", "checkout_check_message",
+        "checkout_check_attempt_count", "checkout_check_max_attempts", "checkout_check_request_timeout",
+        "checkout_check_network_route", "checkout_check_proxy_mode", "checkout_check_proxy_used",
+        "checkout_check_retryable", "checkout_check_content_type", "checkout_check_response_bytes",
+        "checkout_check_retry_after_seconds", "checkout_session_last_success_at",
         # 查活状态。
         "live_check_status", "live_check_error", "live_checked_at",
         # 提链成功/失败时才需要。
@@ -153,6 +163,15 @@ def _account_secret_value(row: dict, field: str) -> str:
     if field == "codex_agent_token":
         return str(row.get("codex_agent_token") or "")
     raise ValueError("field 仅支持 access_token/email_access_token/copy_line/codex_agent_token")
+
+
+def _safe_checkout_queue_result(result: dict) -> dict:
+    """过滤 Checkout 入队结果中的服务端敏感字段。"""
+    return {
+        key: value
+        for key, value in result.items()
+        if key not in {"proxy", "access_token", "checkout_session_id"}
+    }
 
 
 def _compact_job_for_list(row: dict) -> dict:
@@ -238,6 +257,9 @@ def create_app(auth_code: str | None = None) -> Flask:
     recovered_plan_checks = db.recover_interrupted_plan_checks()
     if recovered_plan_checks:
         logger.warning("已恢复 %s 个因 WebUI 重启中断的套餐查询状态", recovered_plan_checks)
+    recovered_checkout_sessions = db.recover_interrupted_checkout_sessions()
+    if recovered_checkout_sessions:
+        logger.warning("已恢复 %s 个因 WebUI 重启中断的 Checkout 检测状态", recovered_checkout_sessions)
     recovered_extract_links = db.recover_interrupted_extract_links()
     if recovered_extract_links:
         logger.warning("已恢复 %s 个因 WebUI 重启中断的提链状态", recovered_extract_links)
@@ -296,6 +318,7 @@ def create_app(auth_code: str | None = None) -> Flask:
         archived = str(request.args.get("archived", default="0") or "0").lower()
         plan_filter = str(request.args.get("plan", default="") or "").lower()
         codex_status_filter = str(request.args.get("codex_status", default="") or "").lower()
+        checkout_type_filter = str(request.args.get("checkout_type", default="") or "").lower()
         q = str(request.args.get("q", default="") or "").strip()
         date_from = str(request.args.get("date_from", default="") or "").strip() or None
         date_to = str(request.args.get("date_to", default="") or "").strip() or None
@@ -316,11 +339,12 @@ def create_app(auth_code: str | None = None) -> Flask:
                 codex_status_filter=codex_status_filter,
                 date_from=date_from,
                 date_to=date_to,
+                checkout_type_filter=checkout_type_filter,
             )
             result["items"] = [_compact_account_for_list(r) for r in (result.get("items") or [])]
             result.update({"ok": True, "page": page, "page_size": page_size, "compact": True})
             return jsonify(result)
-        return jsonify(db.list_accounts(
+        rows = db.list_accounts(
             limit=limit,
             archived=archived,
             plan_filter=plan_filter,
@@ -328,7 +352,9 @@ def create_app(auth_code: str | None = None) -> Flask:
             codex_status_filter=codex_status_filter,
             date_from=date_from,
             date_to=date_to,
-        ))
+            checkout_type_filter=checkout_type_filter,
+        )
+        return jsonify([_compact_account_for_list(row) for row in rows])
 
     @app.get("/api/accounts/plan-check-status")
     def api_account_plan_check_status():
@@ -337,6 +363,7 @@ def create_app(auth_code: str | None = None) -> Flask:
         archived = str(request.args.get("archived", default="0") or "0").lower()
         plan_filter = str(request.args.get("plan", default="") or "").lower()
         codex_status_filter = str(request.args.get("codex_status", default="") or "").lower()
+        checkout_type_filter = str(request.args.get("checkout_type", default="") or "").lower()
         q = str(request.args.get("q", default="") or "").strip()
         page_arg = request.args.get("page", default=None, type=int)
         page_size_arg = request.args.get("page_size", default=None, type=int)
@@ -351,6 +378,7 @@ def create_app(auth_code: str | None = None) -> Flask:
                 plan_filter=plan_filter,
                 q=q,
                 codex_status_filter=codex_status_filter,
+                checkout_type_filter=checkout_type_filter,
             )
             snapshot.update({"page": page, "page_size": page_size})
         else:
@@ -360,9 +388,113 @@ def create_app(auth_code: str | None = None) -> Flask:
                 plan_filter=plan_filter,
                 q=q,
                 codex_status_filter=codex_status_filter,
+                checkout_type_filter=checkout_type_filter,
             )
         snapshot["queue"] = plan_check_service.queue_settings()
+        snapshot["checkout_queue"] = checkout_session_service.queue_settings()
         return jsonify(snapshot)
+
+
+    @app.post("/api/accounts/check-checkout-session")
+    @app.post("/api/accounts/check-checkout")
+    def api_account_check_checkout_session():
+        """把单账号初始 Checkout Session 类型检测加入独立队列。"""
+        data = request.get_json(silent=True) or {}
+        acc_id = data.get("account_id") or data.get("id")
+        email = str(data.get("email") or "").strip()
+        acc = None
+        if acc_id is not None:
+            try:
+                acc = db.get_account(int(acc_id))
+            except (TypeError, ValueError):
+                acc = None
+        if acc is None and email:
+            acc = db.get_account_by_email(email)
+        if not acc:
+            return jsonify({"ok": False, "error": "账号不存在"}), 404
+        token = str(acc.get("access_token") or "").strip()
+        if not token:
+            return jsonify({"ok": False, "error": "该账号没有 access_token"}), 400
+        queued = checkout_session_service.enqueue_checkout_session_check(
+            account_id=int(acc.get("id")),
+            email=str(acc.get("email") or ""),
+            access_token=token,
+            trigger="manual",
+        )
+        safe = _safe_checkout_queue_result(queued)
+        if safe.get("busy"):
+            return jsonify({"ok": False, **safe}), 409
+        if not safe.get("accepted"):
+            status = 400 if safe.get("config_error") else 503
+            return jsonify({"ok": False, **safe}), status
+        return jsonify({"ok": True, "started": True, **safe}), 202
+
+
+    @app.post("/api/accounts/check-checkout-session-bulk")
+    @app.post("/api/accounts/check-checkout-bulk")
+    def api_accounts_check_checkout_session_bulk():
+        """批量把 Checkout Session 类型检测加入独立队列。"""
+        data = request.get_json(silent=True) or {}
+        ids = data.get("account_ids") or data.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            return jsonify({"ok": False, "error": "account_ids 必须是非空数组"}), 400
+        if len(ids) > 500:
+            return jsonify({"ok": False, "error": "单次最多查询 500 个账号"}), 400
+
+        items = []
+        skipped = []
+        seen = set()
+        for raw in ids:
+            try:
+                acc_id = int(raw)
+            except (TypeError, ValueError):
+                skipped.append({"id": raw, "reason": "ID 非法"})
+                continue
+            if acc_id in seen:
+                continue
+            seen.add(acc_id)
+            acc = db.get_account(acc_id)
+            if not acc:
+                skipped.append({"id": acc_id, "reason": "账号不存在"})
+                continue
+            token = str(acc.get("access_token") or "").strip()
+            if not token:
+                skipped.append({"id": acc_id, "email": acc.get("email"), "reason": "缺少 access_token"})
+                continue
+            items.append((acc, token))
+
+        started = []
+        busy = []
+        failed = []
+        for acc, token in items:
+            acc_id = int(acc.get("id"))
+            queued = checkout_session_service.enqueue_checkout_session_check(
+                account_id=acc_id,
+                email=acc.get("email") or "",
+                access_token=token,
+                trigger="manual_bulk",
+            )
+            safe = _safe_checkout_queue_result(queued)
+            item = {"id": acc_id, "email": acc.get("email"), **safe}
+            if safe.get("accepted"):
+                started.append(item)
+            elif safe.get("busy"):
+                busy.append(item)
+            else:
+                failed.append(item)
+
+        return jsonify({
+            "ok": True,
+            "started": started,
+            "started_count": len(started),
+            "busy": busy,
+            "busy_count": len(busy),
+            "failed": failed,
+            "failed_count": len(failed),
+            "skipped": skipped,
+            "skipped_count": len(skipped),
+            "queue": checkout_session_service.queue_settings(),
+        }), 202
 
 
     @app.get("/api/accounts/<int:acc_id>/secret")
@@ -2792,6 +2924,17 @@ def create_app(auth_code: str | None = None) -> Flask:
         updates = data.get("updates") if isinstance(data.get("updates"), dict) else data
         if not isinstance(updates, dict) or not updates:
             return jsonify({"ok": False, "error": "无更新内容"}), 400
+        if "PLAN_CHECK_PROXY_MODE" in updates:
+            from core.chatgpt_plan import PLAN_CHECK_PROXY_MODES
+
+            mode = str(updates.get("PLAN_CHECK_PROXY_MODE") or "").strip().lower()
+            if mode not in PLAN_CHECK_PROXY_MODES:
+                choices = " / ".join(("auto", "proxy", "pool", "direct"))
+                return jsonify({
+                    "ok": False,
+                    "error": f"ValueError: PLAN_CHECK_PROXY_MODE={mode!r} 无效，可选 {choices}",
+                }), 400
+            updates["PLAN_CHECK_PROXY_MODE"] = mode
         if any(key in updates for key in ("EXTRACT_LINK_PROVIDER", "EXTRACT_LINK_TYPE", "EXTRACT_LINK_UPDATE_MODE")):
             from config import extract_link as _extract_cfg
             try:
@@ -2827,6 +2970,37 @@ def create_app(auth_code: str | None = None) -> Flask:
                 validate_config_values(merged, require_required=provider == "smsbower")
             except (ValueError, SmsProviderError) as exc:
                 return jsonify({"ok": False, "error": f"ValueError: {exc}"}), 400
+        checkout_keys = {
+            "CHECKOUT_SESSION_AUTO_CHECK", "CHECKOUT_SESSION_PROXY_MODE", "CHECKOUT_SESSION_PROXY",
+            "CHECKOUT_SESSION_BILLING_COUNTRY", "CHECKOUT_SESSION_BILLING_CURRENCY",
+            "CHECKOUT_SESSION_TIMEOUT", "CHECKOUT_SESSION_MAX_ATTEMPTS", "CHECKOUT_SESSION_RETRY_DELAY",
+            "CHECKOUT_SESSION_WORKERS", "CHECKOUT_SESSION_QUEUE_LIMIT",
+            "CHECKOUT_SESSION_MIN_INTERVAL", "CHECKOUT_SESSION_JITTER",
+        }
+        if checkout_keys.intersection(updates):
+            from core.chatgpt_checkout import checkout_settings_from_config, validate_checkout_config_values
+
+            current_checkout = checkout_settings_from_config()
+            merged_checkout = {
+                "CHECKOUT_SESSION_PROXY_MODE": current_checkout.proxy_mode,
+                "CHECKOUT_SESSION_PROXY": current_checkout.proxy,
+                "CHECKOUT_SESSION_BILLING_COUNTRY": current_checkout.billing_country,
+                "CHECKOUT_SESSION_BILLING_CURRENCY": current_checkout.billing_currency,
+                "CHECKOUT_SESSION_TIMEOUT": current_checkout.timeout,
+                "CHECKOUT_SESSION_MAX_ATTEMPTS": current_checkout.max_attempts,
+                "CHECKOUT_SESSION_RETRY_DELAY": current_checkout.retry_delay,
+                "CHECKOUT_SESSION_WORKERS": current_checkout.workers,
+                "CHECKOUT_SESSION_QUEUE_LIMIT": current_checkout.queue_limit,
+                "CHECKOUT_SESSION_MIN_INTERVAL": current_checkout.min_interval,
+                "CHECKOUT_SESSION_JITTER": current_checkout.jitter,
+            }
+            merged_checkout.update({key: value for key, value in updates.items() if key in checkout_keys})
+            # secret 字段的空提交由 config_editor 保留旧值，校验时也沿用旧值。
+            if "CHECKOUT_SESSION_PROXY" in updates and not str(updates.get("CHECKOUT_SESSION_PROXY") or "").strip():
+                merged_checkout["CHECKOUT_SESSION_PROXY"] = current_checkout.proxy
+            checkout_errors = validate_checkout_config_values(merged_checkout, require_request_values=False)
+            if checkout_errors:
+                return jsonify({"ok": False, "error": "ValueError: " + "；".join(checkout_errors)}), 400
         try:
             result = config_editor.update_config(updates)
         except ValueError as exc:

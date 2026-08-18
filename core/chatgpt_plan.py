@@ -17,6 +17,13 @@ from core.session import BrowserSession
 logger = logging.getLogger(__name__)
 
 ACCOUNTS_CHECK_PATH = "/backend-api/accounts/check/v4-2023-04-27"
+PLAN_CHECK_PROXY_MODES = frozenset({"auto", "proxy", "pool", "direct"})
+_PUBLIC_ROUTE_META_KEYS = (
+    "proxy_mode",
+    "network_route",
+    "proxy_used",
+    "proxy_fallback_reason",
+)
 
 
 def now_iso() -> str:
@@ -75,6 +82,11 @@ def _local_proxy_status(proxy: str) -> tuple[bool, bool, str | None]:
         return False, False, f"代理地址解析失败（{type(exc).__name__}）"
 
 
+def plan_check_route_metadata(route: dict) -> dict:
+    """返回可落库或公开的套餐网络诊断字段。"""
+    return {key: route.get(key) for key in _PUBLIC_ROUTE_META_KEYS}
+
+
 def resolve_plan_check_route(explicit_proxy: Optional[str] = None) -> dict:
     """解析套餐查询的实际网络路径。
 
@@ -88,13 +100,15 @@ def resolve_plan_check_route(explicit_proxy: Optional[str] = None) -> dict:
             "network_route": "proxy" if selected else "direct",
             "proxy_used": _mask_proxy(selected) or None,
             "proxy_fallback_reason": None,
+            "allow_direct_fallback": bool(selected),
         }
 
     from config import proxy as proxy_cfg
 
     mode = str(getattr(proxy_cfg, "PLAN_CHECK_PROXY_MODE", "auto") or "auto").strip().lower()
-    if mode not in {"auto", "proxy", "direct"}:
-        raise ValueError(f"PLAN_CHECK_PROXY_MODE={mode!r} 无效，可选 auto / proxy / direct")
+    if mode not in PLAN_CHECK_PROXY_MODES:
+        choices = " / ".join(("auto", "proxy", "pool", "direct"))
+        raise ValueError(f"PLAN_CHECK_PROXY_MODE={mode!r} 无效，可选 {choices}")
     if mode == "direct":
         return {
             "proxy": "",
@@ -102,11 +116,17 @@ def resolve_plan_check_route(explicit_proxy: Optional[str] = None) -> dict:
             "network_route": "direct",
             "proxy_used": None,
             "proxy_fallback_reason": None,
+            "allow_direct_fallback": False,
         }
 
-    selected = str(getattr(proxy_cfg, "PLAN_CHECK_PROXY", "") or "").strip()
-    if not selected:
+    if mode == "pool":
         selected = str(proxy_cfg.pick_proxy() or "").strip()
+        if not selected:
+            raise ValueError("套餐查询网络模式为 pool，但 PROXY_POOL 为空")
+    else:
+        selected = str(getattr(proxy_cfg, "PLAN_CHECK_PROXY", "") or "").strip()
+        if not selected:
+            selected = str(proxy_cfg.pick_proxy() or "").strip()
     if not selected:
         if mode == "proxy":
             raise ValueError("套餐查询网络模式为 proxy，但未配置 PLAN_CHECK_PROXY 或 PROXY_POOL")
@@ -116,6 +136,7 @@ def resolve_plan_check_route(explicit_proxy: Optional[str] = None) -> dict:
             "network_route": "direct",
             "proxy_used": None,
             "proxy_fallback_reason": "未配置套餐查询代理或代理池",
+            "allow_direct_fallback": False,
         }
 
     is_local, available, reason = _local_proxy_status(selected)
@@ -126,6 +147,7 @@ def resolve_plan_check_route(explicit_proxy: Optional[str] = None) -> dict:
             "network_route": "direct_fallback",
             "proxy_used": _mask_proxy(selected),
             "proxy_fallback_reason": reason,
+            "allow_direct_fallback": False,
         }
     return {
         "proxy": selected,
@@ -133,6 +155,7 @@ def resolve_plan_check_route(explicit_proxy: Optional[str] = None) -> dict:
         "network_route": "proxy",
         "proxy_used": _mask_proxy(selected),
         "proxy_fallback_reason": None,
+        "allow_direct_fallback": mode != "pool",
     }
 
 
@@ -339,7 +362,7 @@ def check_account_plan(
             "error": f"套餐查询网络配置错误: {exc}",
             **{k: v for k, v in claims.items() if k != "payload"},
         }
-    route_meta = {k: v for k, v in route.items() if k != "proxy"}
+    route_meta = plan_check_route_metadata(route)
     url = f"https://chatgpt.com{ACCOUNTS_CHECK_PATH}?timezone_offset_min={quote(str(timezone_offset_min))}"
     try:
         timeout_seconds, attempts, base_delay = _plan_check_settings(timeout, max_attempts, retry_delay)

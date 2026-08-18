@@ -23,10 +23,12 @@ PROXY_POOL = [
 # 避免批量请求被注册代理池中的临时本地代理拖垮，也避免无条件直连造成出口策略失控。
 #   auto   = 优先使用 PLAN_CHECK_PROXY 或代理池；本地代理端口未监听时回退直连
 #   proxy  = 强制使用 PLAN_CHECK_PROXY 或代理池，失败直接报错
+#   pool   = 仅从 PROXY_POOL 选择，忽略 PLAN_CHECK_PROXY，失败时不回退直连
 #   direct = 始终直连
 PLAN_CHECK_PROXY_MODE = "auto"
 
-# 套餐查询 / Codex Agent Token 生成专用代理。留空时 auto/proxy 模式从 PROXY_POOL 选择。
+# 套餐查询 / Codex Agent Token 生成专用代理。留空时 auto/proxy 模式从 PROXY_POOL 选择；
+# pool 模式保留该值但不使用。
 # 代理可能包含账号密码，因此 WebUI 会把它保存到 .env。
 PLAN_CHECK_PROXY = ""
 

@@ -120,13 +120,13 @@ def _run_generate(*, account_id: int, email: str, access_token: str, trigger: st
         _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         output_path = _OUTPUT_DIR / f"codex-agent-{_safe_email_filename(email)}.json"
         from core.codex_agent import create_codex_agent_identity
-        from core.chatgpt_plan import resolve_plan_check_route
+        from core.chatgpt_plan import plan_check_route_metadata, resolve_plan_check_route
         from core.session import BrowserSession
 
         # 和查套餐一致解析网络路径；每个账号独立创建 BrowserSession，
         # 从而得到独立 oai-did / oai-session-id / Datadog trace / 浏览器画像 / 代理出口。
         route = resolve_plan_check_route(None)
-        route_meta = {k: v for k, v in route.items() if k != "proxy"}
+        route_meta = plan_check_route_metadata(route)
         timeout_seconds, attempts, retry_delay = _agent_request_settings()
         last_exc: Exception | None = None
         auth_json = None
