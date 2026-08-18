@@ -11,6 +11,7 @@
 """
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import threading
@@ -19,6 +20,8 @@ from datetime import datetime
 from html import escape
 from pathlib import Path
 from typing import Any
+
+from core.sqlite_store import SQLiteRuntimeStore
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _DATA_DIR = _PROJECT_ROOT
@@ -38,6 +41,7 @@ _ACCOUNTS_JSON = _PROJECT_ROOT / "注册成功的邮箱.json"
 _ACCOUNTS_TXT = _PROJECT_ROOT / "注册成功的邮箱.txt"
 _TOKENS_TXT = _PROJECT_ROOT / "注册成功的token.txt"
 _JOBS_JSON = _PROJECT_ROOT / "注册任务.json"
+_RUNTIME_DB = _PROJECT_ROOT / "runtime.db"
 _VIEWER_HTML = _PROJECT_ROOT / "accounts_viewer.html"
 _CODEX_DIR = _PROJECT_ROOT / "codex_accounts"
 # 导出状态单独存：{ "codex-邮箱-plan.json": {"exported_at": "...", "exported_count": N} }
@@ -49,6 +53,29 @@ _LEGACY_OUTLOOK_JSON = _LEGACY_DATA_DIR / "outlook_accounts.json"
 _LEGACY_ACCOUNTS_JSON = _LEGACY_DATA_DIR / "registered_accounts.json"
 _LEGACY_JOBS_JSON = _LEGACY_DATA_DIR / "registration_jobs.json"
 _LOCK = threading.RLock()
+_SQLITE_STORE = SQLiteRuntimeStore(_RUNTIME_DB)
+_SQLITE_PATH_BINDINGS = {
+    "_OUTLOOK_JSON": _OUTLOOK_JSON,
+    "_GENERIC_API_EMAIL_JSON": _GENERIC_API_EMAIL_JSON,
+    "_ICLOUD_EMAIL_JSON": _ICLOUD_EMAIL_JSON,
+    "_ACCOUNTS_JSON": _ACCOUNTS_JSON,
+    "_JOBS_JSON": _JOBS_JSON,
+    "_DOMAIN_EMAIL_JSON": _PROJECT_ROOT / "用于注册的域名邮箱.json",
+}
+
+
+def _sqlite_enabled() -> bool:
+    backend = str(os.environ.get("RUNTIME_STORAGE_BACKEND") or "").strip().lower()
+    return backend == "sqlite" and _RUNTIME_DB.exists() and all(
+        globals().get(name, expected) == expected
+        for name, expected in _SQLITE_PATH_BINDINGS.items()
+    )
+
+
+def validate_runtime_storage() -> None:
+    """启动时验证 SQLite；损坏时禁止静默降级到空文件数据。"""
+    if _sqlite_enabled():
+        _SQLITE_STORE.integrity_check()
 
 
 def _now() -> str:
@@ -77,6 +104,15 @@ def _write_json(path: Path, data: Any) -> None:
         json.dumps(data, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    json.loads(tmp.read_text(encoding="utf-8"))
+    tmp.replace(path)
+
+
+def _write_text_atomic(path: Path, text: str) -> None:
+    _ensure_storage()
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.read_text(encoding="utf-8")
     tmp.replace(path)
 
 
@@ -116,18 +152,18 @@ def _registered_email_line(row: dict) -> str:
 def _sync_outlook_txt(rows: list[dict]) -> None:
     available_rows = [r for r in rows if r.get("status") == "available"]
     lines = [_outlook_line(r) for r in sorted(available_rows, key=lambda x: int(x.get("id") or 0))]
-    _OUTLOOK_TXT.write_text(("\n".join(lines) + ("\n" if lines else "")), encoding="utf-8")
+    _write_text_atomic(_OUTLOOK_TXT, "\n".join(lines) + ("\n" if lines else ""))
 
 
 def _sync_generic_api_email_txt(rows: list[dict]) -> None:
     available_rows = [r for r in rows if r.get("status") == "available"]
     lines = [_generic_api_email_line(r) for r in sorted(available_rows, key=lambda x: int(x.get("id") or 0))]
-    _GENERIC_API_EMAIL_TXT.write_text(("\n".join(lines) + ("\n" if lines else "")), encoding="utf-8")
+    _write_text_atomic(_GENERIC_API_EMAIL_TXT, "\n".join(lines) + ("\n" if lines else ""))
 
 
 def _sync_accounts_txt(rows: list[dict]) -> None:
     lines = [_registered_email_line(r) for r in sorted(rows, key=lambda x: int(x.get("id") or 0))]
-    _ACCOUNTS_TXT.write_text(("\n".join(lines) + ("\n" if lines else "")), encoding="utf-8")
+    _write_text_atomic(_ACCOUNTS_TXT, "\n".join(lines) + ("\n" if lines else ""))
 
 
 def _sync_tokens_txt(rows: list[dict]) -> None:
@@ -136,7 +172,7 @@ def _sync_tokens_txt(rows: list[dict]) -> None:
         for r in sorted(rows, key=lambda x: int(x.get("id") or 0))
         if r.get("access_token")
     ]
-    _TOKENS_TXT.write_text(("\n".join(tokens) + ("\n" if tokens else "")), encoding="utf-8")
+    _write_text_atomic(_TOKENS_TXT, "\n".join(tokens) + ("\n" if tokens else ""))
 
 
 def _viewer_snapshot(outlook_rows: list[dict], account_rows: list[dict]) -> dict:
@@ -463,6 +499,8 @@ render();
 
 
 def _load_outlook() -> list[dict]:
+    if _sqlite_enabled():
+        return _SQLITE_STORE.load("outlook_emails")
     rows = _read_json(_OUTLOOK_JSON, None)
     if not isinstance(rows, list):
         rows = _read_json(_LEGACY_OUTLOOK_JSON, [])
@@ -470,12 +508,17 @@ def _load_outlook() -> list[dict]:
 
 
 def _save_outlook(rows: list[dict]) -> None:
-    _write_json(_OUTLOOK_JSON, rows)
+    if _sqlite_enabled():
+        _SQLITE_STORE.replace_all("outlook_emails", rows)
+    else:
+        _write_json(_OUTLOOK_JSON, rows)
     _sync_outlook_txt(rows)
     _render_static_viewer(outlook_rows=rows)
 
 
 def _load_generic_api_emails() -> list[dict]:
+    if _sqlite_enabled():
+        return _SQLITE_STORE.load("generic_api_emails")
     rows = _read_json(_GENERIC_API_EMAIL_JSON, [])
     return rows if isinstance(rows, list) else []
 
@@ -483,11 +526,16 @@ def _load_generic_api_emails() -> list[dict]:
 def _save_generic_api_emails(rows: list[dict]) -> None:
     for row in rows:
         row["copy_line"] = _generic_api_email_line(row)
-    _write_json(_GENERIC_API_EMAIL_JSON, rows)
+    if _sqlite_enabled():
+        _SQLITE_STORE.replace_all("generic_api_emails", rows)
+    else:
+        _write_json(_GENERIC_API_EMAIL_JSON, rows)
     _sync_generic_api_email_txt(rows)
 
 
 def _load_accounts() -> list[dict]:
+    if _sqlite_enabled():
+        return _SQLITE_STORE.load("accounts")
     rows = _read_json(_ACCOUNTS_JSON, None)
     if not isinstance(rows, list):
         rows = _read_json(_LEGACY_ACCOUNTS_JSON, [])
@@ -497,13 +545,18 @@ def _load_accounts() -> list[dict]:
 def _save_accounts(rows: list[dict]) -> None:
     for row in rows:
         row["copy_line"] = _account_line(row)
-    _write_json(_ACCOUNTS_JSON, rows)
+    if _sqlite_enabled():
+        _SQLITE_STORE.replace_all("accounts", rows)
+    else:
+        _write_json(_ACCOUNTS_JSON, rows)
     _sync_accounts_txt(rows)
     _sync_tokens_txt(rows)
     _render_static_viewer(account_rows=rows)
 
 
 def _load_jobs() -> list[dict]:
+    if _sqlite_enabled():
+        return _SQLITE_STORE.load("jobs")
     rows = _read_json(_JOBS_JSON, None)
     if not isinstance(rows, list):
         rows = _read_json(_LEGACY_JOBS_JSON, [])
@@ -511,7 +564,36 @@ def _load_jobs() -> list[dict]:
 
 
 def _save_jobs(rows: list[dict]) -> None:
-    _write_json(_JOBS_JSON, rows)
+    if _sqlite_enabled():
+        _SQLITE_STORE.replace_all("jobs", rows)
+    else:
+        _write_json(_JOBS_JSON, rows)
+
+
+def _save_accounts_with_pool(accounts: list[dict], pool_kind: str, pool_rows: list[dict]) -> None:
+    """在 SQLite 中原子提交账号与邮箱池；旧存储保持原有兼容路径。"""
+    if not _sqlite_enabled():
+        _save_accounts(accounts)
+        if pool_kind == "outlook_emails":
+            _save_outlook(pool_rows)
+        elif pool_kind == "generic_api_emails":
+            _save_generic_api_emails(pool_rows)
+        elif pool_kind == "icloud_emails":
+            _save_icloud_emails(pool_rows)
+        return
+    for row in accounts:
+        row["copy_line"] = _account_line(row)
+    if pool_kind == "generic_api_emails":
+        for row in pool_rows:
+            row["copy_line"] = _generic_api_email_line(row)
+    _SQLITE_STORE.replace_many({"accounts": accounts, pool_kind: pool_rows})
+    _sync_accounts_txt(accounts)
+    _sync_tokens_txt(accounts)
+    if pool_kind == "outlook_emails":
+        _sync_outlook_txt(pool_rows)
+        _render_static_viewer(outlook_rows=pool_rows, account_rows=accounts)
+    elif pool_kind == "generic_api_emails":
+        _sync_generic_api_email_txt(pool_rows)
 
 
 def _find_by_email(rows: list[dict], email: str) -> dict | None:
@@ -733,8 +815,7 @@ def insert_account(
                 outlook_row["totp_secret"] = totp_secret
 
         row["copy_line"] = _account_line(row)
-        _save_accounts(accounts)
-        _save_outlook(outlook_rows)
+        _save_accounts_with_pool(accounts, "outlook_emails", outlook_rows)
         return row_id
 
 
@@ -2140,12 +2221,11 @@ def import_registered_email_accounts(records: list[dict], source: str | None) ->
             inserted += 1
 
         if source == "outlook":
-            _save_outlook(outlook_rows)
+            _save_accounts_with_pool(accounts, "outlook_emails", outlook_rows)
         elif source == "generic_api":
-            _save_generic_api_emails(generic_rows)
+            _save_accounts_with_pool(accounts, "generic_api_emails", generic_rows)
         else:
-            _save_icloud_emails(icloud_rows)
-        _save_accounts(accounts)
+            _save_accounts_with_pool(accounts, "icloud_emails", icloud_rows)
         return inserted, skipped
 
 
@@ -2887,6 +2967,7 @@ def db_path() -> Path:
 
 def storage_paths() -> dict:
     return {
+        "runtime_db": str(_RUNTIME_DB),
         "outlook_json": str(_OUTLOOK_JSON),
         "outlook_txt": str(_OUTLOOK_TXT),
         "accounts_json": str(_ACCOUNTS_JSON),
@@ -2896,6 +2977,48 @@ def storage_paths() -> dict:
         "jobs_json": str(_JOBS_JSON),
         "logs_dir": str(_LOG_DIR),
     }
+
+
+def export_runtime_snapshots() -> dict[str, str]:
+    """从 SQLite 权威源原子重建兼容 JSON/TXT/HTML 快照。"""
+    if not _sqlite_enabled():
+        raise RuntimeError("SQLite 运行时存储尚未启用")
+    with _LOCK:
+        accounts = _load_accounts()
+        jobs = _load_jobs()
+        outlook = _load_outlook()
+        generic = _load_generic_api_emails()
+        icloud = _load_icloud_emails()
+        domain = _load_domain_pool()
+        _write_json(_ACCOUNTS_JSON, accounts)
+        _write_json(_JOBS_JSON, jobs)
+        _write_json(_OUTLOOK_JSON, outlook)
+        _write_json(_GENERIC_API_EMAIL_JSON, generic)
+        _write_json(_ICLOUD_EMAIL_JSON, icloud)
+        _write_json(_DOMAIN_EMAIL_JSON, domain)
+        _sync_outlook_txt(outlook)
+        _sync_generic_api_email_txt(generic)
+        _sync_accounts_txt(accounts)
+        _sync_tokens_txt(accounts)
+        viewer = _render_static_viewer(outlook_rows=outlook, account_rows=accounts)
+        return {"viewer_html": str(viewer), "runtime_db": str(_RUNTIME_DB)}
+
+
+def create_runtime_backup(directory: str | Path | None = None, *, keep: int = 7) -> Path:
+    """创建经完整性校验的 SQLite 备份并滚动保留。"""
+    if not _sqlite_enabled():
+        raise RuntimeError("SQLite 运行时存储尚未启用")
+    backup_dir = Path(directory) if directory else (_PROJECT_ROOT / "runtime_backups")
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    probe = backup_dir / ".write-probe"
+    probe.write_text("ok", encoding="ascii")
+    probe.unlink()
+    destination = backup_dir / f"runtime-{datetime.now().strftime('%Y%m%d-%H%M%S')}.db"
+    _SQLITE_STORE.backup(destination)
+    backups = sorted(backup_dir.glob("runtime-*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for expired in backups[max(1, int(keep)):]:
+        expired.unlink()
+    return destination
 
 
 def refresh_static_viewer() -> Path:
@@ -2917,12 +3040,17 @@ _DOMAIN_EMAIL_JSON = _PROJECT_ROOT / "用于注册的域名邮箱.json"
 
 
 def _load_domain_pool() -> list[dict]:
+    if _sqlite_enabled():
+        return _SQLITE_STORE.load("domain_emails")
     rows = _read_json(_DOMAIN_EMAIL_JSON, [])
     return rows if isinstance(rows, list) else []
 
 
 def _save_domain_pool(rows: list[dict]) -> None:
-    _write_json(_DOMAIN_EMAIL_JSON, rows)
+    if _sqlite_enabled():
+        _SQLITE_STORE.replace_all("domain_emails", rows)
+    else:
+        _write_json(_DOMAIN_EMAIL_JSON, rows)
 
 
 def _find_domain_email(rows: list[dict], email: str) -> dict | None:
@@ -3026,11 +3154,16 @@ def delete_domain_email(email: str) -> bool:
 # ============================================================
 
 def _load_icloud_emails() -> list[dict]:
+    if _sqlite_enabled():
+        return _SQLITE_STORE.load("icloud_emails")
     rows = _read_json(_ICLOUD_EMAIL_JSON, [])
     return rows if isinstance(rows, list) else []
 
 def _save_icloud_emails(rows: list[dict]) -> None:
-    _write_json(_ICLOUD_EMAIL_JSON, rows)
+    if _sqlite_enabled():
+        _SQLITE_STORE.replace_all("icloud_emails", rows)
+    else:
+        _write_json(_ICLOUD_EMAIL_JSON, rows)
 
 def import_icloud_emails(records: list[dict]) -> tuple[int, int]:
     with _LOCK:

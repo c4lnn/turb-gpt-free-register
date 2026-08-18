@@ -27,6 +27,11 @@ codex_agent_accounts
 注册任务.json
 注册日志/
 accounts_viewer.html
+runtime.db
+runtime.db-wal
+runtime.db-shm
+runtime*.db
+runtime_backups/
 
 # 提链 CDK 池（含完整 CDK）
 提链CDK池.json
@@ -91,6 +96,8 @@ Thumbs.db
 *.local.*
 webui-*.log
 .codex-web-*.log
+.codex-checkout-*.log
+.codex-sqlite-*.log
 
 # Local secrets
 .env

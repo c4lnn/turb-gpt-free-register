@@ -652,15 +652,40 @@ WebUI 配置页保存后会调用热加载；Roxy、Codex、邮箱、代理、�
 
 | 路径 | 内容 |
 |---|---|
-| `用于注册的邮箱.txt/json` | Outlook 邮箱池及状态 |
-| `用于注册的API邮箱.txt/json` | 通用 API 邮箱池及状态 |
-| `注册成功的邮箱.txt/json` | 注册成功账号 |
-| `注册成功的token.txt` | ChatGPT access token |
+| `runtime.db` | SQLite 运行时权威数据：账号、任务和邮箱池状态 |
+| `runtime_backups/` | 经完整性校验的滚动 SQLite 备份 |
+| `用于注册的邮箱.txt/json` | 从 SQLite 生成的 Outlook 邮箱池兼容快照 |
+| `用于注册的API邮箱.txt/json` | 从 SQLite 生成的通用 API 邮箱池兼容快照 |
+| `注册成功的邮箱.txt/json` | 从 SQLite 生成的注册账号兼容快照 |
+| `注册成功的token.txt` | 从 SQLite 生成的 ChatGPT access token 导出 |
 | `accounts/` | 每次运行的批次归档 |
 | `codex_accounts/` | Codex OAuth 凭证 JSON |
-| `注册任务.json` | WebUI 注册任务表 |
+| `注册任务.json` | 从 SQLite 生成的 WebUI 注册任务兼容快照 |
 | `注册日志/` | 注册任务日志、Codex 补跑日志 |
 | `accounts_viewer.html` | 本地账号查看页 |
+
+不要直接编辑上述 JSON/TXT 快照；运行时状态以 `runtime.db` 为准。服务启动时会执行 schema 和 `PRAGMA integrity_check`，数据库损坏时将拒绝以空数据启动。
+
+管理命令必须使用项目虚拟环境运行，并在恢复数据库前停止 WebUI：
+
+```powershell
+.\.venv\Scripts\python.exe tools\runtime_storage_admin.py check
+.\.venv\Scripts\python.exe tools\runtime_storage_admin.py backup --keep 7
+.\.venv\Scripts\python.exe tools\runtime_storage_admin.py export
+.\.venv\Scripts\python.exe tools\runtime_storage_admin.py restore runtime_backups\runtime-YYYYMMDD-HHMMSS.db
+```
+
+首次从旧文件迁移时，先停止 WebUI，再执行：
+
+```powershell
+.\.venv\Scripts\python.exe tools\migrate_runtime_storage.py `
+  --database runtime.db `
+  --accounts 注册成功的邮箱.json `
+  --jobs 注册任务.json `
+  --outlook-emails 用于注册的邮箱.json `
+  --icloud-emails 用于注册的iCloud邮箱.json `
+  --domain-emails 用于注册的域名邮箱.json
+```
 
 批次目录示例：
 
@@ -810,7 +835,8 @@ ENABLE_CODEX_AUTO = False
 │   ├── cf_temp_mail_client.py      # Cloudflare Worker 临时邮箱
 │   ├── sms_provider.py             # 接码平台
 │   ├── account_export.py           # 保存账号/批次归档
-│   └── db.py                       # 文件数据库
+│   ├── sqlite_store.py             # SQLite 事务、迁移和备份基础设施
+│   └── db.py                       # 运行时数据访问与兼容导出
 ├── webui/
 │   ├── app.py                      # Flask API
 │   ├── config_editor.py            # 配置读写/热加载
