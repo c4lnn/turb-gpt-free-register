@@ -442,7 +442,7 @@ class MailComAliasPoolRefactorTests(unittest.TestCase):
         self.assertNotIn("password", parents[0])
         aliases = db.list_mailcom_aliases(parent_email="mother@mail.com")
         self.assertEqual({row["email"] for row in aliases}, {"a@example.com", "b@example.com"})
-        self.assertTrue(all("parent_email" not in row for row in aliases))
+        self.assertTrue(all(row["parent_email"] == "mother@mail.com" for row in aliases))
 
     def test_deleted_alias_is_removed_from_default_pool_and_parent_detail(self):
         db.mark_mailcom_alias_deleted("a@example.com")

@@ -62,7 +62,7 @@ class MailComStorageTests(unittest.TestCase):
                 self.assertEqual(store.load("outlook_emails")[0]["email"], "old@outlook.com")
                 self.assertEqual(store.load("mailcom_emails")[0]["email"], "one@mail.com")
                 self.assertEqual(db.list_mailcom_email_pool(), [])
-                self.assertEqual(db.list_mailcom_parents()[0]["email_masked"], "o***@mail.com")
+                self.assertEqual(db.list_mailcom_parents()[0]["email"], "one@mail.com")
 
     def test_sqlite_alias_mapping_is_unique_and_separate_from_parent_secret(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -96,8 +96,7 @@ class MailComStorageTests(unittest.TestCase):
                 self.assertEqual(stored[0]["alias_email"], "alias@example.com")
                 self.assertNotIn("password", stored[0])
                 public = db.list_mailcom_aliases()
-                self.assertEqual(public[0]["parent_email_masked"], "m***@mail.com")
-                self.assertNotIn("parent_email", public[0])
+                self.assertEqual(public[0]["parent_email"], "mother@mail.com")
 
                 replaced = db.replace_mailcom_alias_snapshot(
                     "mother@mail.com",

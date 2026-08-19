@@ -1765,10 +1765,38 @@ def create_app(auth_code: str | None = None) -> Flask:
 
     @app.get("/api/mailcom")
     def api_mailcom_pool():
-        """mail.com 母号一级列表；凭据和完整母号地址不出此边界。"""
+        """mail.com 母号一级列表；凭据不出此边界，母号邮箱地址可展示。"""
         limit = request.args.get("limit", default=500, type=int)
         from core.mailcom_alias_pool_service import queue_state
         return jsonify({"ok": True, "items": db.list_mailcom_parents(limit=limit), "summary": db.mailcom_pool_summary(), "queue": queue_state()})
+
+    @app.get("/api/mailcom/domains")
+    def api_mailcom_domains():
+        rows = db.list_mailcom_alias_domains()
+        summary = db.mailcom_alias_domain_summary()
+        return jsonify({"ok": True, "items": rows, "summary": summary})
+
+    @app.patch("/api/mailcom/domains/<path:domain>")
+    def api_mailcom_domain_update(domain: str):
+        data = request.get_json(silent=True) or {}
+        enabled = data.get("enabled")
+        if not isinstance(enabled, bool):
+            return jsonify({"ok": False, "error": "enabled 必须是 JSON 布尔值"}), 400
+        try:
+            item = db.set_mailcom_alias_domain_enabled(domain, enabled)
+        except KeyError:
+            return jsonify({"ok": False, "error": "mail.com 别名域名不在固定目录中"}), 404
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        return jsonify({"ok": True, "item": item, "summary": db.mailcom_alias_domain_summary()})
+
+    @app.post("/api/mailcom/domains/bulk-status")
+    def api_mailcom_domains_bulk_status():
+        data = request.get_json(silent=True) or {}
+        enabled = data.get("enabled")
+        if not isinstance(enabled, bool):
+            return jsonify({"ok": False, "error": "enabled 必须是 JSON 布尔值"}), 400
+        return jsonify({"ok": True, "summary": db.set_all_mailcom_alias_domains_enabled(enabled)})
 
     @app.get("/api/mailcom/aliases")
     def api_mailcom_aliases():

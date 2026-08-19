@@ -67,7 +67,13 @@ class SQLiteRuntimeStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_runtime_records_email
                     ON runtime_records(kind, email);
-                """
+                CREATE TABLE IF NOT EXISTS mailcom_alias_domains (
+                    domain TEXT PRIMARY KEY,
+                    enabled INTEGER NOT NULL CHECK(enabled IN (0, 1)),
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+            """
             )
             row = conn.execute(
                 "SELECT value FROM schema_meta WHERE key='schema_version'"
@@ -79,6 +85,41 @@ class SQLiteRuntimeStore:
                 )
             elif int(row[0]) != SCHEMA_VERSION:
                 raise StorageError(f"不支持的 SQLite schema 版本: {row[0]}")
+
+    def load_mailcom_alias_domains(self) -> list[dict[str, Any]]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                "SELECT domain, enabled, created_at, updated_at "
+                "FROM mailcom_alias_domains ORDER BY domain"
+            ).fetchall()
+        return [
+            {
+                "domain": str(row[0]),
+                "enabled": bool(row[1]),
+                "created_at": row[2],
+                "updated_at": row[3],
+            }
+            for row in rows
+        ]
+
+    def upsert_mailcom_alias_domain(self, domain: str, enabled: bool, now: str) -> dict[str, Any]:
+        with self.connection() as conn:
+            conn.execute(
+                "INSERT INTO mailcom_alias_domains(domain, enabled, created_at, updated_at) "
+                "VALUES(?, ?, ?, ?) "
+                "ON CONFLICT(domain) DO UPDATE SET enabled=excluded.enabled, updated_at=excluded.updated_at",
+                (domain, int(bool(enabled)), now, now),
+            )
+            row = conn.execute(
+                "SELECT domain, enabled, created_at, updated_at FROM mailcom_alias_domains WHERE domain=?",
+                (domain,),
+            ).fetchone()
+        return {
+            "domain": str(row[0]),
+            "enabled": bool(row[1]),
+            "created_at": row[2],
+            "updated_at": row[3],
+        }
 
     def integrity_check(self) -> None:
         if not self.path.exists():

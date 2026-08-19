@@ -22,6 +22,10 @@ from pathlib import Path
 from typing import Any
 
 from core.sqlite_store import SQLiteRuntimeStore
+from core.mailcom_alias_domains import (
+    MailComAliasDomainError,
+    load_alias_domains,
+)
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _DATA_DIR = _PROJECT_ROOT
@@ -40,6 +44,7 @@ _GENERIC_API_EMAIL_TXT = _PROJECT_ROOT / "用于注册的API邮箱.txt"
 _ICLOUD_EMAIL_JSON = _PROJECT_ROOT / "用于注册的iCloud邮箱.json"
 _MAILCOM_EMAIL_JSON = _PROJECT_ROOT / "mailcom_emails.json"
 _MAILCOM_ALIAS_JSON = _PROJECT_ROOT / "mailcom_aliases.json"
+_MAILCOM_ALIAS_DOMAIN_STATE_JSON = _PROJECT_ROOT / "mailcom_alias_domain_states.json"
 _ACCOUNTS_JSON = _PROJECT_ROOT / "注册成功的邮箱.json"
 _ACCOUNTS_TXT = _PROJECT_ROOT / "注册成功的邮箱.txt"
 _TOKENS_TXT = _PROJECT_ROOT / "注册成功的token.txt"
@@ -3583,8 +3588,8 @@ def list_mailcom_parents(limit: int = 500) -> list[dict]:
         out = []
         for parent in parents[:max(0, int(limit))]:
             public = _mailcom_public_row(parent) or {}
-            public["email_masked"] = _mask_mailcom_parent(parent.get("email") or "")
-            public.pop("email", None)
+            public["email"] = _alias_key(parent.get("email") or "")
+            public["email_masked"] = public["email"]
             summary = {"available": 0, "leased": 0, "registered": 0, "registration_failed": 0, "deleted": 0}
             for alias in aliases:
                 if _alias_key(alias.get("parent_email")) != _alias_key(parent.get("email")):
@@ -3718,6 +3723,121 @@ def get_mailcom_internal_record(email: str) -> dict | None:
 
 
 # ============================================================
+# mail.com 别名域名状态（固定目录 + 运行时启用开关）
+# ============================================================
+
+def _mailcom_alias_domain_state_from_json(domains: tuple[str, ...]) -> list[dict]:
+    raw = _read_json(_MAILCOM_ALIAS_DOMAIN_STATE_JSON, None)
+    if raw is None:
+        now = _now()
+        rows = [{"domain": domain, "enabled": True, "created_at": now, "updated_at": now} for domain in domains]
+        _write_json(_MAILCOM_ALIAS_DOMAIN_STATE_JSON, rows)
+        return rows
+    if not isinstance(raw, list):
+        raise MailComAliasDomainError("mail.com 别名域名状态不是有效数组")
+    known = set(domains)
+    by_domain: dict[str, dict] = {}
+    for item in raw:
+        if not isinstance(item, dict):
+            raise MailComAliasDomainError("mail.com 别名域名状态包含非法记录")
+        domain = str(item.get("domain") or "").strip().casefold()
+        if domain not in known or domain in by_domain or not isinstance(item.get("enabled"), bool):
+            raise MailComAliasDomainError("mail.com 别名域名状态包含未知或非法记录")
+        by_domain[domain] = {
+            "domain": domain,
+            "enabled": bool(item["enabled"]),
+            "created_at": item.get("created_at") or _now(),
+            "updated_at": item.get("updated_at") or _now(),
+        }
+    now = _now()
+    changed = False
+    for domain in domains:
+        if domain not in by_domain:
+            by_domain[domain] = {"domain": domain, "enabled": True, "created_at": now, "updated_at": now}
+            changed = True
+    rows = [by_domain[domain] for domain in domains]
+    if changed:
+        _write_json(_MAILCOM_ALIAS_DOMAIN_STATE_JSON, rows)
+    return rows
+
+
+def _ensure_mailcom_alias_domain_state() -> list[dict]:
+    domains = load_alias_domains()
+    if _sqlite_enabled():
+        _SQLITE_STORE.initialize()
+        existing = {row["domain"]: row for row in _SQLITE_STORE.load_mailcom_alias_domains()}
+        now = _now()
+        for domain in domains:
+            if domain not in existing:
+                _SQLITE_STORE.upsert_mailcom_alias_domain(domain, True, now)
+        return [row for row in _SQLITE_STORE.load_mailcom_alias_domains() if row["domain"] in set(domains)]
+    return _mailcom_alias_domain_state_from_json(domains)
+
+
+def list_mailcom_alias_domains() -> list[dict]:
+    with _LOCK:
+        return [dict(row) for row in _ensure_mailcom_alias_domain_state()]
+
+
+def mailcom_alias_domain_summary() -> dict:
+    rows = list_mailcom_alias_domains()
+    enabled = sum(1 for row in rows if row.get("enabled"))
+    return {"total": len(rows), "enabled": enabled, "disabled": len(rows) - enabled}
+
+
+def set_mailcom_alias_domain_enabled(domain: str, enabled: bool) -> dict:
+    if not isinstance(enabled, bool):
+        raise ValueError("enabled 必须是 JSON 布尔值")
+    normalized = str(domain or "").strip().casefold()
+    with _LOCK:
+        domains = set(load_alias_domains())
+        if normalized not in domains:
+            raise KeyError("mail.com 别名域名不在固定目录中")
+        _ensure_mailcom_alias_domain_state()
+        now = _now()
+        if _sqlite_enabled():
+            row = _SQLITE_STORE.upsert_mailcom_alias_domain(normalized, enabled, now)
+        else:
+            rows = _mailcom_alias_domain_state_from_json(tuple(sorted(domains)))
+            for item in rows:
+                if item["domain"] == normalized:
+                    item["enabled"] = enabled
+                    item["updated_at"] = now
+                    break
+            _write_json(_MAILCOM_ALIAS_DOMAIN_STATE_JSON, rows)
+            row = next(item for item in rows if item["domain"] == normalized)
+        return dict(row)
+
+
+def set_all_mailcom_alias_domains_enabled(enabled: bool) -> dict:
+    """批量设置固定目录中的全部 mail.com 别名域名状态。"""
+    if not isinstance(enabled, bool):
+        raise ValueError("enabled 必须是 JSON 布尔值")
+    with _LOCK:
+        domains = load_alias_domains()
+        _ensure_mailcom_alias_domain_state()
+        now = _now()
+        if _sqlite_enabled():
+            for domain in domains:
+                _SQLITE_STORE.upsert_mailcom_alias_domain(domain, enabled, now)
+        else:
+            rows = _mailcom_alias_domain_state_from_json(domains)
+            for row in rows:
+                row["enabled"] = enabled
+                row["updated_at"] = now
+            _write_json(_MAILCOM_ALIAS_DOMAIN_STATE_JSON, rows)
+        return mailcom_alias_domain_summary()
+
+
+def get_enabled_mailcom_alias_domains() -> tuple[str, ...]:
+    rows = list_mailcom_alias_domains()
+    enabled = tuple(str(row["domain"]) for row in rows if row.get("enabled"))
+    if not enabled:
+        raise MailComAliasDomainError("mail.com 没有启用的别名域名")
+    return enabled
+
+
+# ============================================================
 # mail.com 别名生命周期（不复制母号敏感认证材料）
 # ============================================================
 
@@ -3780,12 +3900,14 @@ def _mask_mailcom_parent(email: str) -> str:
 
 
 def _mailcom_alias_public_row(row: dict | None) -> dict | None:
+    """生成别名公开摘要；母号邮箱可展示，但凭据和令牌不出此边界。"""
     if row is None:
         return None
     return {
         "id": row.get("id"),
         "alias_email": row.get("alias_email") or "",
-        "parent_email_masked": _mask_mailcom_parent(row.get("parent_email") or ""),
+        "parent_email": _alias_key(row.get("parent_email") or ""),
+        "parent_email_masked": _alias_key(row.get("parent_email") or ""),
         "parent_id": row.get("parent_id"),
         "local_part": row.get("local_part") or "",
         "domain": row.get("domain") or "",

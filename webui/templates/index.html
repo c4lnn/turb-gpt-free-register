@@ -2678,6 +2678,7 @@
         <button type="button" class="jobs-tb-btn jobs-tb-btn--danger" id="btnDeleteSelectedOutlookV2" disabled title="批量删除选中的邮箱素材">删除选中</button>
         <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="copyAllEmailsV2" title="复制当前页全部邮箱素材">复制全部邮箱素材</button>
         <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnImportOutlookV2" title="导入邮箱素材">导入</button>
+        <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnOpenMailcomManagementV2" title="打开 mail.com 母号和域名管理">mail 邮箱管理</button>
       </div>
       <div class="outlook-table-v2-wrap">
         <table class="outlook-table-v2">
@@ -2702,10 +2703,18 @@
       </div>
       <div class="jobs-v2-pager" id="pager-outlook-v2"></div>
     </section>
+  </div>
+
+  <!-- ============ mail.com 管理 ============ -->
+  <div id="tab-mailcom" class="hidden">
+    <div class="register-title" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+      <span>mail 邮箱管理</span>
+      <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnBackToOutlookV2" title="返回邮箱池">返回邮箱池</button>
+    </div>
     <section class="outlook-panel-v2" id="mailcomAliasPanelV2" aria-label="mail.com 母号与别名状态">
       <div class="outlook-filter-v2">
         <div class="acc-v2-btn-group">
-          <strong>mail.com 母号</strong>
+          <strong>母号管理</strong>
           <span class="muted" id="mailcomAliasSummaryV2">-</span>
         </div>
         <button type="button" class="jobs-tb-btn jobs-tb-btn--danger" id="btnDeleteSelectedMailcomAliasesV2" disabled title="串行删除选中的 mail.com 别名">删除选中</button>
@@ -2713,17 +2722,23 @@
       </div>
       <div class="outlook-table-v2-wrap">
         <table class="outlook-table-v2">
-          <thead>
-            <tr>
-              <th>母号</th>
-              <th>别名数量</th>
-              <th>同步状态</th>
-              <th>注册租约</th>
-              <th>最近同步</th>
-              <th>操作</th>
-            </tr>
-          </thead>
+          <thead><tr><th>母号</th><th>别名数量</th><th>同步状态</th><th>注册租约</th><th>最近同步</th><th>操作</th></tr></thead>
           <tbody id="mailcomAliasBodyV2"></tbody>
+        </table>
+      </div>
+    </section>
+    <section class="outlook-panel-v2" id="mailcomDomainPanelV2" aria-label="mail.com 别名域名管理">
+      <div class="outlook-filter-v2">
+        <div class="acc-v2-btn-group"><strong>别名域名管理</strong><span class="muted" id="mailcomDomainSummaryV2">-</span></div>
+        <div class="acc-v2-btn-group acc-v2-search-wrap"><input id="qMailcomDomainV2" type="search" placeholder="搜索域名" autocomplete="off"></div>
+        <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnEnableAllMailcomDomainsV2" title="启用全部 mail.com 别名域名">全部启用</button>
+        <button type="button" class="jobs-tb-btn jobs-tb-btn--danger" id="btnDisableAllMailcomDomainsV2" title="关闭全部 mail.com 别名域名">全部关闭</button>
+        <button type="button" class="jobs-tb-btn" id="btnRefreshMailcomDomainsV2" title="刷新 mail.com 域名状态">刷新</button>
+      </div>
+      <div class="outlook-table-v2-wrap">
+        <table class="outlook-table-v2">
+          <thead><tr><th>域名</th><th>状态</th><th>操作</th></tr></thead>
+          <tbody id="mailcomDomainBodyV2"></tbody>
         </table>
       </div>
     </section>
@@ -3095,7 +3110,7 @@ function debounce(fn, wait=250) {
 
 // ---------- Tab 切换 ----------
 function activateTab(tab, persist=true) {
-  const allowed = ['register','accounts','codex','outlook','config'];
+  const allowed = ['register','accounts','codex','outlook','mailcom','config'];
   if (!allowed.includes(tab)) tab = 'register';
   $$('nav button').forEach(x => x.classList.toggle('active', x.dataset.tab === tab));
   allowed.forEach(t => $('#tab-'+t).classList.toggle('hidden', t !== tab));
@@ -3103,6 +3118,7 @@ function activateTab(tab, persist=true) {
   if (tab === 'accounts') loadAccounts();
   if (tab === 'codex') loadCodex();
   if (tab === 'outlook') loadOutlook();
+  if (tab === 'mailcom') { loadMailcomAliases(); loadMailcomDomains(); }
   if (tab === 'config') loadConfig();
   if (tab === 'register') refreshJobs();
 }
@@ -5596,6 +5612,7 @@ const MAILCOM_EXPANDED = new Set();
 const MAILCOM_ALIASES_BY_PARENT = new Map();
 const MAILCOM_ALIAS_SELECTED = new Set();
 let MAILCOM_ALIAS_DELETE_BUSY = false;
+let MAILCOM_DOMAINS = [];
 function _mailcomAliasLifecycleLabel(status) {
   return ({available:'可用', leased:'注册中', registered:'已注册', registration_failed:'注册失败', deleted:'已删除'})[status] || status || '-';
 }
@@ -5647,7 +5664,7 @@ function renderMailcomAliases(summary = {}) {
     const countText = `可用 ${Number(counts.available || 0)} / 注册中 ${Number(counts.leased || 0)} / 已注册 ${Number(counts.registered || 0)}`;
     const expanded = MAILCOM_EXPANDED.has(Number(parent.id));
     const main = `<tr>
-      <td><button type="button" class="jobs-tb-btn" data-mailcom-parent-toggle="${Number(parent.id)}" aria-expanded="${expanded}">${expanded ? '收起' : '展开'}</button> <span class="acc-v2-email">${esc(parent.email_masked || '-')}</span></td>
+      <td><button type="button" class="jobs-tb-btn" data-mailcom-parent-toggle="${Number(parent.id)}" aria-expanded="${expanded}">${expanded ? '收起' : '展开'}</button> <span class="acc-v2-email">${esc(parent.email || parent.email_masked || '-')}</span></td>
       <td>${esc(countText)}</td>
       <td title="${esc(parent.sync_error || '')}">${esc(parent.sync_status || 'pending')}</td>
        <td>${parent.registration_busy ? '注册中' : '空闲'}</td>
@@ -5667,6 +5684,52 @@ async function loadMailcomAliases() {
     const body = $('#mailcomAliasBodyV2');
     if (body) body.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#909399;padding:20px;">别名状态暂不可用</td></tr>';
   }
+}
+function renderMailcomDomains() {
+  const body = $('#mailcomDomainBodyV2');
+  const summary = $('#mailcomDomainSummaryV2');
+  if (!body) return;
+  const query = String($('#qMailcomDomainV2')?.value || '').trim().toLowerCase();
+  const rows = MAILCOM_DOMAINS.filter(row => !query || String(row.domain || '').toLowerCase().includes(query));
+  const enabled = MAILCOM_DOMAINS.filter(row => row.enabled).length;
+  if (summary) summary.textContent = `共 ${MAILCOM_DOMAINS.length} 个，启用 ${enabled}，关闭 ${MAILCOM_DOMAINS.length - enabled}`;
+  body.innerHTML = rows.map(row => `<tr><td class="col-email" title="${esc(row.domain)}"><div class="acc-v2-email">${esc(row.domain)}</div></td><td>${row.enabled ? pill('available') : pill('disabled')}</td><td><label class="outlook-import-check"><input type="checkbox" data-mailcom-domain-toggle="${esc(row.domain)}" ${row.enabled ? 'checked' : ''}><span>${row.enabled ? '启用' : '关闭'}</span></label></td></tr>`).join('') || '<tr><td colspan="3" style="text-align:center;color:#909399;padding:20px;">没有匹配的域名</td></tr>';
+}
+async function loadMailcomDomains() {
+  try {
+    const res = await api('/api/mailcom/domains');
+    MAILCOM_DOMAINS = res.items || [];
+    renderMailcomDomains();
+  } catch (e) { showToast(e.message || '加载 mail.com 域名失败'); }
+}
+async function toggleMailcomDomain(domain, checkbox) {
+  const previous = !checkbox.checked;
+  checkbox.disabled = true;
+  try {
+    const res = await api(`/api/mailcom/domains/${encodeURIComponent(domain)}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({enabled: checkbox.checked})});
+    const row = MAILCOM_DOMAINS.find(item => item.domain === domain);
+    if (row) row.enabled = Boolean(res.item?.enabled);
+    renderMailcomDomains();
+  } catch (e) {
+    checkbox.checked = previous;
+    showToast(e.message || '保存域名状态失败');
+  } finally { checkbox.disabled = false; }
+}
+async function setAllMailcomDomains(enabled) {
+  const buttons = ['btnEnableAllMailcomDomainsV2', 'btnDisableAllMailcomDomainsV2']
+    .map(id => document.getElementById(id)).filter(Boolean);
+  if (!confirm(enabled ? '确定启用全部 mail.com 别名域名？' : '确定关闭全部 mail.com 别名域名？')) return;
+  buttons.forEach(button => { button.disabled = true; });
+  try {
+    await api('/api/mailcom/domains/bulk-status', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({enabled}),
+    });
+    await loadMailcomDomains();
+    showToast(enabled ? '已启用全部 mail.com 别名域名' : '已关闭全部 mail.com 别名域名');
+  } catch (e) {
+    showToast(e.message || '批量更新域名状态失败');
+  } finally { buttons.forEach(button => { button.disabled = false; }); }
 }
 async function toggleMailcomParent(parentId) {
   const id = Number(parentId);
@@ -5803,7 +5866,7 @@ function renderOutlook() {
       <td class="col-check"><input type="checkbox" class="outlook-row-check" data-email="${email}" data-source="${src}" ${OUTLOOK_SELECTED.has(poolKey(r)) ? 'checked' : ''}></td>
       <td class="col-email" title="${email}">
         <div class="acc-v2-email">${email || '-'}</div>
-        <div class="acc-v2-sub" title="${esc(r.source === 'mailcom' ? (r.parent_email_masked || '') : (r.copy_line || ''))}">${esc(r.source === 'mailcom' ? (r.parent_email_masked || '母号映射') : short(r.copy_line, 70))}</div>
+        <div class="acc-v2-sub" title="${esc(r.source === 'mailcom' ? (r.parent_email || r.parent_email_masked || '') : (r.copy_line || ''))}">${esc(r.source === 'mailcom' ? (r.parent_email || r.parent_email_masked || '母号映射') : short(r.copy_line, 70))}</div>
       </td>
       <td class="col-source">${esc(poolLabel(r.source))}</td>
       <td class="col-status">${pill(r.status)}</td>
@@ -5989,7 +6052,20 @@ async function onOutlookBodyClick(e) {
   bind('btnDeleteSelectedOutlookV2', deleteSelectedOutlook);
   bind('btnDeleteSelectedMailcomAliasesV2', deleteSelectedMailcomAliases);
   bind('btnImportOutlookV2', openOutlookImportModal);
+  bind('btnOpenMailcomManagementV2', () => activateTab('mailcom'));
+  bind('btnBackToOutlookV2', () => activateTab('outlook'));
   bind('btnRefreshMailcomAliasesV2', loadMailcomAliases);
+  bind('btnRefreshMailcomDomainsV2', loadMailcomDomains);
+  bind('btnEnableAllMailcomDomainsV2', () => setAllMailcomDomains(true));
+  bind('btnDisableAllMailcomDomainsV2', () => setAllMailcomDomains(false));
+  const mailcomDomainQuery = $('#qMailcomDomainV2');
+  if (mailcomDomainQuery) mailcomDomainQuery.addEventListener('input', renderMailcomDomains);
+  const mailcomDomainBody = $('#mailcomDomainBodyV2');
+  if (mailcomDomainBody) mailcomDomainBody.addEventListener('change', async (e) => {
+    const toggle = e.target.closest('[data-mailcom-domain-toggle]');
+    if (!toggle) return;
+    await toggleMailcomDomain(toggle.dataset.mailcomDomainToggle, toggle);
+  });
   const mailcomBody = $('#mailcomAliasBodyV2');
   if (mailcomBody) mailcomBody.addEventListener('change', (e) => {
     const check = e.target.closest('[data-mailcom-alias-check]');

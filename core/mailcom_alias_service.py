@@ -57,6 +57,10 @@ def _mask(email: str) -> str:
     return f"{local[:1]}***@{domain}" if separator else "[redacted-email]"
 
 
+def _parent_label(email: str) -> str:
+    return _key(email) or "[invalid-email]"
+
+
 def mother_alias_lock(parent_email: str) -> threading.Lock:
     """创建和删除共用的母号级锁，不与 mailbox AT 刷新锁复用。"""
     key = _key(parent_email)
@@ -110,14 +114,14 @@ class MailComAliasService:
                 ) from exc
             count = active_deletable_count(before)
             if count >= MAX_ACTIVE_ALIASES:
-                logger.warning("[MailComAlias] 母号别名已满: parent=%s active=%s", _mask(parent_email), count)
+                logger.warning("[MailComAlias] 母号别名已满: parent=%s active=%s", _parent_label(parent_email), count)
                 raise MailComAliasCapacityError(count)
 
             last_conflict: Exception | None = None
             for _ in range(self.max_attempts):
                 try:
                     local_part = generate_alias_local_part()
-                    domain = choose_alias_domain()
+                    domain = choose_alias_domain(domains=db.get_enabled_mailcom_alias_domains())
                 except MailComAliasDomainError as exc:
                     raise MailComAliasError(str(exc), error_type="alias_domain_config") from exc
                 alias_email = f"{local_part}@{domain}"
@@ -159,7 +163,7 @@ class MailComAliasService:
                     domain=domain,
                     job_id=job_id,
                 )
-                logger.info("[MailComAlias] 已创建并确认别名: parent=%s alias=%s", _mask(parent_email), _mask(alias_email))
+                logger.info("[MailComAlias] 已创建并确认别名: parent=%s alias=%s", _parent_label(parent_email), _mask(alias_email))
                 return alias
             raise MailComAliasError(
                 "mail.com 候选别名多次冲突或被拒绝，当前任务已终止",
@@ -200,7 +204,7 @@ class MailComAliasService:
                 for _validation_attempt in range(MAX_SYNC_VALIDATION_ATTEMPTS):
                     try:
                         local_part = generate_alias_local_part()
-                        domain = choose_alias_domain()
+                        domain = choose_alias_domain(domains=db.get_enabled_mailcom_alias_domains())
                     except MailComAliasDomainError as exc:
                         raise MailComAliasError(str(exc), error_type="alias_domain_config") from exc
                     candidate = f"{local_part}@{domain}"
@@ -210,7 +214,7 @@ class MailComAliasService:
                         validation_failures += 1
                         logger.warning(
                             "[MailComAlias] 候选校验失败: parent=%s type=%s",
-                            _mask(parent_email),
+                            _parent_label(parent_email),
                             exc.error_type,
                         )
                         candidate = ""
@@ -225,7 +229,7 @@ class MailComAliasService:
                 except MailComSettingsError as exc:
                     logger.warning(
                         "[MailComAlias] 创建请求未确认且不重试: parent=%s alias=%s type=%s",
-                        _mask(parent_email),
+                        _parent_label(parent_email),
                         _mask(candidate),
                         exc.error_type,
                     )
@@ -287,7 +291,7 @@ class MailComAliasService:
                     error_type="delete_unconfirmed",
                 )
             db.mark_mailcom_alias_deleted(alias_email)
-            logger.info("[MailComAlias] 已删除别名: parent=%s alias=%s", _mask(parent_email), _mask(alias_email))
+            logger.info("[MailComAlias] 已删除别名: parent=%s alias=%s", _parent_label(parent_email), _mask(alias_email))
             return True
 
 

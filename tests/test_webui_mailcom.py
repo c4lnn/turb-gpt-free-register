@@ -141,6 +141,14 @@ class MailComWebUITests(unittest.TestCase):
         self.assertNotIn("删除成功后会异步为所属母号补齐别名", html)
         self.assertIn("删除远端别名（不会自动补齐）", html)
         self.assertNotIn("删除远端别名并异步补齐", html)
+        self.assertIn("btnOpenMailcomManagementV2", html)
+        self.assertIn('id="tab-mailcom"', html)
+        self.assertIn("qMailcomDomainV2", html)
+        self.assertIn("data-mailcom-domain-toggle", html)
+        self.assertIn("loadMailcomDomains", html)
+        self.assertIn("btnEnableAllMailcomDomainsV2", html)
+        self.assertIn("btnDisableAllMailcomDomainsV2", html)
+        self.assertIn("/api/mailcom/domains/bulk-status", html)
 
     def test_alias_api_is_redacted_and_cleanup_switch_requires_json_boolean(self):
         web_app.db.create_mailcom_alias(
@@ -157,8 +165,7 @@ class MailComWebUITests(unittest.TestCase):
         row = payload["items"][0]
         self.assertEqual(row["alias_email"], "alias@example.com")
         self.assertEqual(payload["summary"]["remote_active_alias_limit"], 9)
-        self.assertIn("parent_email_masked", row)
-        self.assertNotIn("parent_email", row)
+        self.assertEqual(row["parent_email"], "mother@mail.com")
         self.assertNotIn("password", aliases.get_data(as_text=True).lower())
 
         bad = self.client.post(

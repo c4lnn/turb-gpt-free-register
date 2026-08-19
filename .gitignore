@@ -106,6 +106,7 @@ webui-*.log
 mail_test.txt
 mailcom_emails.json
 mailcom_aliases.json
+mailcom_alias_domain_states.json
 webui.log
 webui.pid
 logs/

@@ -22,8 +22,8 @@ def _key(email: str) -> str:
 
 
 def _mask(email: str) -> str:
-    local, separator, domain = _key(email).partition("@")
-    return f"{local[:1]}***@{domain}" if separator else "[redacted-email]"
+    """兼容旧调用名；mail.com 母号邮箱按要求完整记录。"""
+    return _key(email) or "[invalid-email]"
 
 
 def sync_parent_now(
