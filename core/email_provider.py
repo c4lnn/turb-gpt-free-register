@@ -11,6 +11,7 @@ EMAIL_SOURCE 支持单个或多个来源：
     "gptmail"
     "mailnest"
     "cloudmail"
+    "mailcom"             # mail.com 账号池 + 持久化 mailbox AT
     "outlook,generic_api,mailnest,cloudmail"          # 按顺序兜底
     ["outlook", "generic_api", "mailnest", "cloudmail"]  # 也兼容列表写法
 """
@@ -19,7 +20,21 @@ from typing import Iterable
 
 logger = logging.getLogger(__name__)
 
-_VALID_SOURCES = ("outlook", "generic_api", "cloudflare_domain", "icloud", "cloudflare", "gptmail", "mailnest", "cloudmail")
+# 供配置层和运行时共享的稳定来源契约。新增来源时应同步补充 WebUI 显示名称。
+VALID_EMAIL_SOURCES = (
+    "outlook",
+    "generic_api",
+    "cloudflare_domain",
+    "icloud",
+    "cloudflare",
+    "gptmail",
+    "mailnest",
+    "cloudmail",
+    "mailcom",
+)
+
+# 保留私有别名，避免同模块内既有调用的语义发生变化。
+_VALID_SOURCES = VALID_EMAIL_SOURCES
 
 
 def parse_email_sources(value=None) -> list[str]:
@@ -48,6 +63,9 @@ def parse_email_sources(value=None) -> list[str]:
 
 
 def _pick_from_source(source: str) -> str:
+    if source == "mailcom":
+        from core.mailcom_provider import pick_account
+        return pick_account().email
     if source == "gptmail":
         from core.gptmail_client import pick_account
         return pick_account().email
@@ -74,7 +92,11 @@ def _pick_from_source(source: str) -> str:
 
 
 def acquire_email() -> str:
-    """根据 EMAIL_SOURCE 领取一个用于注册的邮箱地址；多个来源时按顺序兜底。"""
+    """根据 EMAIL_SOURCE 领取一个用于注册的邮箱地址。
+
+    mail.com 使用预同步 alias 池；一旦选择它，领取失败不得静默切换到其他
+    来源，避免任务绕过母号串行租约或改用母号注册。
+    """
     sources = parse_email_sources()
     last_exc: Exception | None = None
     for source in sources:
@@ -85,6 +107,8 @@ def acquire_email() -> str:
         except Exception as exc:
             last_exc = exc
             logger.warning(f"[EmailProvider] 来源 {source} 领取邮箱失败: {type(exc).__name__}: {exc}")
+            if source == "mailcom":
+                raise RuntimeError(f"mail.com 别名邮箱领取失败，已停止来源回退: {exc}") from exc
             continue
     raise RuntimeError(f"所有邮箱来源均领取失败: {sources}; last={last_exc}")
 
@@ -110,6 +134,12 @@ def resolve_email_source(email: str) -> str:
     from core.cloudmail_client import get_account_context as get_cloudmail_context
     if get_cloudmail_context(email):
         return "cloudmail"
+
+    # 别名记录优先于母号池记录；别名收件箱路由必须保留 alias -> mother 映射。
+    if db.get_mailcom_alias_internal(email):
+        return "mailcom"
+    if db.get_mailcom_email_by_email(email):
+        return "mailcom"
 
     if db.get_generic_api_email_by_email(email):
         return "generic_api"
@@ -190,6 +220,15 @@ def wait_for_otp(
     if source == "cloudmail":
         from core.cloudmail_client import fetch_latest_otp
         return fetch_latest_otp(email, after_ts=after_ts, **extra_kwargs)
+    if source == "mailcom":
+        try:
+            from core import db
+            db.mark_mailcom_alias_registration_started(email, started_at=after_ts)
+        except Exception:
+            # 记录失败不应泄露凭据；provider 仍会按 alias 状态和时间窗口取码。
+            logger.warning("[EmailProvider] mail.com 别名注册开始时间写入失败: %s", email)
+        from core.mailcom_provider import fetch_latest_otp
+        return fetch_latest_otp(email, after_ts=after_ts, **extra_kwargs)
     from core.outlook_client import fetch_latest_otp
     return fetch_latest_otp(email, after_ts=after_ts, **extra_kwargs)
 
@@ -218,6 +257,9 @@ def release_email(email: str, status: str = "available", note: str | None = None
     elif source == "cloudmail":
         from core.cloudmail_client import release_account
         release_account(email, status=status, note=note)
+    elif source == "mailcom":
+        from core.mailcom_provider import release_account
+        release_account(email, status=status, note=note)
     else:
         from core.outlook_client import release_account
         release_account(email, status=status, note=note)
@@ -240,6 +282,8 @@ def release_email_if_unconsumed(email: str, note: str | None = None) -> bool:
         changed = db.release_unconsumed_domain_email(email, note=note)
     elif source == "icloud":
         changed = db.release_unconsumed_icloud_email(email, note=note)
+    elif source == "mailcom":
+        changed = db.release_unconsumed_mailcom_email(email, note=note)
     else:
         # 临时邮箱不重新进入本地池，只清理进程上下文；已有本地账号时保留上下文。
         if db.get_account_by_email(email) is not None:

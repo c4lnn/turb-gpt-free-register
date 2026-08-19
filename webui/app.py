@@ -30,7 +30,7 @@ def _pool_source_arg(default: str = "outlook") -> str:
     if not src and request.method == "POST":
         data = request.get_json(silent=True) or {}
         src = (data.get("source") or data.get("type") or "").strip()
-    return src if src in ("all", "outlook", "generic_api", "cloudflare_domain", "icloud") else default
+    return src if src in ("all", "outlook", "generic_api", "cloudflare_domain", "icloud", "mailcom") else default
 
 
 def _with_pool_source(rows: list[dict], source: str) -> list[dict]:
@@ -98,7 +98,7 @@ def _compact_account_for_list(row: dict) -> dict:
     # 这些是列表固定列直接展示字段。
     for key in (
         "user_name", "email_source", "note", "archived", "created_at",
-        "plan_type", "current_plan_type", "plus_trial_eligible",
+        "plan_type", "current_plan_type", "plus_trial_eligible", "trial_eligibility_known",
         "plan_check_status", "codex_status", "codex_agent_status",
         "checkout_check_status", "checkout_session_type",
     ):
@@ -270,6 +270,9 @@ def create_app(auth_code: str | None = None) -> Flask:
     recovered_codex_agents = db.recover_interrupted_codex_agents()
     if recovered_codex_agents:
         logger.warning("已恢复 %s 个因 WebUI 重启中断的 Codex Agent Token 状态", recovered_codex_agents)
+    recovered_mailcom = db.recover_interrupted_mailcom_state()
+    if recovered_mailcom.get("sync") or recovered_mailcom.get("lease"):
+        logger.warning("已恢复 mail.com 状态: %s", recovered_mailcom)
     # ----------------------------------------------------------
     # 页面
     # ----------------------------------------------------------
@@ -293,6 +296,7 @@ def create_app(auth_code: str | None = None) -> Flask:
                 db.generic_api_email_pool_summary() if src == "generic_api"
                 else db.domain_email_pool_summary() if src == "cloudflare_domain"
                 else db.icloud_email_pool_summary() if src == "icloud"
+                else db.mailcom_pool_summary() if src == "mailcom"
                 else db.outlook_pool_summary()
             )
             for k in pool:
@@ -1630,6 +1634,7 @@ def create_app(auth_code: str | None = None) -> Flask:
             rows += _with_pool_source(db.list_generic_api_email_pool(status=status, limit=fetch_limit), "generic_api")
             rows += _with_pool_source(db.list_domain_email_pool(status=status, limit=fetch_limit), "cloudflare_domain")
             rows += _with_pool_source(db.list_icloud_email_pool(status=status, limit=fetch_limit), "icloud")
+            rows += _with_pool_source(db.list_mailcom_email_pool(status=status, limit=fetch_limit), "mailcom")
             rows = sorted(rows, key=lambda x: str(x.get("created_at") or x.get("imported_at") or x.get("used_at") or ""), reverse=True)
         elif source == "generic_api":
             rows = _with_pool_source(db.list_generic_api_email_pool(status=status, limit=fetch_limit), "generic_api")
@@ -1637,6 +1642,8 @@ def create_app(auth_code: str | None = None) -> Flask:
             rows = _with_pool_source(db.list_domain_email_pool(status=status, limit=fetch_limit), "cloudflare_domain")
         elif source == "icloud":
             rows = _with_pool_source(db.list_icloud_email_pool(status=status, limit=fetch_limit), "icloud")
+        elif source == "mailcom":
+            rows = _with_pool_source(db.list_mailcom_email_pool(status=status, limit=fetch_limit), "mailcom")
         else:
             rows = _with_pool_source(db.list_outlook_pool(status=status, limit=fetch_limit), "outlook")
         if q:
@@ -1658,8 +1665,8 @@ def create_app(auth_code: str | None = None) -> Flask:
         """
         data = request.get_json(silent=True) or {}
         source = (data.get("source") or data.get("type") or "").strip()
-        if source not in ("outlook", "generic_api", "icloud"):
-            return jsonify({"ok": False, "error": "导入时请选择具体类型：Outlook、通用 API 或 iCloud"}), 400
+        if source not in ("outlook", "generic_api", "icloud", "mailcom"):
+            return jsonify({"ok": False, "error": "导入时请选择具体类型：Outlook、通用 API、iCloud 或 mail.com"}), 400
         text = data.get("text") or ""
         as_registered = bool(data.get("as_registered", False))
         records = []
@@ -1673,12 +1680,21 @@ def create_app(auth_code: str | None = None) -> Flask:
             separator = "----" if "----" in line else "====" if "====" in line else None
             parts = (
                 line.split(separator, 1)
-                if separator and source == "icloud" and as_registered
+                if separator and (source == "mailcom" or (source == "icloud" and as_registered))
                 else line.split(separator)
                 if separator
                 else [line]
             )
             parts = [p.strip() for p in parts]
+            if source == "mailcom":
+                if as_registered:
+                    errors.append({"line": line_no, "reason": "mail.com 账号仅用于收取验证码，不能作为已注册账号导入"})
+                    continue
+                if len(parts) != 2 or not parts[0] or not parts[1]:
+                    errors.append({"line": line_no, "reason": "需填写邮箱----密码"})
+                    continue
+                records.append({"email": parts[0], "password": parts[1]})
+                continue
             if source == "icloud":
                 if not as_registered:
                     records.append({"email": line})
@@ -1716,9 +1732,10 @@ def create_app(auth_code: str | None = None) -> Flask:
                 "totp_secret": parts[5] if len(parts) > 5 else "",
             })
         if not records and not (source == "icloud" and as_registered and parsed):
-            need = "2 段：邮箱----AT" if source == "icloud" and as_registered else "每行一个 iCloud 邮箱地址" if source == "icloud" else ("2 段：邮箱----取码地址" if source == "generic_api" else "4 段：email----password----clientId----refreshToken")
+            need = "2 段：邮箱----密码" if source == "mailcom" else "2 段：邮箱----AT" if source == "icloud" and as_registered else "每行一个 iCloud 邮箱地址" if source == "icloud" else ("2 段：邮箱----取码地址" if source == "generic_api" else "4 段：email----password----clientId----refreshToken")
             return jsonify({"ok": False, "error": f"未解析到有效邮箱行（需 {need}，---- 或 ==== 分隔）"}), 400
         inserted = db_skipped = 0
+        db_errors = []
         if as_registered:
             if records:
                 inserted, db_skipped = db.import_registered_email_accounts(records, source=source)
@@ -1726,18 +1743,120 @@ def create_app(auth_code: str | None = None) -> Flask:
             inserted, db_skipped = db.import_icloud_emails(records)
         elif source == "generic_api":
             inserted, db_skipped = db.import_generic_api_emails(records)
+        elif source == "mailcom":
+            inserted, db_skipped, db_errors = db.import_mailcom_emails(records)
+            from core.mailcom_alias_pool_service import enqueue_parent_sync
+            for record in records:
+                enqueue_parent_sync(str(record.get("email") or ""))
+            for item in db_errors:
+                errors.append(item)
         else:
             inserted, db_skipped = db.import_outlook_accounts(records)
         result = {
             "ok": True,
             "inserted": inserted,
-            "skipped": len(errors) + db_skipped,
+            "skipped": len(errors) + db_skipped - (len(db_errors) if source == "mailcom" else 0),
             "parsed": parsed,
             "as_registered": as_registered,
         }
         if errors:
             result["errors"] = errors
         return jsonify(result)
+
+    @app.get("/api/mailcom")
+    def api_mailcom_pool():
+        """mail.com 母号一级列表；凭据和完整母号地址不出此边界。"""
+        limit = request.args.get("limit", default=500, type=int)
+        from core.mailcom_alias_pool_service import queue_state
+        return jsonify({"ok": True, "items": db.list_mailcom_parents(limit=limit), "summary": db.mailcom_pool_summary(), "queue": queue_state()})
+
+    @app.get("/api/mailcom/aliases")
+    def api_mailcom_aliases():
+        """返回别名生命周期摘要，不暴露母号凭据或邮件内容。"""
+        from core.mailcom_alias_service import MAX_ACTIVE_ALIASES
+
+        status = str(request.args.get("status") or "").strip() or None
+        parent_id = request.args.get("parent_id", type=int)
+        parent = db.get_mailcom_parent_by_id(parent_id, include_secrets=True) if parent_id else None
+        if parent_id and parent is None:
+            return jsonify({"ok": False, "error": "mail.com 母号不存在"}), 404
+        limit = max(1, min(request.args.get("limit", default=500, type=int) or 500, 2000))
+        parent_email = str((parent or {}).get("email") or "") or None
+        summary = db.mailcom_alias_summary(parent_email)
+        # 本地记录仅用于展示和审计，创建时仍以 settings 地址列表的远端计数为准。
+        summary["remote_active_alias_limit"] = MAX_ACTIVE_ALIASES
+        return jsonify({
+            "ok": True,
+            "items": db.list_mailcom_aliases(parent_email=parent_email, status=status, limit=limit),
+            "summary": summary,
+        })
+
+    @app.post("/api/mailcom/import")
+    def api_mailcom_import():
+        """批量导入 mail.com ``email----password``，单行错误不影响其他行。"""
+        data = request.get_json(silent=True) or {}
+        text = str(data.get("text") or "")
+        records: list[dict] = []
+        errors: list[dict] = []
+        parsed = 0
+        for line_no, raw_line in enumerate(text.splitlines(), start=1):
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parsed += 1
+            separator = "----" if "----" in line else "====" if "====" in line else None
+            if not separator:
+                errors.append({"line": line_no, "reason": "需填写邮箱----密码"})
+                continue
+            email, password = (part.strip() for part in line.split(separator, 1))
+            if not email or not password:
+                errors.append({"line": line_no, "reason": "邮箱或密码为空"})
+                continue
+            records.append({"email": email, "password": password})
+        if not records:
+            return jsonify({"ok": False, "error": "未解析到有效 mail.com 邮箱（格式：email----password）", "errors": errors}), 400
+        inserted, skipped, db_errors = db.import_mailcom_emails(records)
+        from core.mailcom_alias_pool_service import enqueue_parent_sync
+        sync = [enqueue_parent_sync(record["email"]) for record in records]
+        errors.extend(db_errors)
+        return jsonify({"ok": True, "inserted": inserted, "skipped": skipped + len(errors) - len(db_errors), "parsed": parsed, "errors": errors, "sync": sync})
+
+    @app.post("/api/mailcom/config")
+    def api_mailcom_config():
+        """保存或更新单条 mail.com 凭据；更新密码会清除该条 AT。"""
+        data = request.get_json(silent=True) or {}
+        email = str(data.get("email") or "").strip()
+        password = str(data.get("password") or "")
+        if "@" not in email or not password:
+            return jsonify({"ok": False, "error": "mail.com 邮箱或密码无效"}), 400
+        inserted, skipped, errors = db.import_mailcom_emails(
+            [{"email": email, "password": password}], update_existing=True
+        )
+        if not inserted:
+            return jsonify({"ok": False, "error": (errors or [{"reason": "保存失败"}])[0]["reason"]}), 400
+        row = db.get_mailcom_email_by_email(email)
+        from core.mailcom_alias_pool_service import enqueue_parent_sync
+        return jsonify({"ok": True, "saved": True, "item": row, "skipped": skipped, "sync": enqueue_parent_sync(email)})
+
+    @app.post("/api/mailcom/parents/<int:parent_id>/sync")
+    def api_mailcom_parent_sync(parent_id: int):
+        parent = db.get_mailcom_parent_by_id(parent_id, include_secrets=True)
+        if not parent:
+            return jsonify({"ok": False, "error": "mail.com 母号不存在"}), 404
+        from core.mailcom_alias_pool_service import enqueue_parent_sync
+        result = enqueue_parent_sync(str(parent.get("email") or ""))
+        return jsonify({"ok": True, **result}), 202 if result.get("accepted") else 200
+
+    @app.post("/api/mailcom/aliases/delete")
+    def api_mailcom_alias_delete():
+        data = request.get_json(silent=True) or {}
+        alias_email = str(data.get("alias_email") or data.get("email") or "").strip()
+        if not alias_email:
+            return jsonify({"ok": False, "error": "alias_email 为空"}), 400
+        from core.mailcom_alias_pool_service import delete_alias_now
+        result = delete_alias_now(alias_email)
+        status_code = int(result.pop("status", 200))
+        return jsonify(result), status_code
 
     @app.post("/api/outlook/status")
     def api_outlook_status():
@@ -1756,6 +1875,9 @@ def create_app(auth_code: str | None = None) -> Flask:
             db.release_domain_email(email, status=status, note=data.get("note"))
         elif source == "icloud":
             db.release_icloud_email(email, status=status, note=data.get("note"))
+        elif source == "mailcom":
+            mapped = {"available": "available", "used": "leased", "failed": "registration_failed", "disabled": "deleted"}[status]
+            db.update_mailcom_alias(email, status=mapped, last_error=data.get("note") or "")
         else:
             db.release_outlook(email, status=status, note=data.get("note"))
         return jsonify({"ok": True})
@@ -1801,6 +1923,9 @@ def create_app(auth_code: str | None = None) -> Flask:
                     db.release_domain_email(email, status=status, note=note)
                 elif item_source == "icloud":
                     db.release_icloud_email(email, status=status, note=note)
+                elif item_source == "mailcom":
+                    mapped = {"available": "available", "used": "leased", "failed": "registration_failed", "disabled": "deleted"}[status]
+                    db.update_mailcom_alias(email, status=mapped, last_error=note or "")
                 else:
                     db.release_outlook(email, status=status, note=note)
                 updated.append({"email": email, "source": item_source, "status": status})
@@ -1823,6 +1948,11 @@ def create_app(auth_code: str | None = None) -> Flask:
         source = (data.get("source") or _pool_source_arg()).strip()
         if source == "all":
             source = "outlook"
+        if source == "mailcom":
+            from core.mailcom_alias_pool_service import delete_alias_now
+            result = delete_alias_now(email)
+            status_code = int(result.pop("status", 200))
+            return jsonify(result), status_code
         deleted = (
             db.delete_generic_api_email(email)
             if source == "generic_api"
@@ -1864,7 +1994,15 @@ def create_app(auth_code: str | None = None) -> Flask:
             if key in seen:
                 continue
             seen.add(key)
-            deleted_ok = (
+            if item_source == "mailcom":
+                from core.mailcom_alias_pool_service import delete_alias_now
+                result = delete_alias_now(email)
+                deleted_ok = bool(result.get("ok"))
+                if not deleted_ok:
+                    skipped.append({"email": email, "reason": result.get("error") or "删除失败"})
+                    continue
+            else:
+                deleted_ok = (
                 db.delete_generic_api_email(email)
                 if item_source == "generic_api"
                 else db.delete_domain_email(email)
@@ -1872,7 +2010,7 @@ def create_app(auth_code: str | None = None) -> Flask:
                 else db.delete_icloud_email(email)
                 if item_source == "icloud"
                 else db.delete_outlook(email)
-            )
+                )
             if deleted_ok:
                 deleted.append({"email": email, "source": item_source})
             else:
@@ -2543,6 +2681,25 @@ def create_app(auth_code: str | None = None) -> Flask:
                 "workers": workers,
             })
         sources = parse_email_sources(_email_cfg.EMAIL_SOURCE)
+        if "mailcom" in sources:
+            health = db.mailcom_pool_health()
+            if not health.get("configured"):
+                return jsonify({
+                    "ok": False,
+                    "error": "已选择 mailcom 邮箱来源，但尚未配置账号和密码。请在邮箱池导入 email----password。",
+                }), 400
+            if not health.get("has_available_credentials"):
+                message = "mail.com 账号池没有可用账号"
+                if health.get("auth_failed"):
+                    message += "；存在认证失败记录，请检查账号密码、人工验证或启用可用账号"
+                else:
+                    message += "；请导入或回收可用账号"
+                return jsonify({"ok": False, "error": message}), 400
+            if health.get("has_available_aliases") is False:
+                return jsonify({
+                    "ok": False,
+                    "error": "mail.com 母号已配置，但别名池没有可用 alias；请等待同步完成或手动触发补齐。",
+                }), 400
         if "gptmail" in sources:
             api_key = str(getattr(_email_cfg, "GPTMAIL_API_KEY", "") or "").strip()
             if not api_key:
@@ -2610,6 +2767,11 @@ def create_app(auth_code: str | None = None) -> Flask:
             warning = ""
             if pool.get("available", 0) < count:
                 warning = f"通用 API 邮箱池仅 {pool.get('available', 0)} 个可用，少于任务数 {count}，不足的会失败"
+        elif sources == ["mailcom"]:
+            pool = db.mailcom_pool_summary()
+            warning = ""
+            if pool.get("available", 0) < count:
+                warning = f"mail.com 邮箱池仅 {pool.get('available', 0)} 个可用，少于任务数 {count}，不足的会失败"
         elif len(sources) > 1:
             available = 0
             if "outlook" in sources:
@@ -2618,6 +2780,8 @@ def create_app(auth_code: str | None = None) -> Flask:
                 available += db.generic_api_email_pool_summary().get("available", 0)
             if "icloud" in sources:
                 available += db.icloud_email_pool_summary().get("available", 0)
+            if "mailcom" in sources:
+                available += db.mailcom_pool_summary().get("available", 0)
             warning = ""
             if available < count:
                 warning = f"多个邮箱池合计仅 {available} 个可用，少于任务数 {count}，不足的会失败"
@@ -2925,6 +3089,37 @@ def create_app(auth_code: str | None = None) -> Flask:
         updates = data.get("updates") if isinstance(data.get("updates"), dict) else data
         if not isinstance(updates, dict) or not updates:
             return jsonify({"ok": False, "error": "无更新内容"}), 400
+        if "MAILCOM_DELETE_ALIAS_IF_NO_TRIAL" in updates and not isinstance(
+            updates["MAILCOM_DELETE_ALIAS_IF_NO_TRIAL"], bool
+        ):
+            return jsonify({
+                "ok": False,
+                "error": "ValueError: MAILCOM_DELETE_ALIAS_IF_NO_TRIAL 必须是 JSON 布尔值 true 或 false",
+            }), 400
+        if "EMAIL_SOURCE" in updates:
+            try:
+                updates["EMAIL_SOURCE"] = config_editor.normalize_email_source_value(
+                    updates.get("EMAIL_SOURCE")
+                )
+            except ValueError as exc:
+                return jsonify({"ok": False, "error": f"ValueError: {exc}"}), 400
+            if "mailcom" in updates["EMAIL_SOURCE"].split(","):
+                health = db.mailcom_pool_health()
+                if not health.get("configured"):
+                    return jsonify({
+                        "ok": False,
+                        "error": "已选择 mailcom 邮箱来源，请先在邮箱池导入 mail.com 账号和密码（格式：email----password）。",
+                    }), 400
+                if not health.get("has_available_credentials"):
+                    return jsonify({
+                        "ok": False,
+                        "error": "已选择 mailcom 邮箱来源，但没有可用母号凭据；请启用有效账密或处理已停用账号。",
+                    }), 400
+                if health.get("has_available_aliases") is False:
+                    return jsonify({
+                        "ok": False,
+                        "error": "已选择 mailcom 邮箱来源，但没有可用 alias；请等待母号同步或手动补齐。",
+                    }), 400
         if "PLAN_CHECK_PROXY_MODE" in updates:
             from core.chatgpt_plan import PLAN_CHECK_PROXY_MODES
 

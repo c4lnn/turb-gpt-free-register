@@ -103,6 +103,9 @@ webui-*.log
 .env
 .env.*
 !.env.example
+mail_test.txt
+mailcom_emails.json
+mailcom_aliases.json
 webui.log
 webui.pid
 logs/

@@ -21,6 +21,8 @@ def main() -> int:
     parser.add_argument("--icloud-emails", type=Path)
     parser.add_argument("--generic-api-emails", type=Path)
     parser.add_argument("--domain-emails", type=Path)
+    parser.add_argument("--mailcom-emails", type=Path)
+    parser.add_argument("--mailcom-aliases", type=Path)
     parser.add_argument("--accounts-txt", type=Path)
     parser.add_argument("--tokens-txt", type=Path)
     parser.add_argument("--outlook-txt", type=Path)
@@ -35,6 +37,8 @@ def main() -> int:
             "icloud_emails": args.icloud_emails,
             "generic_api_emails": args.generic_api_emails,
             "domain_emails": args.domain_emails,
+            "mailcom_emails": args.mailcom_emails,
+            "mailcom_aliases": args.mailcom_aliases,
         }.items() if path is not None
     }
     if not snapshots:

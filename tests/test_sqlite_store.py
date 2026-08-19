@@ -1,4 +1,5 @@
 import json
+import os
 import sqlite3
 import tempfile
 import threading
@@ -137,6 +138,8 @@ class SQLiteRuntimeStoreTests(unittest.TestCase):
                 "generic_api_emails": [],
                 "icloud_emails": [{"id": 3, "email": "i@icloud.com"}],
                 "domain_emails": [{"id": 4, "email": "d@example.net"}],
+                "mailcom_emails": [{"id": 5, "email": "parent@mail.com", "password": "test-only"}],
+                "mailcom_aliases": [{"id": 6, "alias_email": "alias@mail.com", "parent_email": "parent@mail.com"}],
             }.items():
                 store.replace_all(kind, records)
             paths = {
@@ -150,15 +153,21 @@ class SQLiteRuntimeStoreTests(unittest.TestCase):
                 "_TOKENS_TXT": root / "tokens.txt",
                 "_JOBS_JSON": root / "jobs.json",
                 "_DOMAIN_EMAIL_JSON": root / "domain.json",
+                "_MAILCOM_EMAIL_JSON": root / "mailcom.json",
+                "_MAILCOM_ALIAS_JSON": root / "mailcom-aliases.json",
                 "_VIEWER_HTML": root / "viewer.html",
             }
             bindings = {name: paths[name] for name in runtime_db._SQLITE_PATH_BINDINGS}
-            with patch.multiple(runtime_db, _RUNTIME_DB=database, _SQLITE_STORE=store, **paths), \
-                    patch.object(runtime_db, "_SQLITE_PATH_BINDINGS", bindings):
+            mailcom_bindings = {name: paths[name] for name in runtime_db._SQLITE_MAILCOM_PATH_BINDINGS}
+            with patch.dict(os.environ, {"RUNTIME_STORAGE_BACKEND": "sqlite"}), \
+                    patch.multiple(runtime_db, _RUNTIME_DB=database, _SQLITE_STORE=store, **paths), \
+                    patch.object(runtime_db, "_SQLITE_PATH_BINDINGS", bindings), \
+                    patch.object(runtime_db, "_SQLITE_MAILCOM_PATH_BINDINGS", mailcom_bindings):
                 runtime_db.export_runtime_snapshots()
             self.assertEqual(json.loads(paths["_ACCOUNTS_JSON"].read_text(encoding="utf-8"))[0]["id"], 1)
             self.assertEqual(json.loads(paths["_JOBS_JSON"].read_text(encoding="utf-8"))[0]["id"], 2)
             self.assertEqual(paths["_TOKENS_TXT"].read_text(encoding="utf-8"), "token\n")
+            self.assertEqual(json.loads(paths["_MAILCOM_ALIAS_JSON"].read_text(encoding="utf-8"))[0]["alias_email"], "alias@mail.com")
 
     def test_restore_validates_source_and_preserves_previous_database(self):
         with tempfile.TemporaryDirectory() as tmp:

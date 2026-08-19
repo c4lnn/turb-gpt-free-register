@@ -8,13 +8,14 @@ import logging
 import shutil
 import sqlite3
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
 
 SCHEMA_VERSION = 1
-KINDS = ("accounts", "jobs", "outlook_emails", "icloud_emails", "generic_api_emails", "domain_emails")
+KINDS = ("accounts", "jobs", "outlook_emails", "icloud_emails", "generic_api_emails", "domain_emails", "mailcom_emails", "mailcom_aliases")
 logger = logging.getLogger(__name__)
 
 
@@ -29,14 +30,27 @@ class SQLiteRuntimeStore:
     def connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(self.path, timeout=30, isolation_level=None)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys=ON")
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=FULL")
-        return conn
+        try:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys=ON")
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=FULL")
+            return conn
+        except Exception:
+            conn.close()
+            raise
+
+    @contextmanager
+    def connection(self):
+        """提供确定性关闭的 SQLite 连接，避免 Windows 上残留文件句柄。"""
+        conn = self.connect()
+        try:
+            yield conn
+        finally:
+            conn.close()
 
     def initialize(self) -> None:
-        with self.connect() as conn:
+        with self.connection() as conn:
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -70,7 +84,7 @@ class SQLiteRuntimeStore:
         if not self.path.exists():
             raise StorageError(f"SQLite 数据库不存在: {self.path}")
         try:
-            with self.connect() as conn:
+            with self.connection() as conn:
                 version = conn.execute(
                     "SELECT value FROM schema_meta WHERE key='schema_version'"
                 ).fetchone()
@@ -85,7 +99,7 @@ class SQLiteRuntimeStore:
     def load(self, kind: str) -> list[dict[str, Any]]:
         self._check_kind(kind)
         self.integrity_check()
-        with self.connect() as conn:
+        with self.connection() as conn:
             rows = conn.execute(
                 "SELECT payload FROM runtime_records WHERE kind=? ORDER BY record_id",
                 (kind,),
@@ -116,7 +130,7 @@ class SQLiteRuntimeStore:
                      json.dumps(record, ensure_ascii=False), now)
                 )
             prepared_by_kind[kind] = prepared
-        with self.connect() as conn:
+        with self.connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             for kind, prepared in prepared_by_kind.items():
                 conn.execute("DELETE FROM runtime_records WHERE kind=?", (kind,))

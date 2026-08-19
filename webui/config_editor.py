@@ -14,9 +14,27 @@ import os
 import re
 from pathlib import Path
 
+from core.email_provider import VALID_EMAIL_SOURCES
+
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _CONFIG_DIR = _PROJECT_ROOT / "config"
 EXPLICIT_EMPTY_LIST_KEYS = {"PROXY_POOL"}
+
+_EMAIL_SOURCE_LABELS = {
+    "outlook": "Outlook 邮箱池",
+    "generic_api": "通用 API 邮箱",
+    "cloudflare_domain": "Cloudflare 域名邮箱",
+    "icloud": "iCloud 隐私邮箱",
+    "cloudflare": "Cloudflare 临时邮箱",
+    "gptmail": "GPTMail 临时邮箱",
+    "mailnest": "MailNest 临时邮箱",
+    "cloudmail": "CloudMail 随机邮箱",
+    "mailcom": "mail.com 账号池",
+}
+EMAIL_SOURCE_OPTIONS = tuple(
+    {"value": source, "label": _EMAIL_SOURCE_LABELS[source]}
+    for source in VALID_EMAIL_SOURCES
+)
 
 
 # ============================================================
@@ -313,7 +331,25 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "EMAIL_SOURCE", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
-        "label": "邮箱来源", "help": "可填单个或多个，逗号分隔并按顺序兜底：outlook,generic_api,cloudflare_domain,icloud,cloudflare,gptmail,mailnest,cloudmail",
+        "label": "邮箱来源", "help": "选择一个或多个来源；第一个为主来源，后续来源按顺序兜底。",
+        "control": "ordered_multi_select", "options": EMAIL_SOURCE_OPTIONS,
+    },
+    {
+        "key": "MAILCOM_REQUEST_TIMEOUT", "file": "email.py", "type": "int", "group": "邮箱 / OTP",
+        "label": "mail.com 请求超时(秒)", "help": "mail.com 登录、token、列表和正文读取的单次网络超时",
+    },
+    {
+        "key": "MAILCOM_PAGE_SIZE", "file": "email.py", "type": "int", "group": "邮箱 / OTP",
+        "label": "mail.com 每页邮件数", "help": "收件箱按 INTERNALDATE DESC 扫描的每页数量",
+    },
+    {
+        "key": "MAILCOM_MAX_PAGES", "file": "email.py", "type": "int", "group": "邮箱 / OTP",
+        "label": "mail.com 最大扫描页数", "help": "避免异常收件箱响应导致无限分页",
+    },
+    {
+        "key": "MAILCOM_DELETE_ALIAS_IF_NO_TRIAL", "file": "email.py", "type": "bool", "group": "邮箱 / OTP",
+        "label": "明确无试用资格后删除 mail.com 别名",
+        "help": "仅在套餐查询成功、资格字段完整且明确无 Plus 试用资格时删除；查询失败或字段不完整会保留别名",
     },
     {
         "key": "GPTMAIL_API_KEY", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
@@ -736,6 +772,53 @@ EDITABLE_FIELDS = [
 _FIELD_BY_KEY = {f["key"]: f for f in EDITABLE_FIELDS}
 
 
+def email_source_options() -> list[dict[str, str]]:
+    """返回供 API 输出使用的邮箱来源选项，避免调用方修改字段常量。"""
+    return [dict(item) for item in EMAIL_SOURCE_OPTIONS]
+
+
+def normalize_email_source_value(value) -> str:
+    """严格校验并规范化 WebUI 提交的 EMAIL_SOURCE。"""
+    if isinstance(value, str):
+        raw_items = re.split(r"[,;|]", value)
+    elif isinstance(value, (list, tuple)):
+        raw_items = list(value)
+    else:
+        raise ValueError("EMAIL_SOURCE 必须是邮箱来源字符串或列表")
+
+    sources: list[str] = []
+    empty_items = False
+    for item in raw_items:
+        source = str(item or "").strip().strip("\"'")
+        if not source:
+            empty_items = True
+            continue
+        sources.append(source)
+
+    if not sources:
+        raise ValueError("EMAIL_SOURCE 至少需要选择一个邮箱来源")
+    if empty_items:
+        raise ValueError("EMAIL_SOURCE 包含空邮箱来源")
+
+    unknown = [source for source in sources if source not in VALID_EMAIL_SOURCES]
+    if unknown:
+        raise ValueError(
+            "EMAIL_SOURCE 包含未知邮箱来源: " + ", ".join(unknown)
+            + "；可选 " + ", ".join(VALID_EMAIL_SOURCES)
+        )
+
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for source in sources:
+        if source in seen and source not in duplicates:
+            duplicates.append(source)
+        seen.add(source)
+    if duplicates:
+        raise ValueError("EMAIL_SOURCE 包含重复邮箱来源: " + ", ".join(duplicates))
+
+    return ",".join(sources)
+
+
 # ============================================================
 # 读：解析源码取当前值（不 import，避免缓存/副作用）
 # ============================================================
@@ -903,6 +986,8 @@ def get_config() -> list[dict]:
             value = _normalize_config_value(value, field["type"])
         item = dict(field)
         item["storage"] = "env"
+        if key == "EMAIL_SOURCE":
+            item["options"] = email_source_options()
         if field.get("secret") or key == "EXTRACT_LINK_PROXY":
             item["configured"] = bool(value)
             item["value"] = ""
@@ -1053,7 +1138,12 @@ def update_config(updates: dict) -> dict:
         if field is None:
             ignored.append(key)
             continue
-        formatted = _format_env_value(value, field["type"])
+        if key == "MAILCOM_DELETE_ALIAS_IF_NO_TRIAL" and not isinstance(value, bool):
+            raise ValueError("MAILCOM_DELETE_ALIAS_IF_NO_TRIAL 必须是 JSON 布尔值 true 或 false")
+        if key == "EMAIL_SOURCE":
+            formatted = normalize_email_source_value(value)
+        else:
+            formatted = _format_env_value(value, field["type"])
         if field.get("secret") and not formatted and str(existing_env.get(key) or "").strip():
             preserved.append(key)
             continue

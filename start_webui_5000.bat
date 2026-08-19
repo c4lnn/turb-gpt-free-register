@@ -33,8 +33,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
     "if (-not $process) { Write-Host ('[ERROR] Listener PID ' + $ownerId + ' no longer exists.'); exit 3 };" ^
     "$commandLine = [string]$process.CommandLine;" ^
     "$entryPath = [IO.Path]::GetFullPath((Join-Path (Get-Location) 'web.py'));" ^
+    "$entryNamePattern = '(?i)(^|\s)web\.py(?=\s|$)';" ^
     "$portPattern = '(?i)--port\s+(?:' + [char]34 + ')?5000(?:' + [char]34 + ')?(?:\s|$)';" ^
-    "if ($commandLine -notmatch ('(?i)' + [regex]::Escape($entryPath)) -or $commandLine -notmatch $portPattern) { Write-Host ('[ERROR] Port 5000 belongs to another process. PID=' + $ownerId); Write-Host ('        CommandLine: ' + $commandLine); exit 4 };" ^
+    "if (($commandLine -notmatch ('(?i)' + [regex]::Escape($entryPath)) -and $commandLine -notmatch $entryNamePattern) -or $commandLine -notmatch $portPattern) { Write-Host ('[ERROR] Port 5000 belongs to another process. PID=' + $ownerId); Write-Host ('        CommandLine: ' + $commandLine); exit 4 };" ^
     "Write-Host ('[INFO] Stopping existing WebUI. PID=' + $ownerId);" ^
     "Stop-Process -Id $ownerId -Force;" ^
     "$deadline = (Get-Date).AddSeconds(15);" ^

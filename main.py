@@ -176,6 +176,16 @@ def run_registration(
         proxy: 代理地址（不传则从 PROXY_POOL 随机抽）
         otp_code: 邮箱验证码（如果为None，会等待手动输入）
     """
+    # 别名一旦交给注册流程，就先固定本次任务的时间下界。WebUI 任务入口
+    # 也会做同样的记录；存储层只保留首次时间，因此不会被后续重试放宽。
+    try:
+        from core import db as _runtime_db
+
+        if _runtime_db.get_mailcom_alias_internal(email):
+            _runtime_db.mark_mailcom_alias_registration_started(email)
+    except Exception:
+        logger.warning("[MailComAlias] 注册开始时间写入失败，后续取码仍将按传入时间窗口执行: %s", email)
+
     # 可选注册驱动：
     #   protocol     = 原有纯协议（curl_cffi）
     #   roxy         = RoxyBrowser 指纹浏览器 + Selenium

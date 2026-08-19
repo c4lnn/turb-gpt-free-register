@@ -2010,6 +2010,72 @@
     .config-ep-select-item.is-active { background: #f0f2f5; color: #303133; font-weight: 500; }
     .config-select-v2-field .config-ep-select { margin-top: 6px; }
     .config-select-v2-field .config-ep-select-btn { font-weight: 500; color: #606266; }
+    .email-source-field { min-width: 0; }
+    .email-source-field-label { display: block; font-size: 13px; font-weight: 700; }
+    .email-source-picker { position: relative; margin-top: 6px; }
+    .email-source-picker-trigger {
+      width: 100%; min-height: 38px; margin: 0; padding: 8px 34px 8px 12px;
+      border: 1px solid #dcdfe6; border-radius: 6px; background: #fff;
+      color: #303133; font: inherit; font-size: 14px; font-weight: 500; text-align: left;
+      cursor: pointer; position: relative;
+    }
+    .email-source-picker-trigger::after {
+      content: ''; position: absolute; right: 12px; top: 50%; width: 0; height: 0; margin-top: -2px;
+      border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid #909399;
+    }
+    .email-source-picker.is-open .email-source-picker-trigger::after {
+      margin-top: -3px; border-top: 0; border-bottom: 5px solid #909399;
+    }
+    .email-source-picker-trigger:hover,
+    .email-source-picker-trigger:focus-visible {
+      border-color: #409eff; outline: none;
+    }
+    .email-source-picker-menu {
+      display: none; position: absolute; z-index: 45; top: calc(100% + 6px); left: 0;
+      width: min(100%, 440px); max-height: 280px; overflow: auto; padding: 8px;
+      border: 1px solid #dcdfe6; border-radius: 6px; background: #fff;
+      box-shadow: 0 10px 24px rgba(15,23,42,.14); box-sizing: border-box;
+    }
+    .email-source-picker.is-open .email-source-picker-menu { display: grid; gap: 4px; }
+    .email-source-option {
+      display: flex; align-items: center; gap: 9px; min-height: 36px; padding: 7px 9px;
+      border-radius: 4px; color: #303133; cursor: pointer; font-size: 13px; font-weight: 500;
+      box-sizing: border-box;
+    }
+    .email-source-option:hover { background: #f5f7fa; }
+    .email-source-option input { width: 16px; min-width: 16px; height: 16px; min-height: 16px; margin: 0; padding: 0; }
+    .email-source-option-value { margin-left: auto; color: #909399; font-family: ui-monospace, Consolas, monospace; font-size: 12px; font-weight: 400; }
+    .email-source-order { display: grid; gap: 6px; margin-top: 10px; }
+    .email-source-order-empty { margin: 0; color: #f56c6c; font-size: 12px; line-height: 1.45; }
+    .email-source-order-row {
+      display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 8px; align-items: center;
+      min-height: 44px; padding: 6px 8px; border: 1px solid #ebeef5; border-radius: 6px; background: #fafbfc;
+      box-sizing: border-box;
+    }
+    .email-source-order-row.is-unknown { border-color: #f3d19e; background: #fdf6ec; }
+    .email-source-order-number {
+      width: 24px; height: 24px; border-radius: 50%; color: #606266; background: #ebeef5;
+      display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700;
+    }
+    .email-source-order-main { min-width: 0; display: grid; gap: 2px; }
+    .email-source-order-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #303133; font-size: 13px; font-weight: 600; }
+    .email-source-order-meta { color: #909399; font-size: 12px; line-height: 1.35; }
+    .email-source-order-row.is-unknown .email-source-order-meta { color: #e6a23c; }
+    .email-source-order-controls { display: inline-flex; align-items: center; gap: 4px; }
+    .email-source-order-controls button {
+      width: 28px; min-width: 28px; height: 28px; min-height: 28px; margin: 0; padding: 0;
+      border: 1px solid #dcdfe6; border-radius: 4px; background: #fff; color: #606266;
+      font: inherit; font-size: 16px; line-height: 1; cursor: pointer;
+    }
+    .email-source-order-controls button:hover:not(:disabled) { color: #377DFF; border-color: #b3d8ff; background: #ecf5ff; }
+    .email-source-order-controls button:disabled { color: #c0c4cc; cursor: not-allowed; }
+    .email-source-order-controls .email-source-remove { color: #f56c6c; }
+    .email-source-warning { margin: 8px 0 0; color: #e6a23c; font-size: 12px; line-height: 1.45; }
+    @media (max-width: 560px) {
+      .email-source-picker-menu { width: 100%; }
+      .email-source-order-row { grid-template-columns: 28px minmax(0, 1fr); }
+      .email-source-order-controls { grid-column: 2; justify-content: flex-start; }
+    }
     .config-sections-v2 { display: grid; gap: 16px; }
     .config-section-v2 {
       scroll-margin-top: 20px;
@@ -2588,6 +2654,7 @@
             <button type="button" class="outlook-v2-select-item" data-value="generic_api" role="option">通用 API 邮箱池</button>
             <button type="button" class="outlook-v2-select-item" data-value="cloudflare_domain" role="option">域名邮箱池</button>
             <button type="button" class="outlook-v2-select-item" data-value="icloud" role="option">iCloud 隐私邮箱池</button>
+            <button type="button" class="outlook-v2-select-item" data-value="mailcom" role="option">mail.com 账号池</button>
           </div>
           <input type="hidden" id="poolSourceV2" value="all">
         </div>
@@ -2624,7 +2691,7 @@
               <th class="col-email">邮箱</th>
               <th class="col-source">类型</th>
               <th class="col-status">状态</th>
-              <th class="col-token">AT</th>
+              <th class="col-token">认证</th>
               <th class="col-time">导入时间</th>
               <th class="col-time">已用时间</th>
               <th class="col-actions">操作</th>
@@ -2634,6 +2701,31 @@
         </table>
       </div>
       <div class="jobs-v2-pager" id="pager-outlook-v2"></div>
+    </section>
+    <section class="outlook-panel-v2" id="mailcomAliasPanelV2" aria-label="mail.com 母号与别名状态">
+      <div class="outlook-filter-v2">
+        <div class="acc-v2-btn-group">
+          <strong>mail.com 母号</strong>
+          <span class="muted" id="mailcomAliasSummaryV2">-</span>
+        </div>
+        <button type="button" class="jobs-tb-btn jobs-tb-btn--danger" id="btnDeleteSelectedMailcomAliasesV2" disabled title="串行删除选中的 mail.com 别名">删除选中</button>
+        <button type="button" class="jobs-tb-btn" id="btnRefreshMailcomAliasesV2" title="刷新 mail.com 别名状态">刷新</button>
+      </div>
+      <div class="outlook-table-v2-wrap">
+        <table class="outlook-table-v2">
+          <thead>
+            <tr>
+              <th>母号</th>
+              <th>别名数量</th>
+              <th>同步状态</th>
+              <th>注册租约</th>
+              <th>最近同步</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="mailcomAliasBodyV2"></tbody>
+        </table>
+      </div>
     </section>
   </div>
 
@@ -2690,7 +2782,7 @@
     <div class="outlook-import-head">
       <div class="outlook-import-head-main">
         <h3 id="outlookImportTitle">导入邮箱素材</h3>
-        <p>Outlook、通用 API 与 iCloud 均可导入邮箱素材；勾选已注册账号时，iCloud 使用“邮箱----AT”（---- 或 ==== 均可）。</p>
+        <p>Outlook、通用 API、iCloud 与 mail.com 均可导入邮箱素材。mail.com 格式为“邮箱----密码”，密码仅保存到受保护的运行时邮箱池，不会显示在列表或日志中。</p>
       </div>
       <button type="button" class="outlook-import-close" id="btnCloseOutlookImport" aria-label="关闭">×</button>
     </div>
@@ -2704,6 +2796,7 @@
             <button type="button" class="outlook-v2-select-item is-active" data-value="outlook" role="option">Outlook 邮箱池</button>
             <button type="button" class="outlook-v2-select-item" data-value="generic_api" role="option">通用 API 取码邮箱</button>
             <button type="button" class="outlook-v2-select-item" data-value="icloud" role="option">iCloud 隐私邮箱</button>
+            <button type="button" class="outlook-v2-select-item" data-value="mailcom" role="option">mail.com 账号池</button>
           </div>
           <input type="hidden" id="importSourceV2" value="outlook">
         </div>
@@ -2711,7 +2804,7 @@
       </label>
       <label class="outlook-import-check">
         <input id="importAsRegisteredV2" type="checkbox">
-        <span>导入后默认视为「注册成功账号」（邮箱池标记已用，并出现在账号页，可直接批量补跑 Codex）</span>
+        <span>导入后默认视为「注册成功账号」（mail.com 仅用于收取验证码，不能选择此项）</span>
       </label>
       <label class="outlook-import-field">
         <span>邮箱素材</span>
@@ -3704,17 +3797,23 @@ function _planCell(r) {
     return wrap(`<span class="pill status-failed" title="${[esc(reason), lastTitle].filter(Boolean).join('；')}">查询失败${esc(lastText)}</span><div class="extract-link-error" title="${esc(reason)}">${esc(reason)}</div>`);
   }
   const lower = plan.toLowerCase();
+  const trialEligibilityKnown = r.trial_eligibility_known === true;
 
   if (lower === 'free') {
     const checkedOk = ok === true || r.plan_check_status === 'success';
     if (!checkedOk) {
       return wrap(`<span class="pill status-running" title="${title}">${esc(plan)}（待查 Plus 试用资格）</span>`);
     }
+    if (!trialEligibilityKnown) {
+      return wrap(`<span class="pill status-running" title="${title}">${esc(plan)}（Plus 试用资格未明确）</span>`);
+    }
   }
 
-  const cls = lower === 'free' && !r.plus_trial_eligible ? 'status-used' : 'status-success';
+  const cls = lower === 'free' && r.plus_trial_eligible === false ? 'status-used' : 'status-success';
   const expireRaw = r.plan_expires_at || r.expires_at || r.plan_renews_at || r.renews_at || '';
-  const planSuffix = lower === 'free' ? (r.plus_trial_eligible ? 'Plus 试用资格可用' : '') : r.billing_currency;
+  const planSuffix = lower === 'free'
+    ? (r.plus_trial_eligible === true ? 'Plus 试用资格可用' : '无 Plus 试用资格')
+    : r.billing_currency;
   const text = [plan, planSuffix].filter(Boolean).join('|') || '-';
   const detail = [title];
   const billing = _billingLabel(r.billing_period);
@@ -5442,6 +5541,7 @@ const POOL_SOURCE_LABELS = {
   generic_api: '通用 API 邮箱池',
   cloudflare_domain: '域名邮箱池',
   icloud: 'iCloud 隐私邮箱池',
+  mailcom: 'mail.com 账号池',
 };
 function setPoolSourceV2(val) {
   const hidden = document.getElementById('poolSourceV2');
@@ -5489,7 +5589,150 @@ function getOutlookQuery() {
 }
 function poolKey(r) { return `${r.source || getPoolSource() || 'outlook'}|${r.email || ''}`; }
 function poolLabel(src) {
-  return ({outlook:'Outlook', generic_api:'通用API', cloudflare_domain:'域名邮箱', icloud:'iCloud隐私邮箱'})[src] || src || '-';
+  return ({outlook:'Outlook', generic_api:'通用API', cloudflare_domain:'域名邮箱', icloud:'iCloud隐私邮箱', mailcom:'mail.com'})[src] || src || '-';
+}
+let MAILCOM_PARENTS = [];
+const MAILCOM_EXPANDED = new Set();
+const MAILCOM_ALIASES_BY_PARENT = new Map();
+const MAILCOM_ALIAS_SELECTED = new Set();
+let MAILCOM_ALIAS_DELETE_BUSY = false;
+function _mailcomAliasLifecycleLabel(status) {
+  return ({available:'可用', leased:'注册中', registered:'已注册', registration_failed:'注册失败', deleted:'已删除'})[status] || status || '-';
+}
+function _mailcomAliasCleanupLabel(status) {
+  return ({pending:'待套餐查询', not_eligible:'保留（有试用资格）', not_requested:'未执行清理', cleanup_running:'清理中', cleanup_pending:'待人工处理', deleted:'已删除'})[status] || status || '-';
+}
+function _mailcomParentDetail(parent) {
+  const aliases = MAILCOM_ALIASES_BY_PARENT.get(Number(parent.id)) || [];
+  const selectableAliases = aliases.filter(r => r.status !== 'leased' && r.status !== 'deleted');
+  const allSelected = selectableAliases.length > 0 && selectableAliases.every(r => MAILCOM_ALIAS_SELECTED.has(String(r.alias_email || '').toLowerCase()));
+  const rows = aliases.map(r => {
+    const accountLabel = r.registered_account_id ? `账号 #${r.registered_account_id}${r.account_archived ? '（已归档）' : ''}` : '-';
+    const plan = r.plan_result_class === 'eligible_for_delete' ? 'free / 无试用' : r.plan_result_class === 'trial_eligible' ? '有试用资格' : r.plan_result_class === 'non_free' ? (r.account_plan_type || '非 free') : (r.account_plan_type || '不明确');
+    const leased = r.status === 'leased';
+    const deleted = r.status === 'deleted';
+    const selected = MAILCOM_ALIAS_SELECTED.has(String(r.alias_email || '').toLowerCase());
+    const checkbox = `<input type="checkbox" class="mailcom-alias-row-check" data-mailcom-alias-check="${esc(r.alias_email || '')}" ${selected ? 'checked' : ''} ${leased || deleted || MAILCOM_ALIAS_DELETE_BUSY ? 'disabled' : ''} aria-label="选择别名 ${esc(r.alias_email || '')}">`;
+    const deleteAction = deleted
+      ? '<button type="button" class="danger" disabled title="该别名已从远端删除">已删除</button>'
+      : `<button type="button" class="danger" data-mailcom-alias-delete="${esc(r.alias_email || '')}" ${leased || MAILCOM_ALIAS_DELETE_BUSY ? 'disabled title="删除操作进行中"' : 'title="删除远端别名（不会自动补齐）"'}>删除</button>`;
+    return `<tr>
+      <td class="col-check">${checkbox}</td>
+      <td><div class="acc-v2-email">${esc(r.alias_email || '-')}</div></td>
+      <td>${esc(_mailcomAliasLifecycleLabel(r.status))}</td>
+      <td>${esc(accountLabel)}</td>
+      <td title="${esc(r.last_error || '')}">${esc(plan)} / ${esc(_mailcomAliasCleanupLabel(r.cleanup_status))}</td>
+      <td>${esc(r.updated_at || r.created_at || '-')}</td>
+      <td>${deleteAction}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="7" style="text-align:center;color:#909399;padding:16px;">暂无别名记录</td></tr>';
+  return `<tr class="mailcom-parent-detail"><td colspan="6"><div class="outlook-table-v2-wrap"><table class="outlook-table-v2"><thead><tr><th class="col-check"><input type="checkbox" class="mailcom-alias-select-all" data-mailcom-alias-select-all="${Number(parent.id)}" ${allSelected ? 'checked' : ''} ${selectableAliases.length === 0 || MAILCOM_ALIAS_DELETE_BUSY ? 'disabled' : ''} title="全选/取消全选当前母号可删除别名"></th><th>别名邮箱</th><th>状态</th><th>账号</th><th>套餐 / 清理</th><th>更新时间</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table></div></td></tr>`;
+}
+function updateMailcomAliasBulkControls() {
+  const button = $('#btnDeleteSelectedMailcomAliasesV2');
+  if (button) {
+    button.disabled = MAILCOM_ALIAS_DELETE_BUSY || MAILCOM_ALIAS_SELECTED.size === 0;
+    button.textContent = MAILCOM_ALIAS_DELETE_BUSY ? '删除中...' : `删除选中${MAILCOM_ALIAS_SELECTED.size ? ` (${MAILCOM_ALIAS_SELECTED.size})` : ''}`;
+  }
+}
+function renderMailcomAliases(summary = {}) {
+  const body = $('#mailcomAliasBodyV2');
+  const summaryEl = $('#mailcomAliasSummaryV2');
+  if (!body) return;
+  if (summaryEl) {
+    summaryEl.textContent = `母号 ${MAILCOM_PARENTS.length}，可用别名 ${Number(summary.available || 0)}，已用 ${Number(summary.used || 0)}`;
+  }
+  body.innerHTML = MAILCOM_PARENTS.map(parent => {
+    const counts = parent.alias_summary || {};
+    const countText = `可用 ${Number(counts.available || 0)} / 注册中 ${Number(counts.leased || 0)} / 已注册 ${Number(counts.registered || 0)}`;
+    const expanded = MAILCOM_EXPANDED.has(Number(parent.id));
+    const main = `<tr>
+      <td><button type="button" class="jobs-tb-btn" data-mailcom-parent-toggle="${Number(parent.id)}" aria-expanded="${expanded}">${expanded ? '收起' : '展开'}</button> <span class="acc-v2-email">${esc(parent.email_masked || '-')}</span></td>
+      <td>${esc(countText)}</td>
+      <td title="${esc(parent.sync_error || '')}">${esc(parent.sync_status || 'pending')}</td>
+       <td>${parent.registration_busy ? '注册中' : '空闲'}</td>
+      <td>${esc(parent.sync_completed_at || parent.sync_started_at || '-')}</td>
+      <td><button type="button" class="jobs-tb-btn" data-mailcom-parent-sync="${Number(parent.id)}" title="重新查询远端并补齐到 9 个">同步/补齐</button></td>
+    </tr>`;
+    return main + (expanded ? _mailcomParentDetail(parent) : '');
+  }).join('') || '<tr><td colspan="6" style="text-align:center;color:#909399;padding:20px;">暂无 mail.com 母号</td></tr>';
+  updateMailcomAliasBulkControls();
+}
+async function loadMailcomAliases() {
+  try {
+    const res = await api('/api/mailcom?limit=1000');
+    MAILCOM_PARENTS = res.items || [];
+    renderMailcomAliases(res.summary || {});
+  } catch (err) {
+    const body = $('#mailcomAliasBodyV2');
+    if (body) body.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#909399;padding:20px;">别名状态暂不可用</td></tr>';
+  }
+}
+async function toggleMailcomParent(parentId) {
+  const id = Number(parentId);
+  if (MAILCOM_EXPANDED.has(id)) {
+    MAILCOM_EXPANDED.delete(id);
+    renderMailcomAliases();
+    return;
+  }
+  const res = await api(`/api/mailcom/aliases?parent_id=${encodeURIComponent(id)}&limit=1000`);
+  MAILCOM_ALIASES_BY_PARENT.set(id, res.items || []);
+  MAILCOM_EXPANDED.add(id);
+  renderMailcomAliases();
+}
+async function syncMailcomParent(parentId) {
+  await api(`/api/mailcom/parents/${encodeURIComponent(parentId)}/sync`, {method:'POST'});
+  showToast('mail.com 别名同步已入队');
+  await loadMailcomAliases();
+}
+async function deleteMailcomAlias(aliasEmail, button) {
+  if (!confirm(`确定删除 mail.com 别名 ${aliasEmail}？`)) return;
+  const originalText = button?.textContent || '删除';
+  if (button) {
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    button.textContent = '删除中...';
+  }
+  showToast('正在删除 mail.com 别名，请稍候');
+  try {
+    await api('/api/mailcom/aliases/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({alias_email: aliasEmail})});
+    showToast('mail.com 别名已删除');
+    MAILCOM_ALIAS_SELECTED.clear();
+    MAILCOM_ALIASES_BY_PARENT.clear();
+    MAILCOM_EXPANDED.clear();
+    await loadMailcomAliases();
+  } catch (err) {
+    if (button?.isConnected) {
+      button.disabled = false;
+      button.removeAttribute('aria-busy');
+      button.textContent = originalText;
+    }
+    throw err;
+  }
+}
+async function deleteSelectedMailcomAliases() {
+  const aliases = Array.from(MAILCOM_ALIAS_SELECTED);
+  if (!aliases.length || MAILCOM_ALIAS_DELETE_BUSY) return;
+  if (!confirm(`确定串行删除选中的 ${aliases.length} 个 mail.com 别名？`)) return;
+  MAILCOM_ALIAS_DELETE_BUSY = true;
+  renderMailcomAliases();
+  showToast(`正在串行删除 ${aliases.length} 个 mail.com 别名，请稍候`);
+  const failed = [];
+  for (const aliasEmail of aliases) {
+    try {
+      await api('/api/mailcom/aliases/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({alias_email: aliasEmail})});
+      MAILCOM_ALIAS_SELECTED.delete(aliasEmail);
+    } catch (err) {
+      failed.push(`${aliasEmail}: ${err.message || '删除失败'}`);
+    }
+  }
+  MAILCOM_ALIAS_DELETE_BUSY = false;
+  MAILCOM_ALIAS_SELECTED.clear();
+  MAILCOM_ALIASES_BY_PARENT.clear();
+  MAILCOM_EXPANDED.clear();
+  await loadMailcomAliases();
+  if (failed.length) showToast(`批量删除完成，失败 ${failed.length} 个`);
+  else showToast(`已串行删除 ${aliases.length} 个 mail.com 别名`);
 }
 async function loadOutlook() {
   try {
@@ -5503,6 +5746,7 @@ async function loadOutlook() {
     const totalPages = Math.max(1, Math.ceil(OUTLOOK_TOTAL / p.size));
     if (p.page > totalPages) { p.page = totalPages; return loadOutlook(); }
     renderOutlook();
+    loadMailcomAliases();
   } catch(e) {}
 }
 function closeOutlookV2MoreMenus() {
@@ -5525,6 +5769,9 @@ function positionOutlookV2MoreMenu(wrap) {
   menu.style.top = `${top}px`;
 }
 function _outlookTokenCell(r) {
+  if (r.source === 'mailcom') {
+    return `<span class="acc-v2-token-none" title="验证码通过所属母号读取">母号路由</span>`;
+  }
   if (r.access_token) {
     const id = copyId(r.access_token);
     return `<button type="button" class="acc-v2-token-copy" data-copy-id="${id}" title="复制 AT">复制</button>`;
@@ -5556,7 +5803,7 @@ function renderOutlook() {
       <td class="col-check"><input type="checkbox" class="outlook-row-check" data-email="${email}" data-source="${src}" ${OUTLOOK_SELECTED.has(poolKey(r)) ? 'checked' : ''}></td>
       <td class="col-email" title="${email}">
         <div class="acc-v2-email">${email || '-'}</div>
-        <div class="acc-v2-sub" title="${esc(r.copy_line || '')}">${esc(short(r.copy_line, 70))}</div>
+        <div class="acc-v2-sub" title="${esc(r.source === 'mailcom' ? (r.parent_email_masked || '') : (r.copy_line || ''))}">${esc(r.source === 'mailcom' ? (r.parent_email_masked || '母号映射') : short(r.copy_line, 70))}</div>
       </td>
       <td class="col-source">${esc(poolLabel(r.source))}</td>
       <td class="col-status">${pill(r.status)}</td>
@@ -5565,7 +5812,7 @@ function renderOutlook() {
       <td class="col-time" title="${esc(r.used_at || '-')}">${esc(r.used_at || '-')}</td>
       <td class="col-actions">
         <div class="acc-v2-actions">
-          ${cbtn('复制邮箱', r.copy_line, 'primary')}
+          ${cbtn('复制邮箱', r.source === 'mailcom' ? r.email : r.copy_line, 'primary')}
           <button type="button" class="danger" data-pool-act="delete" data-email="${email}" data-source="${src}" title="删除邮箱素材">删除</button>
           <div class="acc-v2-more">
             <button type="button" class="acc-v2-more-btn" data-outlook-more-toggle aria-haspopup="true">更多</button>
@@ -5606,7 +5853,7 @@ function onPoolSourceChange(el) {
   PAGERS.outlook.page = 1;
   OUTLOOK_SELECTED.clear();
   const val = el ? el.value : getPoolSource();
-  if (val === 'outlook' || val === 'generic_api' || val === 'icloud') setImportSourceV2(val);
+  if (val === 'outlook' || val === 'generic_api' || val === 'icloud' || val === 'mailcom') setImportSourceV2(val);
   loadOutlook();
 }
 function onPoolStatusChange() {
@@ -5740,8 +5987,45 @@ async function onOutlookBodyClick(e) {
   bind('btnDisableSelectedOutlookV2', () => bulkMarkOutlookStatus('disabled'));
   bind('btnFailSelectedOutlookV2', () => bulkMarkOutlookStatus('failed'));
   bind('btnDeleteSelectedOutlookV2', deleteSelectedOutlook);
+  bind('btnDeleteSelectedMailcomAliasesV2', deleteSelectedMailcomAliases);
   bind('btnImportOutlookV2', openOutlookImportModal);
-  bind('copyAllEmailsV2', () => copyText(OUTLOOK.map(r=>r.copy_line).filter(Boolean).join('\n')));
+  bind('btnRefreshMailcomAliasesV2', loadMailcomAliases);
+  const mailcomBody = $('#mailcomAliasBodyV2');
+  if (mailcomBody) mailcomBody.addEventListener('change', (e) => {
+    const check = e.target.closest('[data-mailcom-alias-check]');
+    const selectAll = e.target.closest('[data-mailcom-alias-select-all]');
+    if (check) {
+      const email = String(check.dataset.mailcomAliasCheck || '').toLowerCase();
+      if (check.checked) MAILCOM_ALIAS_SELECTED.add(email);
+      else MAILCOM_ALIAS_SELECTED.delete(email);
+      updateMailcomAliasBulkControls();
+      return;
+    }
+    if (selectAll) {
+      const parentId = Number(selectAll.dataset.mailcomAliasSelectAll);
+      const aliases = MAILCOM_ALIASES_BY_PARENT.get(parentId) || [];
+      aliases.forEach(row => {
+        if (row.status === 'leased' || row.status === 'deleted') return;
+        const email = String(row.alias_email || '').toLowerCase();
+        if (selectAll.checked) MAILCOM_ALIAS_SELECTED.add(email);
+        else MAILCOM_ALIAS_SELECTED.delete(email);
+      });
+      renderMailcomAliases();
+    }
+  });
+  if (mailcomBody) mailcomBody.addEventListener('click', async (e) => {
+    const toggle = e.target.closest('[data-mailcom-parent-toggle]');
+    const sync = e.target.closest('[data-mailcom-parent-sync]');
+    const del = e.target.closest('[data-mailcom-alias-delete]');
+    try {
+      if (toggle) await toggleMailcomParent(toggle.dataset.mailcomParentToggle);
+      else if (sync) await syncMailcomParent(sync.dataset.mailcomParentSync);
+      else if (del) await deleteMailcomAlias(del.dataset.mailcomAliasDelete, del);
+    } catch (err) {
+      showToast(err.message || 'mail.com 操作失败');
+    }
+  });
+  bind('copyAllEmailsV2', () => copyText(OUTLOOK.map(r=>r.copy_line || r.email).filter(Boolean).join('\n')));
   document.addEventListener('click', (e) => {
     if (e.target.closest('.outlook-table-v2 .acc-v2-more')) return;
     closeOutlookV2MoreMenus();
@@ -5755,6 +6039,7 @@ const IMPORT_SOURCE_LABELS = {
   outlook: 'Outlook 邮箱池',
   generic_api: '通用 API 取码邮箱',
   icloud: 'iCloud 隐私邮箱',
+  mailcom: 'mail.com 账号池',
 };
 function updateImportFormatV2() {
   const source = $('#importSourceV2')?.value || 'outlook';
@@ -5771,10 +6056,16 @@ function updateImportFormatV2() {
     icloud: asRegistered
       ? ['iCloud 已注册账号：邮箱----AT；后续 OTP 自动使用配置的 QQ IMAP', 'email----accessToken']
       : ['iCloud 邮箱素材：每行一个已有隐私邮箱地址', 'email@privaterelay.appleid.com'],
+    mailcom: ['mail.com 收码账号：邮箱----密码；密码不会在列表、接口响应或日志中显示', 'email@mail.com----password'],
   };
   const selected = formats[source] || formats.outlook;
   if (hint) hint.textContent = selected[0];
   if (textarea) textarea.placeholder = selected[1];
+  const registered = $('#importAsRegisteredV2');
+  if (registered) {
+    registered.disabled = source === 'mailcom';
+    if (source === 'mailcom') registered.checked = false;
+  }
 }
 function setImportSourceV2(val) {
   const hidden = document.getElementById('importSourceV2');
@@ -5797,7 +6088,7 @@ function openOutlookImportModal() {
   const result = $('#importResultV2');
   if (result) result.innerHTML = '';
   const pool = getPoolSource();
-  if (pool === 'outlook' || pool === 'generic_api' || pool === 'icloud') setImportSourceV2(pool);
+  if (pool === 'outlook' || pool === 'generic_api' || pool === 'icloud' || pool === 'mailcom') setImportSourceV2(pool);
   else setImportSourceV2('outlook');
   modal.classList.remove('hidden');
   updateModalScrollLock();
@@ -6613,7 +6904,172 @@ function renderFeatureSwitchField(f, opts = {}) {
     </div>
   `;
 }
+function emailSourceOptionsForField(f) {
+  return (Array.isArray(f?.options) ? f.options : [])
+    .map(option => ({
+      value: String(option?.value || '').trim(),
+      label: String(option?.label || option?.value || '').trim(),
+    }))
+    .filter(option => option.value && option.label);
+}
+function parseEmailSourceValue(value) {
+  const rawItems = Array.isArray(value)
+    ? value
+    : String(value == null ? '' : value).replace(/;/g, ',').replace(/\|/g, ',').split(',');
+  const values = [];
+  let hasEmptyItem = false;
+  rawItems.forEach(item => {
+    const source = String(item == null ? '' : item).trim().replace(/^(?:"|')|(?:"|')$/g, '');
+    if (!source) {
+      if (rawItems.length > 1 || String(value == null ? '' : value).trim()) hasEmptyItem = true;
+      return;
+    }
+    values.push(source);
+  });
+  return { values, hasEmptyItem };
+}
+function emailSourceState(f, value) {
+  const currentValue = value === undefined
+    ? (Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, f.key) ? CONFIG_PENDING_UPDATES[f.key] : f.value)
+    : value;
+  const parsed = parseEmailSourceValue(currentValue);
+  const options = emailSourceOptionsForField(f);
+  const optionByValue = new Map(options.map(option => [option.value, option]));
+  const seen = new Set();
+  const duplicates = [];
+  parsed.values.forEach(source => {
+    if (seen.has(source) && !duplicates.includes(source)) duplicates.push(source);
+    seen.add(source);
+  });
+  return {
+    options,
+    optionByValue,
+    values: parsed.values,
+    hasEmptyItem: parsed.hasEmptyItem,
+    unknown: parsed.values.filter(source => !optionByValue.has(source)),
+    duplicates,
+  };
+}
+function emailSourceValidationMessage(state) {
+  if (!state.values.length) return '至少需要选择一个邮箱来源';
+  if (state.hasEmptyItem) return '配置中包含空邮箱来源，请重新选择';
+  if (state.unknown.length) return `包含未知来源：${state.unknown.join('、')}，请移除或修正后保存`;
+  if (state.duplicates.length) return `包含重复来源：${state.duplicates.join('、')}，请移除重复项后保存`;
+  return '';
+}
+function emailSourceLabel(state, source) {
+  return state.optionByValue.get(source)?.label || `未知来源：${source}`;
+}
+function emailSourceSummary(state) {
+  if (!state.values.length) return '请选择邮箱来源';
+  if (emailSourceValidationMessage(state)) return `配置需修正（${state.values.length} 项）`;
+  const primary = emailSourceLabel(state, state.values[0]);
+  return state.values.length === 1 ? `已选择：${primary}` : `已选择 ${state.values.length} 个：${primary} 为主来源`;
+}
+function updateEmailSourceSelection(values) {
+  CONFIG_PENDING_UPDATES.EMAIL_SOURCE = values.join(',');
+  renderConfigLayoutV2();
+}
+function toggleEmailSourceOption(source) {
+  const f = (CONFIG || []).find(item => item.key === 'EMAIL_SOURCE');
+  if (!f) return;
+  const state = emailSourceState(f);
+  const selected = state.values.includes(source);
+  const next = selected ? state.values.filter(item => item !== source) : [...state.values, source];
+  const hasValidSource = next.some(item => state.optionByValue.has(item));
+  if (!hasValidSource) {
+    showToast('至少需要保留一个有效邮箱来源');
+    return;
+  }
+  updateEmailSourceSelection(next);
+}
+function moveEmailSource(index, direction) {
+  const f = (CONFIG || []).find(item => item.key === 'EMAIL_SOURCE');
+  if (!f) return;
+  const state = emailSourceState(f);
+  const target = index + direction;
+  if (index < 0 || target < 0 || index >= state.values.length || target >= state.values.length) return;
+  const next = [...state.values];
+  [next[index], next[target]] = [next[target], next[index]];
+  updateEmailSourceSelection(next);
+}
+function removeEmailSource(index) {
+  const f = (CONFIG || []).find(item => item.key === 'EMAIL_SOURCE');
+  if (!f) return;
+  const state = emailSourceState(f);
+  if (index < 0 || index >= state.values.length) return;
+  const next = state.values.filter((_, itemIndex) => itemIndex !== index);
+  const hasValidSource = next.some(item => state.optionByValue.has(item));
+  if (!hasValidSource) {
+    showToast('至少需要保留一个有效邮箱来源');
+    return;
+  }
+  updateEmailSourceSelection(next);
+}
+function closeEmailSourcePickers(exceptPicker) {
+  document.querySelectorAll('.email-source-picker.is-open').forEach(picker => {
+    if (picker !== exceptPicker) picker.classList.remove('is-open');
+  });
+}
+function toggleEmailSourcePicker(trigger, e) {
+  if (e) { e.preventDefault(); e.stopPropagation(); }
+  const picker = trigger?.closest('.email-source-picker');
+  if (!picker) return;
+  const willOpen = !picker.classList.contains('is-open');
+  closeEmailSourcePickers(picker);
+  picker.classList.toggle('is-open', willOpen);
+  trigger.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+}
+function renderEmailSourceField(f) {
+  const state = emailSourceState(f);
+  const rawValue = Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, f.key)
+    ? CONFIG_PENDING_UPDATES[f.key]
+    : f.value;
+  const validation = emailSourceValidationMessage(state);
+  const options = state.options.map(option => `
+    <label class="email-source-option" data-email-source-option="${attrEsc(option.value)}">
+      <input type="checkbox"${state.values.includes(option.value) ? ' checked' : ''} aria-label="${attrEsc(option.label)}">
+      <span>${esc(option.label)}</span>
+      <span class="email-source-option-value">${esc(option.value)}</span>
+    </label>
+  `).join('');
+  const selected = state.values.length ? state.values.map((source, index) => {
+    const known = state.optionByValue.has(source);
+    const role = index === 0 ? '主来源' : `第 ${index + 1} 顺位兜底`;
+    const meta = known ? `${role} · ${source}` : `${role} · 未知值，需修正`;
+    return `
+      <div class="email-source-order-row${known ? '' : ' is-unknown'}">
+        <span class="email-source-order-number">${index + 1}</span>
+        <div class="email-source-order-main">
+          <span class="email-source-order-label" title="${attrEsc(emailSourceLabel(state, source))}">${esc(emailSourceLabel(state, source))}</span>
+          <span class="email-source-order-meta">${esc(meta)}</span>
+        </div>
+        <span class="email-source-order-controls">
+          <button type="button" title="上移" aria-label="上移 ${attrEsc(emailSourceLabel(state, source))}" data-email-source-move="up" data-email-source-index="${index}"${index === 0 ? ' disabled' : ''}>↑</button>
+          <button type="button" title="下移" aria-label="下移 ${attrEsc(emailSourceLabel(state, source))}" data-email-source-move="down" data-email-source-index="${index}"${index === state.values.length - 1 ? ' disabled' : ''}>↓</button>
+          <button type="button" class="email-source-remove" title="移除" aria-label="移除 ${attrEsc(emailSourceLabel(state, source))}" data-email-source-remove-index="${index}">×</button>
+        </span>
+      </div>
+    `;
+  }).join('') : '<p class="email-source-order-empty">请至少选择一个邮箱来源</p>';
+  return `
+    <div class="fld email-source-field">
+      <span class="email-source-field-label">${esc(f.label)}</span>
+      <span class="hint">${esc(f.help || '')}</span>
+      <div class="email-source-picker">
+        <button type="button" class="email-source-picker-trigger" data-email-source-picker-toggle aria-expanded="false">${esc(emailSourceSummary(state))}</button>
+        <div class="email-source-picker-menu" role="group" aria-label="选择邮箱来源">
+          ${options}
+        </div>
+      </div>
+      <div class="email-source-order" aria-label="邮箱来源优先顺序">${selected}</div>
+      ${validation ? `<p class="email-source-warning">${esc(validation)}</p>` : ''}
+      <input type="hidden" data-key="${attrEsc(f.key)}" value="${attrEsc(Array.isArray(rawValue) ? rawValue.join(',') : rawValue == null ? '' : rawValue)}">
+    </div>
+  `;
+}
 function renderConfigPlainFieldV2(f) {
+  if (f.control === 'ordered_multi_select') return renderEmailSourceField(f);
   const fv = Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, f.key) ? CONFIG_PENDING_UPDATES[f.key] : f.value;
   let control = '';
   const choices = configFieldChoices(f.key, fv);
@@ -7146,6 +7602,32 @@ function bindConfigLayoutV2() {
         renderConfigLayoutV2();
         return;
       }
+      const emailSourcePickerToggle = e.target.closest('[data-email-source-picker-toggle]');
+      if (emailSourcePickerToggle) {
+        toggleEmailSourcePicker(emailSourcePickerToggle, e);
+        return;
+      }
+      const emailSourceOption = e.target.closest('[data-email-source-option]');
+      if (emailSourceOption) {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleEmailSourceOption(emailSourceOption.dataset.emailSourceOption);
+        return;
+      }
+      const emailSourceMove = e.target.closest('[data-email-source-move]');
+      if (emailSourceMove) {
+        e.preventDefault();
+        e.stopPropagation();
+        moveEmailSource(Number(emailSourceMove.dataset.emailSourceIndex), emailSourceMove.dataset.emailSourceMove === 'up' ? -1 : 1);
+        return;
+      }
+      const emailSourceRemove = e.target.closest('[data-email-source-remove-index]');
+      if (emailSourceRemove) {
+        e.preventDefault();
+        e.stopPropagation();
+        removeEmailSource(Number(emailSourceRemove.dataset.emailSourceRemoveIndex));
+        return;
+      }
       const toggle = e.target.closest('[data-ep-toggle]');
       if (toggle) {
         toggleConfigEpSelect(toggle.dataset.epToggle, e);
@@ -7169,7 +7651,10 @@ function bindConfigLayoutV2() {
   }
   if (!document.documentElement.dataset.configEpCloseBound) {
     document.documentElement.dataset.configEpCloseBound = '1';
-    document.addEventListener('click', () => closeConfigEpSelects());
+    document.addEventListener('click', () => {
+      closeConfigEpSelects();
+      closeEmailSourcePickers();
+    });
   }
   const sectionRoot = document.getElementById('configSectionsV2');
   if (sectionRoot && 'IntersectionObserver' in window) {
@@ -7302,6 +7787,14 @@ async function saveConfigUpdates(triggerBtn) {
     seen.add(f.key);
     updates[f.key] = readConfigElementValue(el, f);
   });
+  if (Object.prototype.hasOwnProperty.call(updates, 'EMAIL_SOURCE')) {
+    const emailSourceField = CONFIG.find(f => f.key === 'EMAIL_SOURCE');
+    const validation = emailSourceField ? emailSourceValidationMessage(emailSourceState(emailSourceField, updates.EMAIL_SOURCE)) : '';
+    if (validation) {
+      showToast(`邮箱来源：${validation}`);
+      return;
+    }
+  }
   const buttons = [triggerBtn, ...$$('#tab-config [data-save-config-v2]')].filter(Boolean);
   buttons.forEach(btn => { btn.disabled = true; });
   try {

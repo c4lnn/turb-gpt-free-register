@@ -99,9 +99,12 @@ class AccountPlanCellTemplateTests(unittest.TestCase):
 
     def test_success_label_uses_trial_eligibility_for_free_and_currency_for_paid(self):
         self.assertIn(
-            "lower === 'free' ? (r.plus_trial_eligible ? 'Plus 试用资格可用' : '') : r.billing_currency",
+            "const trialEligibilityKnown = r.trial_eligibility_known === true;",
             self.renderer,
         )
+        self.assertIn("Plus 试用资格未明确", self.renderer)
+        self.assertIn("r.plus_trial_eligible === false", self.renderer)
+        self.assertIn("无 Plus 试用资格", self.renderer)
         self.assertIn("[plan, planSuffix].filter(Boolean).join('|')", self.renderer)
         self.assertNotIn("parts.join('/')", self.renderer)
         self.assertIn("计费周期: ${billing}", self.renderer)

@@ -241,9 +241,26 @@ def parse_accounts_check(data: dict, *, token: str = "") -> dict:
     account = item.get("account") or {}
     entitlement = item.get("entitlement") or {}
     last_sub = item.get("last_active_subscription") or {}
-    eligible_promo_campaigns = item.get("eligible_promo_campaigns") or {}
-    plus_campaign = eligible_promo_campaigns.get("plus") if isinstance(eligible_promo_campaigns, dict) else None
-    plus_meta = (plus_campaign or {}).get("metadata") or {}
+    # 空对象代表服务端已明确给出“当前没有可用促销”；字段缺失或非对象则
+    # 不能把普通 False 当成“明确无试用资格”。
+    eligible_promo_campaigns_raw = item.get("eligible_promo_campaigns")
+    eligible_promo_campaigns = (
+        eligible_promo_campaigns_raw
+        if isinstance(eligible_promo_campaigns_raw, dict)
+        else {}
+    )
+    plus_campaign = eligible_promo_campaigns.get("plus")
+    # ``plus`` 缺失/为 null 表示没有该优惠；一旦服务端给出非对象或
+    # 缺少 campaign id，则整项资格证据视为不完整，避免解析异常或误判。
+    plus_campaign_shape_valid = (
+        "plus" not in eligible_promo_campaigns
+        or (
+            isinstance(plus_campaign, dict)
+            and bool(str(plus_campaign.get("id") or "").strip())
+        )
+    )
+    plus_meta = plus_campaign.get("metadata") if isinstance(plus_campaign, dict) else {}
+    plus_meta = plus_meta if isinstance(plus_meta, dict) else {}
     discount = plus_meta.get("discount") or {}
     duration = plus_meta.get("duration") or {}
 
@@ -251,7 +268,22 @@ def parse_accounts_check(data: dict, *, token: str = "") -> dict:
     subscription_plan = entitlement.get("subscription_plan") or ""
     has_active_subscription = bool(entitlement.get("has_active_subscription"))
     is_free = str(plan_type).lower() == "free" or str(subscription_plan).lower() == "chatgptfreeplan"
-    plus_trial_eligible = bool(is_free and plus_campaign)
+    plan_evidence_present = bool(
+        str(account.get("plan_type") or "").strip()
+        or str(entitlement.get("subscription_plan") or "").strip()
+    )
+    trial_eligibility_known = bool(
+        plan_evidence_present
+        and isinstance(eligible_promo_campaigns_raw, dict)
+        and plus_campaign_shape_valid
+    )
+    # 未拿到完整的促销字段时，必须保留未知态，不能把它压成普通 False。
+    # 后续 mail.com 别名清理只接受明确的 JSON false。
+    plus_trial_eligible = (
+        bool(is_free and plus_campaign)
+        if trial_eligibility_known
+        else None
+    )
 
     offers = ((item.get("eligible_offers") or {}).get("offers") or [])
     eligible_offer_ids = [o.get("id") for o in offers if isinstance(o, dict) and o.get("id")]
@@ -280,7 +312,8 @@ def parse_accounts_check(data: dict, *, token: str = "") -> dict:
         "last_purchase_origin_platform": last_sub.get("purchase_origin_platform"),
         "last_will_renew": bool(last_sub.get("will_renew")),
         "plus_trial_eligible": plus_trial_eligible,
-        "plus_trial_campaign_id": (plus_campaign or {}).get("id"),
+        "trial_eligibility_known": trial_eligibility_known,
+        "plus_trial_campaign_id": plus_campaign.get("id") if isinstance(plus_campaign, dict) else None,
         "plus_trial_title": plus_meta.get("title"),
         "plus_trial_summary": plus_meta.get("summary"),
         "plus_trial_discount_percentage": discount.get("percentage"),

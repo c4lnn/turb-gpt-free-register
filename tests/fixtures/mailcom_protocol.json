@@ -1,0 +1,50 @@
+{
+  "oauth_token_response": {
+    "access_token": "<MAILBOX_AT>",
+    "token_type": "Bearer",
+    "expires_in": 3600,
+    "scope": "mail_mailbox_r"
+  },
+  "mail_list_response": {
+    "totalCount": 1,
+    "mailListElements": [
+      {
+        "type": "mail",
+        "rawData": {
+          "attribute": {
+            "mailIdentifier": "<MAIL_ID>",
+            "internalDate": "<INTERNAL_DATE>"
+          },
+          "mailHeader": {
+            "from": "OpenAI <noreply@example.invalid>",
+            "subject": "Your verification code"
+          }
+        }
+      }
+    ]
+  },
+  "mail_header_response": {
+    "mailHeader": {
+      "from": "OpenAI <noreply@example.invalid>",
+      "subject": "Your verification code",
+      "to": "Alias <alias@example.invalid>",
+      "date": "<DATE>"
+    }
+  },
+  "settings_addresses_response": {
+    "mailaddresslist": [
+      {"address": "parent@example.invalid", "state": "ACTIVE", "deletable": false},
+      {"address": "alias@example.invalid", "state": "ACTIVE", "deletable": true}
+    ]
+  },
+  "settings_create_response": {"status": 201},
+  "settings_delete_response": {"status": 204},
+  "mail_body_response": "<p>Your code is <OTP></p>",
+  "invalid_token_response": {
+    "status": 401,
+    "headers": {
+      "WWW-Authenticate": "Bearer error=\"invalid_token\", error_description=\"Provided token isn't active\""
+    },
+    "body": ""
+  }
+}

@@ -300,6 +300,20 @@ def _run_one_job(job_id: int, log_file: str) -> None:
             log_logger.info(f"[Job {job_id}] 开始注册任务")
             email, name, birthday = _prepare_registration_args()
             db.update_job(job_id, email=email)
+            alias = db.get_mailcom_alias_internal(email)
+            if alias is not None:
+                db.mark_mailcom_alias_registration_started(email, job_id=job_id)
+                parent = str(alias.get("parent_email") or "")
+                local, _, domain = str(email or "").partition("@")
+                masked_alias = f"{local[:1]}***@{domain}" if domain else "[redacted-email]"
+                parent_local, _, parent_domain = parent.partition("@")
+                masked_parent = f"{parent_local[:1]}***@{parent_domain}" if parent_domain else "[redacted-email]"
+                log_logger.info(
+                    "[Job %s] mail.com 别名已开始注册: alias=%s parent=%s",
+                    job_id,
+                    masked_alias,
+                    masked_parent,
+                )
             check_stop_requested()
             result = run_registration(email=email, name=name, birthday=birthday)
             if is_stop_requested(job_id):
@@ -371,6 +385,17 @@ def _run_one_job(job_id: int, log_file: str) -> None:
             completed_at=datetime.now().isoformat(timespec="seconds"),
         )
     finally:
+        if email and db.get_mailcom_alias_internal(email):
+            try:
+                alias = db.get_mailcom_alias_internal(email) or {}
+                db.release_mailcom_registration_lease(
+                    email,
+                    job_id=job_id,
+                    alias_status="registration_failed" if alias.get("status") == "leased" else None,
+                    error="注册任务终态释放租约" if alias.get("status") == "leased" else None,
+                )
+            except Exception:
+                log_logger.exception("[Job %s] 释放 mail.com 母号注册租约失败", job_id)
         _deactivate_job(job_id)
 
 

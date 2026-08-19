@@ -120,6 +120,26 @@ def _maybe_enqueue_checkout_session(
         )
 
 
+def _maybe_process_mailcom_alias_cleanup(*, account_id: int, result: dict) -> None:
+    """套餐回写后的别名清理是可选后处理，绝不影响套餐结果或后台线程。"""
+    try:
+        from core.mailcom_alias_cleanup import process_plan_result
+
+        outcome = process_plan_result(account_id=account_id, result=result)
+        if outcome.get("handled"):
+            logger.info(
+                "[MailComAlias] 套餐后处理: account_id=%s result=%s",
+                account_id,
+                str(outcome.get("reason") or "unknown")[:80],
+            )
+    except Exception as exc:  # pragma: no cover - 后处理不能中断套餐队列
+        logger.warning(
+            "[MailComAlias] 套餐后处理异常: account_id=%s error_type=%s",
+            account_id,
+            type(exc).__name__,
+        )
+
+
 def _run_plan_check(
     *,
     account_id: int,
@@ -146,6 +166,7 @@ def _run_plan_check(
             and recheck_delay > 0
             and bool(result.get("ok"))
             and str(result.get("current_plan_type") or "").lower() == "free"
+            and result.get("trial_eligibility_known") is True
             and not bool(result.get("plus_trial_eligible"))
         )
         if should_recheck:
@@ -169,6 +190,7 @@ def _run_plan_check(
 
         saved = db.update_account_plan_check(acc_id=account_id, result=result)
         if saved is not False:
+            _maybe_process_mailcom_alias_cleanup(account_id=account_id, result=result)
             _maybe_enqueue_checkout_session(
                 account_id=account_id,
                 email=email,
@@ -200,6 +222,7 @@ def _run_plan_check(
         }
         try:
             db.update_account_plan_check(acc_id=account_id, result=result)
+            _maybe_process_mailcom_alias_cleanup(account_id=account_id, result=result)
         except Exception:
             logger.exception("[Plan] 写入后台查询异常状态失败: account_id=%s", account_id)
         logger.exception("[Plan] 后台查询异常: %s", email)
