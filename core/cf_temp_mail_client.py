@@ -29,6 +29,8 @@ from core.otp_utils import extract_otp, looks_like_openai_email
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = 20
+DEFAULT_RANDOM_SUBDOMAIN_LENGTH = 6
+MAX_RANDOM_SUBDOMAIN_LENGTH = 32
 _DOMAIN_COUNTER = 0
 _DOMAIN_LOCK = threading.Lock()
 
@@ -61,6 +63,13 @@ def _cfg_int(name: str, default: int) -> int:
         return int(getattr(_email_cfg, name, default) or default)
     except (TypeError, ValueError):
         return default
+
+
+def _cfg_bool(name: str, default: bool = False) -> bool:
+    value = getattr(_email_cfg, name, default)
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes", "on", "y")
+    return bool(value)
 
 
 def _normalize_path(path: str, default: str) -> str:
@@ -170,6 +179,54 @@ def _next_domain() -> str:
     return domain
 
 
+def validate_random_subdomain_config(base_domain: str | None = None) -> tuple[bool, int, str]:
+    """校验随机子域名配置，返回开关、随机长度和固定后缀。"""
+    enabled = _cfg_bool("CLOUDFLARE_RANDOM_SUBDOMAIN_ENABLED", False)
+    length = _cfg_int("CLOUDFLARE_RANDOM_SUBDOMAIN_LENGTH", DEFAULT_RANDOM_SUBDOMAIN_LENGTH)
+    suffix = _cfg_str("CLOUDFLARE_RANDOM_SUBDOMAIN_SUFFIX").lower()
+    if not enabled:
+        return False, length, suffix
+
+    raw_length = getattr(_email_cfg, "CLOUDFLARE_RANDOM_SUBDOMAIN_LENGTH", DEFAULT_RANDOM_SUBDOMAIN_LENGTH)
+    if isinstance(raw_length, bool):
+        raise CFTempMailError("Cloudflare 随机子域名长度必须是 1-32 范围内的整数。")
+    try:
+        parsed_length = int(raw_length)
+    except (TypeError, ValueError) as exc:
+        raise CFTempMailError("Cloudflare 随机子域名长度必须是 1-32 范围内的整数。") from exc
+    if str(raw_length).strip() != str(parsed_length) or not 1 <= parsed_length <= MAX_RANDOM_SUBDOMAIN_LENGTH:
+        raise CFTempMailError("Cloudflare 随机子域名长度必须是 1-32 范围内的整数。")
+    length = parsed_length
+
+    raw_suffix = _cfg_str("CLOUDFLARE_RANDOM_SUBDOMAIN_SUFFIX")
+    if not raw_suffix:
+        raise CFTempMailError("启用 Cloudflare 随机子域名后必须填写固定后缀。")
+    if raw_suffix != raw_suffix.lower() or not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", raw_suffix):
+        raise CFTempMailError(
+            "Cloudflare 随机子域名固定后缀只允许小写字母、数字和内部连字符，且不能以连字符开头或结尾。"
+        )
+    suffix = raw_suffix
+    if length + 1 + len(suffix) > 63:
+        raise CFTempMailError("Cloudflare 随机子域标签 s-ddd 不能超过 63 个字符。")
+
+    if base_domain is None:
+        if not _default_domains():
+            raise CFTempMailError("启用 Cloudflare 随机子域名后必须配置 Cloudflare 默认域名。")
+    else:
+        normalized = _normalize_domains([base_domain])
+        if len(normalized) != 1 or normalized[0] != str(base_domain).strip().lower().lstrip("@"):
+            raise CFTempMailError("Cloudflare 随机子域名使用的基础域名无效。")
+    return True, length, suffix
+
+
+def _with_random_subdomain(base_domain: str) -> str:
+    enabled, length, suffix = validate_random_subdomain_config(base_domain)
+    if not enabled:
+        return base_domain
+    random_part = "".join(secrets.choice(string.ascii_lowercase) for _ in range(length))
+    return f"{random_part}-{suffix}.{base_domain}"
+
+
 def _generate_local(length: int | None = None) -> str:
     n = max(3, int(length if length is not None else _cfg_int("CLOUDFLARE_NAME_LENGTH", 10)))
     alphabet = string.ascii_lowercase + string.digits
@@ -252,7 +309,9 @@ def create_address(domain: str | None = None) -> CFTempMailAccount:
         _cfg_str("CLOUDFLARE_PATH_ACCOUNTS", "/api/new_address"),
         "/api/new_address",
     )
-    selected_domain = str(domain or "").strip().lstrip("@") or _next_domain()
+    validate_random_subdomain_config()
+    base_domain = str(domain or "").strip().lower().lstrip("@") or _next_domain()
+    selected_domain = _with_random_subdomain(base_domain) if base_domain else base_domain
     mode = _auth_mode()
     key = _api_key()
     admin_create = _is_admin_create_path(accounts_path)
@@ -276,7 +335,17 @@ def create_address(domain: str | None = None) -> CFTempMailAccount:
         if selected_domain:
             payload["domain"] = selected_domain
 
-    data = _request("POST", accounts_path, json_body=payload, content_type=True)
+    try:
+        data = _request("POST", accounts_path, json_body=payload, content_type=True)
+    except CFTempMailError as exc:
+        message = str(exc)
+        if _cfg_bool("CLOUDFLARE_RANDOM_SUBDOMAIN_ENABLED", False) and (
+            "domain" in message.lower() or "域名" in message
+        ):
+            raise CFTempMailError(
+                f"{message}；请确认 Worker 已开启 ENABLE_CREATE_ADDRESS_SUBDOMAIN_MATCH"
+            ) from exc
+        raise
     if not isinstance(data, dict):
         raise CFTempMailError(f"Cloudflare 创建邮箱响应格式错误: {str(data)[:200]}")
 

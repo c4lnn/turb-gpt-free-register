@@ -2751,6 +2751,11 @@ def create_app(auth_code: str | None = None) -> Flask:
                     "ok": False,
                     "error": "Cloudflare admin/鉴权模式需要填写 Cloudflare API Key（配置 → 邮箱 / OTP）。",
                 }), 400
+            try:
+                from core.cf_temp_mail_client import CFTempMailError, validate_random_subdomain_config
+                validate_random_subdomain_config()
+            except CFTempMailError as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 400
         if "mailnest" in sources:
             api_key = str(getattr(_email_cfg, "MAIL_NEST_API_KEY", "") or "").strip()
             project_code = str(getattr(_email_cfg, "MAIL_NEST_PROJECT_CODE", "") or "").strip()

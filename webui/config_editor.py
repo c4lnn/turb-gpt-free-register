@@ -404,6 +404,18 @@ EDITABLE_FIELDS = [
         "label": "Cloudflare 随机名前缀长度", "help": "admin 创建时 local-part 长度，默认 10",
     },
     {
+        "key": "CLOUDFLARE_RANDOM_SUBDOMAIN_ENABLED", "file": "email.py", "type": "bool", "group": "邮箱 / OTP",
+        "label": "启用 Cloudflare 随机子域名", "help": "开启后创建 <local>@<随机字母>-<固定后缀>.<默认域名>",
+    },
+    {
+        "key": "CLOUDFLARE_RANDOM_SUBDOMAIN_LENGTH", "file": "email.py", "type": "int", "group": "邮箱 / OTP",
+        "label": "Cloudflare 随机子域名长度", "help": "随机小写字母数量，默认 6，允许 1-32",
+    },
+    {
+        "key": "CLOUDFLARE_RANDOM_SUBDOMAIN_SUFFIX", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
+        "label": "Cloudflare 子域名固定后缀", "help": "启用随机子域名后必填，例如 mail；只允许小写字母、数字和内部连字符",
+    },
+    {
         "key": "OUTLOOK_FETCH_MODE", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
         "label": "Outlook取件模式", "help": "auto=远端优先，远端 402/DEPLOYMENT_DISABLED 自动切 Graph 直连；direct=只用 Microsoft Graph 直连；remote=只用远端服务",
     },

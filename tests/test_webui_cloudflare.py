@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import unittest
+from contextlib import ExitStack
 from unittest.mock import patch
 
 from config import email as email_config
@@ -10,6 +11,25 @@ class CloudflareWebUiTests(unittest.TestCase):
     def setUp(self):
         self.client = create_app(auth_code="test-auth").test_client()
         self.client.environ_base["HTTP_X_AUTH_CODE"] = "test-auth"
+
+    def _cloudflare_config(self, **overrides):
+        values = {
+            "USE_EMAIL_SERVICE": True,
+            "EMAIL_SOURCE": "cloudflare",
+            "CLOUDFLARE_API_BASE": "https://mail.example.com",
+            "CLOUDFLARE_AUTH_MODE": "none",
+            "CLOUDFLARE_API_KEY": "",
+            "CLOUDFLARE_PATH_ACCOUNTS": "/api/new_address",
+            "CLOUDFLARE_DEFAULT_DOMAINS": ["example.com"],
+            "CLOUDFLARE_RANDOM_SUBDOMAIN_ENABLED": True,
+            "CLOUDFLARE_RANDOM_SUBDOMAIN_LENGTH": 6,
+            "CLOUDFLARE_RANDOM_SUBDOMAIN_SUFFIX": "mail",
+        }
+        values.update(overrides)
+        stack = ExitStack()
+        for key, value in values.items():
+            stack.enter_context(patch.object(email_config, key, value, create=True))
+        return stack
 
     @patch("webui.app.svc.submit_registration")
     def test_jobs_rejects_cloudflare_without_api_base(self, submit_registration):
@@ -55,6 +75,43 @@ class CloudflareWebUiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["warning"], "")
         outlook_pool_summary.assert_not_called()
+        submit_registration.assert_called_once_with(count=1, workers=1)
+
+    @patch("webui.app.svc.submit_registration", return_value=[{"id": 1}])
+    def test_jobs_accepts_valid_random_subdomain_config(self, submit_registration):
+        with self._cloudflare_config():
+            response = self.client.post("/api/jobs", json={"count": 1, "workers": 1})
+
+        self.assertEqual(response.status_code, 200)
+        submit_registration.assert_called_once_with(count=1, workers=1)
+
+    @patch("webui.app.svc.submit_registration")
+    def test_jobs_rejects_invalid_random_subdomain_config(self, submit_registration):
+        cases = (
+            ({"CLOUDFLARE_RANDOM_SUBDOMAIN_LENGTH": 0}, "1-32"),
+            ({"CLOUDFLARE_RANDOM_SUBDOMAIN_LENGTH": 33}, "1-32"),
+            ({"CLOUDFLARE_RANDOM_SUBDOMAIN_SUFFIX": ""}, "必须填写固定后缀"),
+            ({"CLOUDFLARE_RANDOM_SUBDOMAIN_SUFFIX": "bad_suffix"}, "只允许小写字母"),
+            ({"CLOUDFLARE_RANDOM_SUBDOMAIN_SUFFIX": "-mail"}, "不能以连字符"),
+            ({"CLOUDFLARE_RANDOM_SUBDOMAIN_SUFFIX": "mail-"}, "不能以连字符"),
+            ({"CLOUDFLARE_RANDOM_SUBDOMAIN_LENGTH": 32, "CLOUDFLARE_RANDOM_SUBDOMAIN_SUFFIX": "a" * 31}, "63"),
+        )
+        for overrides, expected in cases:
+            with self.subTest(overrides=overrides), self._cloudflare_config(**overrides):
+                response = self.client.post("/api/jobs", json={"count": 1, "workers": 1})
+                self.assertEqual(response.status_code, 400)
+                self.assertIn(expected, response.get_json()["error"])
+        submit_registration.assert_not_called()
+
+    @patch("webui.app.svc.submit_registration", return_value=[{"id": 1}])
+    def test_jobs_ignores_empty_suffix_when_random_subdomain_disabled(self, submit_registration):
+        with self._cloudflare_config(
+            CLOUDFLARE_RANDOM_SUBDOMAIN_ENABLED=False,
+            CLOUDFLARE_RANDOM_SUBDOMAIN_SUFFIX="",
+        ):
+            response = self.client.post("/api/jobs", json={"count": 1, "workers": 1})
+
+        self.assertEqual(response.status_code, 200)
         submit_registration.assert_called_once_with(count=1, workers=1)
 
 

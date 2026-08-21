@@ -256,9 +256,29 @@ CLOUDFLARE_AUTH_MODE=x-admin-auth
 # admin 创建时常用：
 # CLOUDFLARE_PATH_ACCOUNTS=/admin/new_address
 CLOUDFLARE_DEFAULT_DOMAINS=你的收信域名.com
+
+# 可选：创建 <local>@<随机小写字母>-<固定后缀>.<默认域名>
+CLOUDFLARE_RANDOM_SUBDOMAIN_ENABLED=false
+CLOUDFLARE_RANDOM_SUBDOMAIN_LENGTH=6
+CLOUDFLARE_RANDOM_SUBDOMAIN_SUFFIX=mail
 ```
 
 匿名模式可将 `CLOUDFLARE_AUTH_MODE=none` 且 Key 留空，创建路径默认 `/api/new_address`；若被 Turnstile 拦截请改用 admin 模式。更多字段见 WebUI「配置 → 邮箱 / OTP」或 `.env.example`。
+
+`CLOUDFLARE_DEFAULT_DOMAINS` 是本项目创建邮箱时使用的基础域名列表。多个域名按顺序轮询选择；本项目不会通过 `CLOUDFLARE_PATH_DOMAINS`、`/open_api/settings` 或其他远端接口自动发现 Worker 支持的域名。
+
+随机子域名默认关闭。开启后，程序为每次创建独立生成 `1-32` 位纯小写字母，并与固定后缀组成一个 DNS 标签。例如基础域名为 `example.com`、长度为 `6`、后缀为 `mail`，可能创建：
+
+```text
+xxxxxxxxxx@kqmfax-mail.example.com
+```
+
+开启前必须同时完成以下 Worker 和收信配置：
+
+- `cloudflare_temp_email` Worker 必须开启 `ENABLE_CREATE_ADDRESS_SUBDOMAIN_MATCH`，允许创建接口将 `kqmfax-mail.example.com` 匹配到基础域名 `example.com`。
+- 基础域名必须配置能够覆盖任意随机子域名的通配 MX 或等效 Email Routing。父域的 Email Routing 不会自动覆盖随机子域名。
+
+缺少 Worker 开关时，创建接口会拒绝子域名；缺少通配 MX/路由时，地址可能创建成功但无法收到验证码邮件。客户端不会在失败后静默降级为基础域名邮箱。
 
 #### Cloudflare 域名邮箱（`cloudflare_domain`）
 

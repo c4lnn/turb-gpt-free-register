@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import string
 import unittest
 from unittest.mock import Mock, patch
 
@@ -30,6 +31,7 @@ class CFTempMailClientTests(unittest.TestCase):
             client._email_cfg, "CLOUDFLARE_PATH_ACCOUNTS", "/api/new_address", create=True
         ), patch.object(client._email_cfg, "CLOUDFLARE_DEFAULT_DOMAINS", ["mail.example.com"], create=True), patch.object(
             client._email_cfg, "CLOUDFLARE_CUSTOM_AUTH", "", create=True
+        ), patch.object(client._email_cfg, "CLOUDFLARE_RANDOM_SUBDOMAIN_ENABLED", False, create=True
         ):
             account = client.pick_account()
 
@@ -53,7 +55,9 @@ class CFTempMailClientTests(unittest.TestCase):
             client._email_cfg, "CLOUDFLARE_PATH_ACCOUNTS", "/admin/new_address", create=True
         ), patch.object(client._email_cfg, "CLOUDFLARE_DEFAULT_DOMAINS", ["mail.example.com"], create=True), patch.object(
             client._email_cfg, "CLOUDFLARE_CUSTOM_AUTH", "global-pass", create=True
-        ), patch.object(client._email_cfg, "CLOUDFLARE_NAME_LENGTH", 10, create=True):
+        ), patch.object(client._email_cfg, "CLOUDFLARE_NAME_LENGTH", 10, create=True), patch.object(
+            client._email_cfg, "CLOUDFLARE_RANDOM_SUBDOMAIN_ENABLED", False, create=True
+        ):
             account = client.pick_account()
 
         self.assertEqual(account.email, "u@mail.example.com")
@@ -63,6 +67,125 @@ class CFTempMailClientTests(unittest.TestCase):
         self.assertEqual(kwargs["json"]["enablePrefix"], True)
         self.assertEqual(kwargs["json"]["domain"], "mail.example.com")
         self.assertIn("name", kwargs["json"])
+
+    @patch("core.cf_temp_mail_client.requests.request")
+    def test_disabled_random_subdomain_preserves_domain_rotation(self, request_mock):
+        first = Mock(status_code=200)
+        first.json.return_value = {"address": "a@one.example.com", "jwt": "jwt-1"}
+        second = Mock(status_code=200)
+        second.json.return_value = {"address": "b@two.example.com", "jwt": "jwt-2"}
+        request_mock.side_effect = [first, second]
+
+        with patch.object(client._email_cfg, "CLOUDFLARE_API_BASE", "https://mail.example.com", create=True), patch.object(
+            client._email_cfg, "CLOUDFLARE_AUTH_MODE", "none", create=True
+        ), patch.object(client._email_cfg, "CLOUDFLARE_API_KEY", "", create=True), patch.object(
+            client._email_cfg, "CLOUDFLARE_PATH_ACCOUNTS", "/api/new_address", create=True
+        ), patch.object(client._email_cfg, "CLOUDFLARE_DEFAULT_DOMAINS", ["one.example.com", "two.example.com"], create=True), patch.object(
+            client._email_cfg, "CLOUDFLARE_CUSTOM_AUTH", "", create=True
+        ), patch.object(client._email_cfg, "CLOUDFLARE_RANDOM_SUBDOMAIN_ENABLED", False, create=True):
+            client.create_address()
+            client.create_address()
+
+        payloads = [call.kwargs["json"] for call in request_mock.call_args_list]
+        self.assertEqual(payloads, [{"domain": "one.example.com"}, {"domain": "two.example.com"}])
+
+    @patch("core.cf_temp_mail_client.secrets.choice", side_effect=list("kqmfax"))
+    @patch("core.cf_temp_mail_client.requests.request")
+    def test_anonymous_create_uses_random_subdomain(self, request_mock, choice):
+        response = Mock(status_code=200)
+        response.json.return_value = {"address": "u@kqmfax-mail.example.com", "jwt": "jwt-random"}
+        request_mock.return_value = response
+
+        with patch.object(client._email_cfg, "CLOUDFLARE_API_BASE", "https://mail.example.com", create=True), patch.object(
+            client._email_cfg, "CLOUDFLARE_AUTH_MODE", "none", create=True
+        ), patch.object(client._email_cfg, "CLOUDFLARE_API_KEY", "", create=True), patch.object(
+            client._email_cfg, "CLOUDFLARE_PATH_ACCOUNTS", "/api/new_address", create=True
+        ), patch.object(client._email_cfg, "CLOUDFLARE_DEFAULT_DOMAINS", ["example.com"], create=True), patch.object(
+            client._email_cfg, "CLOUDFLARE_RANDOM_SUBDOMAIN_ENABLED", True, create=True
+        ), patch.object(client._email_cfg, "CLOUDFLARE_RANDOM_SUBDOMAIN_LENGTH", 6, create=True), patch.object(
+            client._email_cfg, "CLOUDFLARE_RANDOM_SUBDOMAIN_SUFFIX", "mail", create=True):
+            account = client.create_address()
+
+        self.assertEqual(account.domain, "kqmfax-mail.example.com")
+        self.assertEqual(request_mock.call_args.kwargs["json"], {"domain": "kqmfax-mail.example.com"})
+        self.assertEqual(choice.call_count, 6)
+        self.assertTrue(all(call.args[0] == string.ascii_lowercase for call in choice.call_args_list))
+
+    @patch("core.cf_temp_mail_client._generate_local", return_value="localname1")
+    @patch("core.cf_temp_mail_client.secrets.choice", return_value="q")
+    @patch("core.cf_temp_mail_client.requests.request")
+    def test_admin_create_changes_only_domain_for_random_subdomain(self, request_mock, choice, generate_local):
+        response = Mock(status_code=200)
+        response.json.return_value = {"address": "localname1@qqqqqq-mail.example.com", "jwt": "jwt-admin"}
+        request_mock.return_value = response
+
+        with patch.object(client._email_cfg, "CLOUDFLARE_API_BASE", "https://mail.example.com", create=True), patch.object(
+            client._email_cfg, "CLOUDFLARE_AUTH_MODE", "x-admin-auth", create=True
+        ), patch.object(client._email_cfg, "CLOUDFLARE_API_KEY", "admin", create=True), patch.object(
+            client._email_cfg, "CLOUDFLARE_PATH_ACCOUNTS", "/admin/new_address", create=True
+        ), patch.object(client._email_cfg, "CLOUDFLARE_DEFAULT_DOMAINS", ["example.com"], create=True), patch.object(
+            client._email_cfg, "CLOUDFLARE_RANDOM_SUBDOMAIN_ENABLED", True, create=True
+        ), patch.object(client._email_cfg, "CLOUDFLARE_RANDOM_SUBDOMAIN_LENGTH", 6, create=True), patch.object(
+            client._email_cfg, "CLOUDFLARE_RANDOM_SUBDOMAIN_SUFFIX", "mail", create=True):
+            client.create_address()
+
+        self.assertEqual(request_mock.call_args.kwargs["json"], {
+            "name": "localname1",
+            "enablePrefix": True,
+            "domain": "qqqqqq-mail.example.com",
+        })
+        generate_local.assert_called_once_with()
+
+    def test_random_subdomain_config_validation(self):
+        cases = (
+            ({"CLOUDFLARE_RANDOM_SUBDOMAIN_LENGTH": 0}, "1-32"),
+            ({"CLOUDFLARE_RANDOM_SUBDOMAIN_LENGTH": "six"}, "1-32"),
+            ({"CLOUDFLARE_RANDOM_SUBDOMAIN_SUFFIX": ""}, "必须填写固定后缀"),
+            ({"CLOUDFLARE_RANDOM_SUBDOMAIN_SUFFIX": "Bad"}, "只允许小写字母"),
+            ({"CLOUDFLARE_RANDOM_SUBDOMAIN_SUFFIX": "bad_suffix"}, "只允许小写字母"),
+            ({"CLOUDFLARE_RANDOM_SUBDOMAIN_LENGTH": 32, "CLOUDFLARE_RANDOM_SUBDOMAIN_SUFFIX": "a" * 31}, "63"),
+        )
+        defaults = {
+            "CLOUDFLARE_RANDOM_SUBDOMAIN_ENABLED": True,
+            "CLOUDFLARE_RANDOM_SUBDOMAIN_LENGTH": 6,
+            "CLOUDFLARE_RANDOM_SUBDOMAIN_SUFFIX": "mail",
+            "CLOUDFLARE_DEFAULT_DOMAINS": ["example.com"],
+        }
+        for overrides, expected in cases:
+            values = {**defaults, **overrides}
+            with self.subTest(overrides=overrides), patch.multiple(client._email_cfg, create=True, **values):
+                with self.assertRaisesRegex(client.CFTempMailError, expected):
+                    client.validate_random_subdomain_config()
+
+    @patch("core.cf_temp_mail_client.secrets.choice", side_effect=list("abcdefuvwxyz"))
+    def test_random_subdomain_is_generated_for_each_create(self, choice):
+        with patch.object(client._email_cfg, "CLOUDFLARE_RANDOM_SUBDOMAIN_ENABLED", True, create=True), patch.object(
+            client._email_cfg, "CLOUDFLARE_RANDOM_SUBDOMAIN_LENGTH", 6, create=True
+        ), patch.object(client._email_cfg, "CLOUDFLARE_RANDOM_SUBDOMAIN_SUFFIX", "mail", create=True):
+            first = client._with_random_subdomain("example.com")
+            second = client._with_random_subdomain("example.com")
+
+        self.assertEqual(first, "abcdef-mail.example.com")
+        self.assertEqual(second, "uvwxyz-mail.example.com")
+
+    @patch("core.cf_temp_mail_client.requests.request")
+    def test_worker_domain_rejection_adds_hint_without_retry(self, request_mock):
+        response = Mock(status_code=400)
+        response.json.return_value = {"error": "domain not allowed"}
+        request_mock.return_value = response
+
+        with patch.object(client._email_cfg, "CLOUDFLARE_API_BASE", "https://mail.example.com", create=True), patch.object(
+            client._email_cfg, "CLOUDFLARE_AUTH_MODE", "none", create=True
+        ), patch.object(client._email_cfg, "CLOUDFLARE_API_KEY", "", create=True), patch.object(
+            client._email_cfg, "CLOUDFLARE_PATH_ACCOUNTS", "/api/new_address", create=True
+        ), patch.object(client._email_cfg, "CLOUDFLARE_DEFAULT_DOMAINS", ["example.com"], create=True), patch.object(
+            client._email_cfg, "CLOUDFLARE_RANDOM_SUBDOMAIN_ENABLED", True, create=True
+        ), patch.object(client._email_cfg, "CLOUDFLARE_RANDOM_SUBDOMAIN_LENGTH", 6, create=True), patch.object(
+            client._email_cfg, "CLOUDFLARE_RANDOM_SUBDOMAIN_SUFFIX", "mail", create=True):
+            with self.assertRaisesRegex(client.CFTempMailError, "ENABLE_CREATE_ADDRESS_SUBDOMAIN_MATCH"):
+                client.create_address()
+
+        request_mock.assert_called_once()
 
     @patch("core.cf_temp_mail_client.time.sleep")
     @patch("core.cf_temp_mail_client.requests.request")
