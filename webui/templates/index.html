@@ -3953,7 +3953,8 @@ function _tokenCellV2(r) {
   const liveErr = r.live_check_error || '';
   const liveAt = r.live_checked_at || '';
   let liveHtml = '';
-  if (live === 'live') liveHtml = `<div class="acc-v2-sub" title="${esc(liveAt)}">查活: 正常</div>`;
+  const liveFp = r.live_check_fingerprint_text || '';
+  if (live === 'live') liveHtml = `<div class="acc-v2-sub" title="${esc([liveAt, liveFp].filter(Boolean).join('\n'))}">查活: 正常${liveFp ? ` · ${esc(liveFp)}` : ''}</div>`;
   else if (live === 'queued') liveHtml = `<div class="acc-v2-sub" title="${esc(liveAt)}" style="color:#e6a23c">查活: 排队</div>`;
   else if (live === 'running') liveHtml = `<div class="acc-v2-sub" title="${esc(liveAt)}" style="color:#e6a23c">查活: 运行中</div>`;
   else if (live === 'deactivated') liveHtml = `<div class="acc-v2-sub" title="${esc(liveErr || liveAt)}" style="color:#f56c6c">查活: 已废</div>`;
@@ -6897,6 +6898,15 @@ function getRegistrationDriverValue() {
   const fv = Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, f.key) ? CONFIG_PENDING_UPDATES[f.key] : f.value;
   return String(fv == null ? 'protocol' : fv).trim().toLowerCase() || 'protocol';
 }
+function getAutoPlanCheckField() {
+  return (CONFIG || []).find(f => f.key === 'AUTO_PLAN_CHECK_AFTER_REGISTER') || null;
+}
+function getAutoPlanCheckValue() {
+  const f = getAutoPlanCheckField();
+  if (!f) return false;
+  const fv = Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, f.key) ? CONFIG_PENDING_UPDATES[f.key] : f.value;
+  return !!fv;
+}
 function registrationDriverLabel(value) {
   const cur = String(value || '').trim().toLowerCase();
   const hit = registrationDriverChoices().find(c => String(c.value) === cur);
@@ -6950,7 +6960,7 @@ function renderRegistrationDriverCard() {
     labelEl.textContent = label;
     labelEl.classList.toggle('is-placeholder', !label || label === '—');
   }
-  if (hintEl) hintEl.textContent = `驱动标识: ${cur}`;
+  if (hintEl) hintEl.textContent = `驱动标识: ${cur} · 自动查套餐: ${getAutoPlanCheckValue() ? '开' : '关'}`;
 }
 function renderRegistrationDriverField(f) {
   return `
@@ -6959,6 +6969,16 @@ function renderRegistrationDriverField(f) {
       <span class="hint">选择注册所用的自动化方式</span>
       <div class="config-ep-select" id="configRegistrationSelectV2"></div>
     </label>
+  `;
+}
+function renderRegistrationSettingsSection(fields) {
+  const driver = fields.find(f => f.key === 'REGISTRATION_DRIVER') || fields[0];
+  const autoPlan = fields.find(f => f.key === 'AUTO_PLAN_CHECK_AFTER_REGISTER');
+  return `
+    <div class="config-section-v2-body config-section-v2-body--single">
+      ${driver ? renderRegistrationDriverField(driver) : '<div class="banner warn">未找到注册方式配置项</div>'}
+    </div>
+    ${autoPlan ? `<div class="config-switches-v2" style="margin-top:14px;">${renderFeatureSwitchField(autoPlan, { withIcon: false })}</div>` : ''}
   `;
 }
 function renderFeatureSwitchField(f, opts = {}) {
@@ -7565,13 +7585,10 @@ function renderConfigSectionV2(name, fields) {
     `;
   }
   if (name === '注册方式') {
-    const field = fields.find(f => f.key === 'REGISTRATION_DRIVER') || fields[0];
     return `
       <section class="config-section-v2" id="${esc(slug)}" data-config-section="${esc(name)}">
         ${renderConfigSectionHead(name, configSectionIntro(name))}
-        <div class="config-section-v2-body config-section-v2-body--single">
-          ${field ? renderRegistrationDriverField(field) : '<div class="banner warn">未找到注册方式配置项</div>'}
-        </div>
+        ${renderRegistrationSettingsSection(fields)}
         <div class="config-section-v2-actions">
           <button type="button" class="btn primary" data-save-config-v2>保存</button>
         </div>
@@ -7850,6 +7867,7 @@ function trackConfigFieldChange(e) {
     if (caps.update_modes?.length) CONFIG_PENDING_UPDATES.EXTRACT_LINK_UPDATE_MODE = caps.update_modes[0];
     renderConfigLayoutV2();
   }
+  if (f.key === 'AUTO_PLAN_CHECK_AFTER_REGISTER') renderRegistrationDriverCard();
 }
 $('#tab-config').addEventListener('input', trackConfigFieldChange);
 $('#tab-config').addEventListener('change', trackConfigFieldChange);

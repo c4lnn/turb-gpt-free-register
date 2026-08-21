@@ -127,6 +127,7 @@ def _compact_account_for_list(row: dict) -> dict:
         "checkout_check_retry_after_seconds", "checkout_session_last_success_at",
         # 查活状态。
         "live_check_status", "live_check_error", "live_checked_at",
+        "live_check_device_id", "live_check_proxy_used", "live_check_fingerprint_text",
         # 提链成功/失败时才需要。
         "extract_link_status", "extract_link_type", "extract_link_message", "extract_link_error",
         "extract_link_job_id",
