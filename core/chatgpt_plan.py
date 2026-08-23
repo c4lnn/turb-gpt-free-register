@@ -6,6 +6,7 @@ import base64
 import ipaddress
 import json
 import logging
+from math import isfinite
 import socket
 import time
 from datetime import datetime, timezone
@@ -37,6 +38,23 @@ def normalize_token(token: str) -> str:
     if token.lower().startswith("bearer "):
         token = token[7:].strip()
     return token
+
+
+def discount_percentage_state(value: Any) -> str:
+    """分类服务端折扣比例，避免布尔值被当作 100%。"""
+    if value is None or isinstance(value, bool):
+        return "invalid"
+    try:
+        percentage = float(value)
+    except (TypeError, ValueError):
+        return "invalid"
+    if not isfinite(percentage):
+        return "invalid"
+    return "full" if percentage == 100.0 else "non_full"
+
+
+def is_full_discount_percentage(value: Any) -> bool:
+    return discount_percentage_state(value) == "full"
 
 
 def _mask_proxy(proxy: str) -> str:
@@ -250,19 +268,28 @@ def parse_accounts_check(data: dict, *, token: str = "") -> dict:
         else {}
     )
     plus_campaign = eligible_promo_campaigns.get("plus")
-    # ``plus`` 缺失/为 null 表示没有该优惠；一旦服务端给出非对象或
-    # 缺少 campaign id，则整项资格证据视为不完整，避免解析异常或误判。
+    plus_campaign_id = plus_campaign.get("id") if isinstance(plus_campaign, dict) else None
+    plus_meta = plus_campaign.get("metadata") if isinstance(plus_campaign, dict) else {}
+    plus_meta = plus_meta if isinstance(plus_meta, dict) else {}
+    discount = plus_meta.get("discount") or {}
+    discount = discount if isinstance(discount, dict) else {}
+    discount_percentage = discount.get("percentage") if "percentage" in discount else None
+    discount_state = discount_percentage_state(discount_percentage)
+    # 空的促销对象是服务端明确的“没有优惠”；一旦 plus 存在，必须同时
+    # 提供活动 ID、折扣对象和有效比例，才能把“不符合 0 元资格”视为已知。
     plus_campaign_shape_valid = (
         "plus" not in eligible_promo_campaigns
         or (
             isinstance(plus_campaign, dict)
-            and bool(str(plus_campaign.get("id") or "").strip())
+            and bool(str(plus_campaign_id or "").strip())
+            and isinstance(plus_campaign.get("metadata"), dict)
+            and isinstance(plus_meta.get("discount"), dict)
+            and "percentage" in discount
+            and discount_state != "invalid"
         )
     )
-    plus_meta = plus_campaign.get("metadata") if isinstance(plus_campaign, dict) else {}
-    plus_meta = plus_meta if isinstance(plus_meta, dict) else {}
-    discount = plus_meta.get("discount") or {}
     duration = plus_meta.get("duration") or {}
+    duration = duration if isinstance(duration, dict) else {}
 
     plan_type = account.get("plan_type") or claims.get("claim_plan_type") or ""
     subscription_plan = entitlement.get("subscription_plan") or ""
@@ -280,7 +307,11 @@ def parse_accounts_check(data: dict, *, token: str = "") -> dict:
     # 未拿到完整的促销字段时，必须保留未知态，不能把它压成普通 False。
     # 后续 mail.com 别名清理只接受明确的 JSON false。
     plus_trial_eligible = (
-        bool(is_free and plus_campaign)
+        bool(
+            is_free
+            and str(plus_campaign_id or "").strip() == "plus-1-month-free"
+            and discount_state == "full"
+        )
         if trial_eligibility_known
         else None
     )
@@ -313,10 +344,10 @@ def parse_accounts_check(data: dict, *, token: str = "") -> dict:
         "last_will_renew": bool(last_sub.get("will_renew")),
         "plus_trial_eligible": plus_trial_eligible,
         "trial_eligibility_known": trial_eligibility_known,
-        "plus_trial_campaign_id": plus_campaign.get("id") if isinstance(plus_campaign, dict) else None,
+        "plus_trial_campaign_id": plus_campaign_id,
         "plus_trial_title": plus_meta.get("title"),
         "plus_trial_summary": plus_meta.get("summary"),
-        "plus_trial_discount_percentage": discount.get("percentage"),
+        "plus_trial_discount_percentage": discount_percentage,
         "plus_trial_duration_num_periods": duration.get("num_periods"),
         "plus_trial_duration_period": duration.get("period"),
         "plus_trial_promotion_type_label": plus_meta.get("promotion_type_label"),

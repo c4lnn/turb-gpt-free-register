@@ -221,6 +221,43 @@ class CheckoutAutoTriggerTests(unittest.TestCase):
                 )
         enqueue.assert_not_called()
 
+    def test_auto_enqueue_rejects_non_full_or_other_campaign(self):
+        results = (
+            {
+                "ok": True,
+                "current_plan_type": "free",
+                "plus_trial_eligible": True,
+                "plus_trial_campaign_id": "plus-1-month-free",
+                "plus_trial_discount_percentage": 50,
+            },
+            {
+                "ok": True,
+                "current_plan_type": "free",
+                "plus_trial_eligible": True,
+                "plus_trial_campaign_id": "other-campaign",
+                "plus_trial_discount_percentage": 100,
+            },
+            {
+                "ok": True,
+                "current_plan_type": "free",
+                "plus_trial_eligible": True,
+                "plus_trial_campaign_id": "plus-1-month-free",
+                "plus_trial_discount_percentage": True,
+            },
+        )
+        with patch.object(checkout_cfg, "CHECKOUT_SESSION_AUTO_CHECK", True), patch(
+            "core.checkout_session_service.enqueue_checkout_session_check"
+        ) as enqueue:
+            for result in results:
+                plan_check_service._maybe_enqueue_checkout_session(
+                    account_id=1,
+                    email="auto@example.invalid",
+                    access_token="at-secret",
+                    trigger="registration_auto",
+                    result=result,
+                )
+        enqueue.assert_not_called()
+
     def test_auto_enqueue_exception_log_does_not_include_secret_text(self):
         eligible = {
             "ok": True,

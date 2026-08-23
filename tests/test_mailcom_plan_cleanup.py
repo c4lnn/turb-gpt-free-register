@@ -78,6 +78,56 @@ class MailComPlanResultTests(unittest.TestCase):
         self.assertTrue(result["trial_eligibility_known"])
         self.assertTrue(result["plus_trial_eligible"])
         self.assertEqual(result["plus_trial_campaign_id"], "plus-1-month-free")
+        self.assertEqual(result["plus_trial_discount_percentage"], 100)
+
+    def test_parser_requires_target_campaign_and_full_discount(self):
+        cases = (
+            ("plus-1-month-free", 50, False),
+            ("other-campaign", 100, False),
+            ("plus-1-month-free", "100", True),
+        )
+        for campaign_id, percentage, eligible in cases:
+            with self.subTest(campaign_id=campaign_id, percentage=percentage):
+                result = parse_accounts_check({
+                    "accounts": {
+                        "default": {
+                            "account": {"account_id": "acct-1", "plan_type": "free"},
+                            "entitlement": {"subscription_plan": "chatgptfreeplan"},
+                            "eligible_promo_campaigns": {
+                                "plus": {
+                                    "id": campaign_id,
+                                    "metadata": {"discount": {"percentage": percentage}},
+                                }
+                            },
+                        }
+                    }
+                })
+                self.assertTrue(result["trial_eligibility_known"])
+                self.assertIs(result["plus_trial_eligible"], eligible)
+                self.assertEqual(result["plus_trial_campaign_id"], campaign_id)
+                self.assertEqual(result["plus_trial_discount_percentage"], percentage)
+
+    def test_parser_marks_invalid_discount_shape_unknown(self):
+        campaigns = (
+            {"id": "plus-1-month-free", "metadata": {"discount": {}}},
+            {"id": "plus-1-month-free", "metadata": {"discount": {"percentage": "invalid"}}},
+            {"id": "plus-1-month-free", "metadata": {"discount": {"percentage": True}}},
+            {"id": "plus-1-month-free", "metadata": {"discount": "invalid"}},
+            {"id": "plus-1-month-free", "metadata": None},
+        )
+        for campaign in campaigns:
+            with self.subTest(campaign=campaign):
+                result = parse_accounts_check({
+                    "accounts": {
+                        "default": {
+                            "account": {"account_id": "acct-1", "plan_type": "free"},
+                            "entitlement": {"subscription_plan": "chatgptfreeplan"},
+                            "eligible_promo_campaigns": {"plus": campaign},
+                        }
+                    }
+                })
+                self.assertFalse(result["trial_eligibility_known"])
+                self.assertIsNone(result["plus_trial_eligible"])
 
 
 class MailComPlanPersistenceTests(unittest.TestCase):
@@ -128,6 +178,7 @@ class MailComPlanPersistenceTests(unittest.TestCase):
         alias = db.get_mailcom_alias_internal("alias@example.com")
         self.assertTrue(account["trial_eligibility_known"])
         self.assertFalse(account["plus_trial_eligible"])
+        self.assertEqual(account["plan_check_status"], "success")
         self.assertEqual(alias["plan_check_status"], "success")
 
     def test_incomplete_plan_persists_unknown_trial_state(self):
@@ -159,6 +210,7 @@ class MailComPlanPersistenceTests(unittest.TestCase):
         alias = db.get_mailcom_alias_internal("unknown@example.com")
         self.assertFalse(account["trial_eligibility_known"])
         self.assertIsNone(account["plus_trial_eligible"])
+        self.assertEqual(account["plan_check_status"], "success")
         self.assertEqual(alias["plan_check_status"], "incomplete")
 
     def test_save_account_data_links_active_alias(self):

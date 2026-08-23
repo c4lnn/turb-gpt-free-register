@@ -11,7 +11,7 @@ from datetime import datetime
 
 from config import proxy as proxy_cfg
 from core import db
-from core.chatgpt_plan import check_account_plan
+from core.chatgpt_plan import check_account_plan, is_full_discount_percentage
 
 logger = logging.getLogger(__name__)
 
@@ -69,13 +69,7 @@ def _checkout_auto_eligible(result: dict | None) -> bool:
         return False
     if str(result.get("plus_trial_campaign_id") or "").strip() != "plus-1-month-free":
         return False
-    discount = result.get("plus_trial_discount_percentage")
-    if isinstance(discount, bool):
-        return False
-    try:
-        return float(discount) == 100.0
-    except (TypeError, ValueError):
-        return False
+    return is_full_discount_percentage(result.get("plus_trial_discount_percentage"))
 
 
 def _maybe_enqueue_checkout_session(
