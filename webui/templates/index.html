@@ -132,7 +132,6 @@
     .accounts-table .col-token { width: 92px; }
     .accounts-table .col-plan { width: 340px; }
     .accounts-table .col-note { width: 180px; }
-    .accounts-table .col-agent { width: 220px; }
     .accounts-table .col-actions { width: 360px; }
     .accounts-table td:nth-child(6), .accounts-table th:nth-child(6) { overflow: visible; text-overflow: clip; }
     .accounts-table td:nth-child(10), .accounts-table th:nth-child(10) { overflow: visible; text-overflow: clip; }
@@ -180,9 +179,6 @@
       flex-basis: 100%; color: var(--red); font-size: 12px; line-height: 1.35;
       max-width: 260px; white-space: normal; overflow-wrap: anywhere;
     }
-    .agent-token-cell { margin-top: 4px; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
-    .agent-token-cell button { min-height:24px; border:1px solid #b9dfc9; border-radius:999px; background:#f0fbf5; color:#166534; padding:0 9px; font-size:12px; font-weight:800; cursor:pointer; }
-    .agent-token-cell .agent-download { border-color:#bdd0ff; background:#f3f7ff; color:#1d4ed8; }
     .actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
     .jobs-table td.actions-cell { text-align: center; vertical-align: middle; overflow: visible; }
     .job-actions { justify-content: center; flex-wrap: nowrap; width: 100%; }
@@ -781,7 +777,6 @@
     .accounts-table-v2 .col-note { width: 140px; }
     .accounts-table-v2 .col-small { width: 72px; }
     .accounts-table-v2 .col-status { width: 100px; }
-    .accounts-table-v2 .col-agent { width: 140px; }
     .accounts-table-v2 .col-time { width: 170px; }
     .accounts-table-v2 .col-actions { width: 160px; }
     .accounts-table-v2 input[type="checkbox"] {
@@ -816,7 +811,6 @@
     .accounts-table-v2 .col-plan,
     .accounts-table-v2 .col-extract-link,
     .accounts-table-v2 .col-note,
-    .accounts-table-v2 .col-agent,
     .accounts-table-v2 .col-actions {
       white-space: normal; overflow: visible; text-overflow: clip; vertical-align: middle;
     }
@@ -902,10 +896,6 @@
     .accounts-table-v2 .acc-v2-codex.is-fail { color: #f56c6c; }
     .accounts-table-v2 .acc-v2-codex.is-run { color: #e6a23c; }
     .accounts-table-v2 .acc-v2-codex.is-mute { color: #c0c4cc; }
-    .accounts-table-v2 .agent-token-cell {
-      display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 0;
-    }
-    .accounts-table-v2 .agent-token-cell button,
     .accounts-table-v2 .extract-link-cell button {
       height: 26px; min-height: 26px; padding: 0 10px; border-radius: 4px;
       border: 1px solid #67c23a; background: #fff; color: #67c23a;
@@ -914,11 +904,9 @@
       cursor: pointer; line-height: 1;
       white-space: nowrap;
     }
-    .accounts-table-v2 .agent-token-cell button:hover:not(:disabled),
     .accounts-table-v2 .extract-link-cell button:hover:not(:disabled) {
       background: #f0f9eb; border-color: #67c23a;
     }
-    .accounts-table-v2 .agent-token-cell button:disabled,
     .accounts-table-v2 .extract-link-cell button:disabled {
       opacity: .55; cursor: not-allowed;
     }
@@ -2483,12 +2471,6 @@
           <button type="button" class="jobs-tb-btn" id="btnManageMasiCdksV2" title="导入、刷新和维护 Masi CDK 可选池与已用完池">CDK池</button>
         </div>
         <div class="acc-v2-btn-group">
-          <span class="acc-v2-btn-group-title">Agent</span>
-          <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnGenerateSelectedAgentV2" disabled title="给选中的已注册账号批量生成 Codex Agent Token">生成</button>
-          <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnDownloadSelectedAgentV2" disabled title="下载选中账号已生成的 Codex Agent Token，打包 ZIP">下载</button>
-          <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnUploadSelectedAgentSub2V2" disabled title="把选中账号已生成的 Codex Agent Token 上传到 sub2api">上传sub2</button>
-        </div>
-        <div class="acc-v2-btn-group">
           <span class="acc-v2-btn-group-title">Codex</span>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnRetrySelectedCodexV2" disabled title="给选中的账号批量补跑 Codex 授权">补跑</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnDownloadSelectedCpaV2" disabled title="从 CPA auth-files 下载选中账号的 Codex JSON，并打包 ZIP">下载CPA</button>
@@ -2518,7 +2500,7 @@
           <colgroup>
             <col class="col-check"><col class="col-id"><col class="col-email"><col class="col-source">
             <col class="col-token"><col class="col-plan"><col class="col-checkout"><col class="col-extract-link"><col class="col-small"><col class="col-status">
-            <col class="col-agent"><col class="col-note"><col class="col-time"><col class="col-actions">
+            <col class="col-note"><col class="col-time"><col class="col-actions">
           </colgroup>
           <thead>
             <tr>
@@ -2532,7 +2514,6 @@
               <th class="col-extract-link">提链</th>
               <th class="col-small">2FA</th>
               <th class="col-status">Codex</th>
-              <th class="col-agent">Agent Token</th>
               <th class="col-note">备注</th>
               <th class="col-time">创建时间</th>
               <th class="col-actions">操作</th>
@@ -3625,13 +3606,10 @@ async function pollAccountPlanStatuses() {
         const isChecking = ['queued', 'running'].includes(item.plan_check_status);
         const wasExtracting = ['queued', 'running'].includes(account?.extract_link_status);
         const isExtracting = ['queued', 'running'].includes(item.extract_link_status);
-        const wasAgenting = ['queued', 'running'].includes(account?.codex_agent_status);
-        const isAgenting = ['queued', 'running'].includes(item.codex_agent_status);
         const wasCheckouting = ['queued', 'running'].includes(account?.checkout_check_status);
         const isCheckouting = ['queued', 'running'].includes(item.checkout_check_status);
         if (wasChecking && !isChecking) needsFullReload = true;
         if (wasExtracting && !isExtracting) needsFullReload = true;
-        if (wasAgenting && !isAgenting) needsFullReload = true;
         if (wasCheckouting && !isCheckouting) needsFullReload = true;
         Object.assign(account, item);
       });
@@ -3665,25 +3643,6 @@ function _codexCellV2(r) {
   if (s === 'skipped') return `<span class="acc-v2-codex is-skip"${titleAttr}>已跳过</span>`;
   if (s === 'deactivated') return `<span class="acc-v2-codex is-fail" title="账号已被 OpenAI 删除/停用/封禁，无法授权">已废号</span>`;
   return `<span class="acc-v2-muted">-</span>`;
-}
-function _codexAgentCell(r) {
-  const s = r.codex_agent_status || '';
-  const err = r.codex_agent_error || '';
-  const msg = r.codex_agent_message || '';
-  const title = esc(msg || r.codex_agent_runtime_id || '');
-  if (s === 'queued') return `<div class="agent-token-cell"><span class="pill status-running" title="${title}">排队中</span></div>`;
-  if (s === 'running') return `<div class="agent-token-cell"><span class="pill status-running" title="${title}">生成中</span></div>`;
-  if (s === 'success') {
-    const rid = r.codex_agent_runtime_id ? short(r.codex_agent_runtime_id, 10) : '已生成';
-    const copy = r.codex_agent_has_token ? `<button data-account-copy-secret="codex_agent_token" data-account-id="${esc(r.id)}" title="按需读取并复制完整 Agent Token">复制Agent Token</button>` : '';
-    const download = `<button class="agent-download" data-codex-agent-download="${esc(r.id)}" title="下载该账号 Codex Agent auth.json">下载Agent</button>`;
-    const uploadSub2 = `<button class="agent-download" data-codex-agent-upload-sub2="${esc(r.id)}" title="上传该账号 Agent Token 到 sub2api">上传sub2</button>`;
-    const regen = `<button data-codex-agent="${esc(r.id)}" title="重新生成 Codex Agent Token">重生成</button>`;
-    return `<div class="agent-token-cell"><span class="pill status-success" title="${title}">${esc(rid)}</span>${copy}${download}${uploadSub2}${regen}</div>`;
-  }
-  const gen = r.has_access_token ? `<button data-codex-agent="${esc(r.id)}" title="生成 Codex CLI agent_identity auth.json/token">生成Agent</button>` : '';
-  if (s === 'failed') return `<div class="agent-token-cell"><span class="pill status-failed" title="${title}">失败</span>${gen}</div>`;
-  return gen ? `<div class="agent-token-cell">${gen}</div>` : '<span class="muted">-</span>';
 }
 function _fmtPlanTime(v, dateOnly = false) {
   if (!v) return '';
@@ -4019,7 +3978,6 @@ function renderAccounts() {
       <td class="col-extract-link" data-label="提链">${_extractLinkCell(r) || '<span class="acc-v2-muted">-</span>'}</td>
       <td class="col-small">${r.totp_enabled ? '已启用' : '<span class="acc-v2-muted">未启用</span>'}</td>
       <td class="col-status">${_codexCellV2(r)}</td>
-      <td class="col-agent">${_codexAgentCell(r)}</td>
       <td class="col-note" title="${esc(r.note || '')}">${r.note ? esc(short(r.note, 80)) : '<span class="acc-v2-muted">-</span>'}</td>
       <td class="col-time" title="${esc(r.created_at || '-')}">${esc(r.created_at || '-')}</td>
       <td class="col-actions">
@@ -4050,7 +4008,6 @@ function updateAccountSelectionUi(pageRows = null) {
   const archiveTitle = SHOW_ARCHIVED_ACCOUNTS ? '把选中的归档账号恢复到默认账号列表' : '归档选中的账号；默认账号列表将不再查询/显示这些账号';
   const v2Ids = [
     'btnCheckSelectedPlansV2', 'btnCheckSelectedCheckoutV2', 'btnExtractSelectedLinksV2',
-    'btnGenerateSelectedAgentV2', 'btnDownloadSelectedAgentV2', 'btnUploadSelectedAgentSub2V2',
     'btnRetrySelectedCodexV2', 'btnDownloadSelectedCpaV2', 'btnStopSelectedCodexV2',
     'btnNoteSelectedAccountsV2', 'btnCopySelectedLinesV2', 'btnCopySelectedEmailsV2',
     'btnDownloadSelectedTxtV2', 'btnArchiveSelectedAccountsV2', 'btnDeleteSelectedAccountsV2',
@@ -4165,7 +4122,7 @@ async function onAccountsBodyClick(e) {
       const value = await fetchOneAccountSecret(id, field);
       if (!value) { showToast('可复制内容为空'); return; }
       copyText(value);
-      showToast(field === 'access_token' ? 'AT 已复制' : field === 'codex_agent_token' ? 'Agent Token 已复制' : '账号整行已复制');
+      showToast(field === 'access_token' ? 'AT 已复制' : '账号整行已复制');
     } catch(err) {
       showToast('复制失败: ' + err.message);
     } finally {
@@ -4225,24 +4182,6 @@ async function onAccountsBodyClick(e) {
   const extractResumeBtn = e.target.closest('[data-extract-link-resume]');
   if (extractResumeBtn) {
     await resumeExtractLink(Number(extractResumeBtn.dataset.extractLinkResume), extractResumeBtn);
-    return;
-  }
-
-  const agentBtn = e.target.closest('[data-codex-agent]');
-  if (agentBtn) {
-    await generateOneCodexAgent(Number(agentBtn.dataset.codexAgent), agentBtn);
-    return;
-  }
-
-  const agentDownloadBtn = e.target.closest('[data-codex-agent-download]');
-  if (agentDownloadBtn) {
-    downloadOneCodexAgent(Number(agentDownloadBtn.dataset.codexAgentDownload));
-    return;
-  }
-
-  const agentUploadSub2Btn = e.target.closest('[data-codex-agent-upload-sub2]');
-  if (agentUploadSub2Btn) {
-    await uploadOneCodexAgentSub2(Number(agentUploadSub2Btn.dataset.codexAgentUploadSub2), agentUploadSub2Btn);
     return;
   }
 
@@ -4791,168 +4730,6 @@ async function extractSelectedLinks() {
     updateAccountSelectionUi();
   } finally {
     btn.textContent = old;
-  }
-}
-
-async function generateOneCodexAgent(id, btn) {
-  const acc = ACCOUNTS.find(a => Number(a.id) === Number(id));
-  if (!acc) { showToast('账号不存在'); return; }
-  if (!acc.has_access_token) { showToast('该账号没有 access_token'); return; }
-  if (!confirm(`确定为该账号生成 Codex Agent Token 吗？\n\n${acc.email || ('#' + id)}\n\n会调用 auth.openai.com 注册 agent_identity，并保存到本地账号记录。`)) return;
-  const old = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = '生成中…';
-  try {
-    await api('/api/accounts/codex-agent', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({account_id: id}),
-    });
-    showToast('Codex Agent Token 生成任务已入队');
-    await pollAccountPlanStatuses();
-  } catch(err) {
-    showToast('生成失败: ' + err.message);
-    btn.disabled = false;
-    btn.textContent = old;
-  }
-}
-
-async function generateSelectedCodexAgents() {
-  const ids = Array.from(ACCOUNT_SELECTED);
-  if (ids.length === 0) { showToast('请先选择账号'); return; }
-  const selected = ids.map(id => ACCOUNTS.find(a => Number(a.id) === Number(id))).filter(Boolean);
-  const eligible = selected.filter(a => a.has_access_token);
-  if (!eligible.length) { showToast('选中账号里没有可用 access_token'); return; }
-  if (!confirm(`确定批量生成 ${eligible.length} 个 Codex Agent Token 吗？\n\n缺少 access_token 的账号会自动跳过。`)) return;
-  const btn = $('#btnGenerateSelectedAgentV2');
-  const old = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = '生成中…';
-  try {
-    const r = await api('/api/accounts/codex-agent-bulk', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({account_ids: ids}),
-    });
-    const skipped = (r.skipped_count || 0) + (r.busy_count || 0) + (r.failed_count || 0);
-    showToast(skipped ? `已入队 ${r.started_count || 0} 个，跳过/失败 ${skipped} 个` : `已入队 ${r.started_count || 0} 个`);
-    await pollAccountPlanStatuses();
-  } catch(err) {
-    showToast('批量生成失败: ' + err.message);
-    updateAccountSelectionUi();
-  } finally {
-    btn.textContent = old;
-  }
-}
-
-async function uploadOneCodexAgentSub2(id, btn) {
-  const acc = ACCOUNTS.find(a => Number(a.id) === Number(id));
-  if (!acc) { showToast('账号不存在'); return; }
-  if ((acc.codex_agent_status || '') !== 'success') { showToast('该账号还没有生成 Agent Token'); return; }
-  if (!confirm(`确定上传该账号 Agent Token 到 sub2api 吗？\n\n${acc.email || ('#' + id)}`)) return;
-  const old = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = '上传中…';
-  try {
-    await api(`/api/accounts/${encodeURIComponent(id)}/codex-agent/upload-sub2`, { method:'POST' });
-    showToast('Agent Token 已上传 sub2api');
-    await pollAccountPlanStatuses();
-  } catch(err) {
-    showToast('上传 sub2 失败: ' + err.message);
-    btn.disabled = false;
-    btn.textContent = old;
-  }
-}
-
-async function uploadSelectedCodexAgentSub2() {
-  const ids = Array.from(ACCOUNT_SELECTED);
-  if (ids.length === 0) { showToast('请先选择账号'); return; }
-  const selected = ids.map(id => ACCOUNTS.find(a => Number(a.id) === Number(id))).filter(Boolean);
-  const ready = selected.filter(a => (a.codex_agent_status || '') === 'success');
-  if (!ready.length) { showToast('选中账号里没有已生成的 Agent Token'); return; }
-  if (!confirm(`确定上传选中的 ${ready.length} 个 Agent Token 到 sub2api 吗？\n\n未生成成功的账号会自动跳过。`)) return;
-  const btn = $('#btnUploadSelectedAgentSub2V2');
-  const old = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = '上传中…';
-  try {
-    const r = await api('/api/accounts/codex-agent/upload-sub2-bulk', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({account_ids: ids}),
-    });
-    const skipped = (r.skipped_count || 0) + (r.failed_count || 0);
-    showToast(skipped ? `已上传 ${r.uploaded_count || 0} 个，跳过/失败 ${skipped} 个` : `已上传 ${r.uploaded_count || 0} 个`);
-    await pollAccountPlanStatuses();
-  } catch(err) {
-    showToast('批量上传 sub2 失败: ' + err.message);
-    updateAccountSelectionUi();
-  } finally {
-    btn.textContent = old;
-  }
-}
-
-function _ensureDownloadFrame(name) {
-  let iframe = document.querySelector(`iframe[name="${name}"]`);
-  if (!iframe) {
-    iframe = document.createElement('iframe');
-    iframe.name = name;
-    iframe.style.display = 'none';
-    document.body.appendChild(iframe);
-  }
-  return iframe;
-}
-
-function downloadOneCodexAgent(id) {
-  const acc = ACCOUNTS.find(a => Number(a.id) === Number(id));
-  if (!acc) { showToast('账号不存在'); return; }
-  if ((acc.codex_agent_status || '') !== 'success') { showToast('该账号还没有生成 Agent Token'); return; }
-  _ensureDownloadFrame('codexAgentDownloadFrame');
-  const a = document.createElement('a');
-  a.href = `/api/accounts/${encodeURIComponent(id)}/codex-agent/download`;
-  a.target = 'codexAgentDownloadFrame';
-  a.style.display = 'none';
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => a.remove(), 1000);
-  showToast('已提交 Agent Token 下载');
-}
-
-function downloadSelectedCodexAgents() {
-  const ids = Array.from(ACCOUNT_SELECTED);
-  if (ids.length === 0) { showToast('请先选择账号'); return; }
-  const selected = ids.map(id => ACCOUNTS.find(a => Number(a.id) === Number(id))).filter(Boolean);
-  const ready = selected.filter(a => (a.codex_agent_status || '') === 'success');
-  if (!ready.length) { showToast('选中账号里没有已生成的 Agent Token'); return; }
-  if (!confirm(`确定下载选中的 ${ready.length} 个 Codex Agent Token 吗？\n\n未生成成功的账号会自动跳过，文件会打包 ZIP。`)) return;
-  const btn = $('#btnDownloadSelectedAgentV2');
-  const old = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = '下载中…';
-  try {
-    const frameName = 'codexAgentBulkDownloadFrame';
-    _ensureDownloadFrame(frameName);
-    const form = document.createElement('form');
-    form.method = 'POST';
-    form.action = '/api/accounts/codex-agent/download-bulk';
-    form.target = frameName;
-    form.style.display = 'none';
-    const input = document.createElement('input');
-    input.type = 'hidden';
-    input.name = 'account_ids';
-    input.value = JSON.stringify(ids);
-    form.appendChild(input);
-    document.body.appendChild(form);
-    form.submit();
-    setTimeout(() => form.remove(), 30000);
-    showToast('已提交 Agent Token ZIP 下载');
-  } catch(err) {
-    showToast('下载 Agent Token 失败: ' + err.message);
-  } finally {
-    setTimeout(() => {
-      btn.textContent = old;
-      updateAccountSelectionUi();
-    }, 1200);
   }
 }
 
@@ -5532,9 +5309,6 @@ async function copySelectedAccountTokens() {
   bind('btnCheckSelectedPlansV2', checkSelectedPlans);
   bind('btnCheckSelectedCheckoutV2', checkSelectedCheckoutSessions);
   bind('btnExtractSelectedLinksV2', extractSelectedLinks);
-  bind('btnGenerateSelectedAgentV2', generateSelectedCodexAgents);
-  bind('btnDownloadSelectedAgentV2', downloadSelectedCodexAgents);
-  bind('btnUploadSelectedAgentSub2V2', uploadSelectedCodexAgentSub2);
   bind('btnRetrySelectedCodexV2', retrySelectedCodex);
   bind('btnDownloadSelectedCpaV2', downloadSelectedCpa);
   bind('btnStopSelectedCodexV2', stopSelectedCodex);
@@ -6752,11 +6526,14 @@ function codexConfigSectionForKey(key) {
   if (['SUB2API_API_BASE','SUB2API_API_KEY','SUB2API_API_TIMEOUT'].includes(key)) {
     return ['sub2api通用', 'sub2api 共用 API 基址、鉴权和超时配置；Agent Token 和 OAuth 都复用这里'];
   }
-  if (['SUB2API_AUTO_EXPORT','SUB2API_SYNC_MODE','SUB2API_OUTPUT_PATH','SUB2API_PROXY_KEY'].includes(key)) {
-    return ['sub2api Agent Token', 'Codex Agent Token 生成后的 sub2api 同步、上传路径、本地文件和代理键配置'];
-  }
   return ['基础配置', ''];
 }
+const HIDDEN_CODEX_AGENT_CONFIG_KEYS = new Set([
+  'SUB2API_AUTO_EXPORT',
+  'SUB2API_SYNC_MODE',
+  'SUB2API_OUTPUT_PATH',
+  'SUB2API_PROXY_KEY',
+]);
 
 function renderRoxyWorkspaceToolsV2() {
   const current = (CONFIG.find(f => f.key === 'ROXY_WORKSPACE_ID') || {}).value || '';
@@ -7507,9 +7284,10 @@ async function loadCloudMailDomainsV2() {
 
 function renderCodexSectionV2(fields) {
   const slug = configGroupSlug('Codex');
-  const preferred = ['基础配置', 'CPA配置', 'sub2api通用', 'sub2api Agent Token'];
+  const preferred = ['基础配置', 'CPA配置', 'sub2api通用'];
+  const visibleFields = fields.filter(f => !HIDDEN_CODEX_AGENT_CONFIG_KEYS.has(f.key));
   const bySection = {};
-  for (const f of fields) {
+  for (const f of visibleFields) {
     const [section, help] = codexConfigSectionForKey(f.key || '');
     if (!bySection[section]) bySection[section] = { help, fields: [] };
     bySection[section].fields.push(f);
