@@ -20,6 +20,7 @@ class MailComRegistrationBoundaryTests(unittest.TestCase):
         ]
         for item in self.patches:
             item.start()
+        db.import_mailcom_emails([{"email": "mother@mail.com", "password": "pw"}])
         db.create_mailcom_alias(
             alias_email="alias@example.com",
             parent_email="mother@mail.com",
@@ -38,6 +39,8 @@ class MailComRegistrationBoundaryTests(unittest.TestCase):
                 main.run_registration("alias@example.com", "Alice Example")
         alias = db.get_mailcom_alias_internal("alias@example.com")
         self.assertIsNotNone(alias["registration_started_at"])
+        self.assertEqual(alias["status"], "failed")
+        self.assertIsNone(db.claim_next_mailcom_alias(job_id=99))
 
 
 if __name__ == "__main__":

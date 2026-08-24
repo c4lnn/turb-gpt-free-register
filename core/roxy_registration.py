@@ -1999,6 +1999,93 @@ def _check_manual_stop() -> None:
         return
 
 
+def _apply_roxy_twofa(
+    driver,
+    email: str,
+    initial_session_info: dict,
+    initial_access_token: str,
+) -> tuple[dict, str, str | None, dict]:
+    """在当前 Roxy/Selenium Profile 中执行独立 2FA，并返回安全摘要。
+
+    协议注册的 ``setup_2fa`` 绑定 BrowserSession，不能共享给此路径。Roxy
+    分支仅复用本文件的页面 OTP helper 和统一邮箱 provider，保留当前浏览器的
+    Cookie、设备 ID、代理和指纹连续性。
+    """
+    from core.roxy_2fa import RoxyTwoFactorHooks, disabled_result, public_result, setup_roxy_2fa
+
+    if not _twofa_cfg.ENABLE_2FA:
+        result = disabled_result()
+        logger.info("[Roxy注册][2FA] ENABLE_2FA=False，跳过 Roxy 2FA 页面流程")
+        return initial_session_info, initial_access_token, None, public_result(result)
+
+    try:
+        # 注册入口建立的默认 script timeout 是 12 秒。2FA 的长脚本会临时放宽，
+        # 并在模块内部恢复到此值，避免影响后续 Codex OAuth。
+        try:
+            driver.set_script_timeout(12)
+        except Exception:
+            pass
+
+        hooks = RoxyTwoFactorHooks(
+            wait_for_otp=wait_for_otp,
+            clear_otp_inputs=lambda: _clear_otp_inputs(driver),
+            type_otp=lambda code: _type_otp(driver, code),
+            submit_otp=lambda: _click_continue(driver),
+            wait_after_otp_submit=lambda: _wait_after_email_otp_submit(driver, timeout=30),
+            is_email_verification_page=lambda: _is_email_verification_page(driver),
+            click_resend_otp=lambda: _click_resend_email_otp(driver, timeout=25),
+            fetch_session=lambda: _fetch_chatgpt_session(driver, timeout=120),
+            check_stop=_check_manual_stop,
+        )
+        human_delay("twofa_start")
+        result = setup_roxy_2fa(driver, email, hooks=hooks, script_timeout_restore=12)
+    except Exception as exc:
+        if type(exc).__name__ == "StopRequested":
+            raise
+        # 不记录外部异常正文：其中可能含授权 URL、Cookie 或 token。
+        logger.warning("[Roxy注册][2FA] 调用出现未分类异常：type=%s", type(exc).__name__)
+        result = {
+            "status": "failed",
+            "error": {
+                "stage": "integration",
+                "code": "twofa_integration_failed",
+                "message": "Roxy 2FA 集成调用失败",
+            },
+        }
+
+    summary = public_result(result)
+    status = summary["status"]
+    if status == "enabled":
+        refreshed_session = result.get("session_info") if isinstance(result, dict) else None
+        refreshed_token = str((result or {}).get("access_token") or "").strip()
+        secret = str((result or {}).get("secret") or "").strip()
+        if not isinstance(refreshed_session, dict) or not refreshed_token or not secret:
+            summary = {
+                "status": "failed",
+                "activated_at": None,
+                "error": {
+                    "stage": "integration",
+                    "code": "twofa_success_result_invalid",
+                    "message": "Roxy 2FA 成功结果缺少必要凭证",
+                },
+            }
+            logger.warning("[Roxy注册][2FA] 成功结果缺少必要凭证，保留初始 Session")
+            return initial_session_info, initial_access_token, None, summary
+        logger.info("[Roxy注册][2FA] 已启用 TOTP，使用重认证后的 Session 保存账号")
+        return refreshed_session, refreshed_token, secret, summary
+
+    if status == "failed":
+        error = summary.get("error") or {}
+        logger.warning(
+            "[Roxy注册][2FA] 设置失败，仍保存账号：stage=%s code=%s",
+            error.get("stage") or "unknown",
+            error.get("code") or "unknown",
+        )
+    elif status == "already_enabled":
+        logger.info("[Roxy注册][2FA] 账号已要求认证器验证码，未覆盖本地 Secret")
+    return initial_session_info, initial_access_token, None, summary
+
+
 def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = None, otp_code: str = None, batch_dir: Path | None = None) -> dict:
     """Roxy 指纹浏览器自动化注册入口。"""
     client = RoxyBrowserClient()
@@ -2061,8 +2148,7 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
                         fallback_otp = None
                     if fallback_otp:
                         logger.info(
-                            "[Roxy注册][OTP] 取码接口超时但宽松取到最新验证码，直接重试提交：%s (fallback)",
-                            fallback_otp,
+                            "[Roxy注册][OTP] 取码接口超时但宽松取到最新验证码，直接重试提交 (fallback)",
                         )
                         current_otp = fallback_otp
                         continue
@@ -2078,7 +2164,7 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
                     human_delay("api")
                     current_otp = None
                     continue
-            logger.info("[Roxy注册][OTP] 收到验证码：%s", current_otp)
+            logger.info("[Roxy注册][OTP] 已获取验证码，准备填写")
             _clear_otp_inputs(driver)
             _type_otp(driver, current_otp)
             logger.info("[Roxy注册][OTP] 已填写邮箱验证码")
@@ -2112,14 +2198,18 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
 
         logger.info("[Roxy注册] 等待 ChatGPT 跳转并写入 session/accessToken")
         _check_manual_stop()
-        session_info = _fetch_chatgpt_session(driver, timeout=120)
-        access_token = session_info["accessToken"]
+        initial_session_info = _fetch_chatgpt_session(driver, timeout=120)
+        initial_access_token = initial_session_info["accessToken"]
         logger.info("[Roxy注册] 已拿到 accessToken：%s", email)
         _check_manual_stop()
 
-        if _twofa_cfg.ENABLE_2FA:
-            logger.warning("[Roxy注册] 当前 Roxy 自动化路径暂不执行 2FA 设置，已跳过")
-        totp_secret = None
+        session_info, access_token, totp_secret, twofa = _apply_roxy_twofa(
+            driver,
+            email,
+            initial_session_info,
+            initial_access_token,
+        )
+        _check_manual_stop()
 
         codex_result = {
             "status": "skipped",
@@ -2160,6 +2250,7 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
                 "expires": session_info.get("expires"),
                 "roxybrowser": {"profile_id": opened.profile_id, "open_result": opened.raw},
                 "registration_password": openai_password,
+                "twofa": twofa,
                 "codex": codex_result,
             },
         )
@@ -2171,16 +2262,22 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
             "account_id": account_id,
             "access_token": access_token,
             "totp_secret": totp_secret,
+            "twofa": twofa,
             "codex": codex_result,
             "error": None if codex_ok else f"Codex 未完成: {codex_result.get('message')}",
         }
     except Exception as exc:
         logger.error("[Roxy注册] 失败：%s: %s", type(exc).__name__, exc)
         logger.debug("[Roxy注册] 失败详情", exc_info=True)
-        # 未确认创建前回收邮箱；确认后避免重复使用。
+        # 已领取邮箱无论失败发生在哪个阶段都不可再次复用；若账号已保存，
+        # 统一状态接口会将条目保持为 used。
         try:
-            from core.email_provider import release_email
-            release_email(email, status="failed" if create_acknowledged else "available", note=f"Roxy注册失败: {str(exc)[:180]}")
+            from core.email_provider import release_email_if_unconsumed
+
+            release_email_if_unconsumed(
+                email,
+                note=f"Roxy注册失败: {str(exc)[:240]}",
+            )
         except Exception:
             pass
         return {"success": False, "email": email, "error": f"{type(exc).__name__}: {str(exc)[:300]}"}

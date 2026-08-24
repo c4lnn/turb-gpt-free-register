@@ -251,7 +251,7 @@ def _parse_accounts_file(path: Path) -> list[OutlookAccount]:
 
 def pick_account() -> OutlookAccount:
     """
-    原子地挑一个 status='available' 的 Outlook 账号并标记为 'used'（DB 事务）。
+    原子地挑一个 status='available' 的 Outlook 账号并标记为 'registering'（DB 事务）。
     多线程并发安全。
     """
     from core.db import claim_next_outlook, outlook_pool_summary
@@ -297,14 +297,14 @@ def get_account_context(email: str) -> OutlookAccount | None:
     return account
 
 
-def release_account(email: str, status: str = "available", note: str | None = None) -> None:
-    """按注册阶段结果更新 Outlook 账号状态：可重试回 available，已消耗则标记 failed。"""
+def release_account(email: str, status: str = "failed", note: str | None = None) -> None:
+    """按注册阶段结果更新 Outlook 账号状态；默认失败进入不可复用终态。"""
     from core.db import release_outlook
     release_outlook(email, status=status, note=note)
     _CONTEXT_CACHE.pop(email, None)
 
 
-def import_outlook_from_file(path: str | Path | None = None) -> tuple[int, int]:
+def import_outlook_from_file(path: str | Path | None = None, *, reactivate_existing: bool = False) -> tuple[int, int]:
     """读取一份账号文本文件，全量导入 DB，返回 (新增, 已存在跳过)。"""
     from core.db import import_outlook_accounts
     p = Path(path or OUTLOOK_ACCOUNTS_FILE)
@@ -315,10 +315,10 @@ def import_outlook_from_file(path: str | Path | None = None) -> tuple[int, int]:
         {"email": a.email, "password": a.password, "client_id": a.client_id, "refresh_token": a.refresh_token}
         for a in accounts
     ]
-    return import_outlook_accounts(records)
+    return import_outlook_accounts(records, reactivate_existing=reactivate_existing)
 
 
-def import_outlook_from_text(text: str) -> tuple[int, int]:
+def import_outlook_from_text(text: str, *, reactivate_existing: bool = False) -> tuple[int, int]:
     """直接给一段多行文本（粘贴用），导入 DB。"""
     from core.db import import_outlook_accounts
     records = []
@@ -334,7 +334,7 @@ def import_outlook_from_text(text: str) -> tuple[int, int]:
             "email": email, "password": password,
             "client_id": client_id, "refresh_token": refresh_token,
         })
-    return import_outlook_accounts(records)
+    return import_outlook_accounts(records, reactivate_existing=reactivate_existing)
 
 
 # ============================================================

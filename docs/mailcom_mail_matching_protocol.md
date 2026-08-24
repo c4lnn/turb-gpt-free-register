@@ -17,7 +17,7 @@
 - 按发件人地址识别 OpenAI/ChatGPT 邮件，获取完整邮件头和 HTML 正文，并转换为纯文本。
 - 在共享母号收件箱中，以 <code>mailHeader.to</code> 的结构化、大小写不敏感精确地址匹配指定 alias；先读完整头，匹配后才读正文。
 - 在 mail.com settings 临时登录会话中读取地址列表、校验候选地址、创建地址、URL 编码删除地址，并以地址列表回读确认结果。
-- 以远端 <code>state=ACTIVE && deletable=true</code> 的地址数执行 10 个别名上限；候选冲突有界重试，创建和删除通过母号级锁串行化。
+- 以远端 <code>state=ACTIVE && deletable=true</code> 的地址数执行 9 个活动别名上限，并以全量历史快照执行 99 个生命周期累计上限；候选冲突有界重试，创建和删除通过母号级锁串行化。
 - 以独立 <code>mailcom_aliases</code> 持久化 alias 到母号的映射、任务、注册、套餐和清理状态；记录不复制母号密码、mailbox AT、Cookie、<code>sid</code> 或邮件正文。
 - 默认关闭地处理“套餐查询成功且明确无试用资格”后的单次别名删除。
 
@@ -43,7 +43,7 @@ mail.com 母号 / alias provider
   | 领取母号（短租约）
   | 获取临时 settings 登录 session（不持久化 Cookie/sid）
   | GET /mailaccount/primary/emailAddresses
-  | 仅统计 ACTIVE && deletable=true；>=10 则终止当前任务
+  | 读取活动/历史容量；活动 >=9 或生命周期 >=99 时终止当前任务
   | 本地 138 域名目录 + 随机名称生成候选 alias
   | POST /emailAddressValidations
   | POST /primary/emailAddresses
@@ -484,6 +484,37 @@ HAR 中三次列表快照的地址数量依次为 <code>4 -&gt; 5 -&gt; 4</code>
 这证明应以地址列表回读作为写操作的最终确认，不能仅依赖创建响应正文。地址和显示名均属于个人数据，
 日志中只能记录数量、脱敏地址或不可逆摘要。
 
+#### 5.8.1.1 获取生命周期历史容量（只读）
+
+创建前或用户手动刷新容量时，使用同一 settings 会话调用下列 URL：
+
+~~~http
+GET https://settings-cats.mail.com/mailaccount/primary/emailAddresses?
+absoluteURI=false&q.type.in=MANAGED,DOMAIN_HOSTING
+~~~
+
+该请求刻意不带 <code>q.state.in=ACTIVE</code>，因此会同时返回母号和历史
+<code>INACTIVE</code> 别名。只在内存中解析后保存聚合字段，不保存地址、
+<code>displayName</code>、<code>_links</code>、响应正文或认证材料：
+
+- <code>deletable=true</code> 计入生命周期累计别名，母号的
+  <code>deletable=false</code> 行不计入；
+- <code>state=ACTIVE && deletable=true</code> 同时计入活动别名；
+- 可删除但状态未知的行仍占用生命周期计数，并增加
+  <code>remote_history_unknown_count</code>；缺字段或明确分页未完成时状态为
+  <code>capacity_unknown</code>，不得推断存在剩余容量。
+
+生命周期上限是母号之外累计 <strong>99</strong> 个别名，活动上限仍是
+<strong>9</strong> 个。生命周期剩余为 <code>99 - lifetime_count</code>（下限为
+零），创建预算为 <code>min(active_gap, lifetime_remaining)</code>。
+
+历史快照默认缓存 12 小时（<code>MAILCOM_LIFETIME_SNAPSHOT_TTL_SECONDS=43200</code>），
+生命周期剩余不超过 9 个时创建前强制刷新。普通 <code>GET /api/mailcom</code>、
+页面轮询和候选地址校验只读本地快照；创建批次成功后最多校准一次。首个创建
+<code>409</code> 会停止当前批次并强制刷新，按结果分类为
+<code>lifetime_capacity_full</code>、<code>active_capacity_full</code>、
+<code>remote_create_conflict</code> 或 <code>capacity_unknown</code>。
+
 #### 5.8.2 HAR 中的候选域名目录与本地静态目录
 
 **请求**
@@ -616,7 +647,8 @@ HAR 中删除成功返回 HTTP <code>204</code> 和空响应。收到 <code>204<
 ~~~text
 本地 138 域名目录 + 随机 local-part
   -> GET /primary/emailAddresses
-  -> 统计 ACTIVE && deletable=true，>=10 时终止任务
+  -> 读取缓存/必要时读取全量历史，预算=min(活动缺口, 生命周期剩余)
+  -> 活动 >=9 或生命周期 >=99 时终止任务
   -> POST /emailAddressValidations
   -> POST /primary/emailAddresses
   -> GET /primary/emailAddresses（确认创建）
@@ -626,9 +658,9 @@ POST /emailAddressesRemovals/<alias>/removals
   -> GET /primary/emailAddresses（确认删除）
 ~~~
 
-创建和删除共用 <code>mother_alias_lock(parent_email)</code>，与 mailbox AT 刷新锁分离。锁覆盖“远端容量读取至地址列表确认”的短临界区，不覆盖 OpenAI 注册和 OTP 轮询，因此一个母号可在确认 alias 后重新领取给下一个任务。当前锁保证单个项目进程内串行；多进程部署必须通过单进程 WebUI/worker 或额外的跨进程协调边界保证同一母号不并发创建。
+创建和删除共用 <code>mother_alias_lock(parent_email)</code>，历史刷新使用独立的母号去重锁，与 mailbox AT 刷新锁分离。锁覆盖“远端容量读取至地址列表确认”的短临界区，不覆盖 OpenAI 注册和 OTP 轮询，因此一个母号可在确认 alias 后重新领取给下一个任务。当前锁保证单个项目进程内串行；多进程部署必须通过单进程 WebUI/worker 或额外的跨进程协调边界保证同一母号不并发创建。
 
-创建遇到 <code>412</code> 或服务端校验明确拒绝时最多换候选重试；达到重试上限、容量满、认证/风控失败、字段缺失或回读未确认都会终止当前任务，绝不回退使用母号直接注册或隐式换用其他来源。删除接受 <code>204</code> 成功与 <code>404</code> 已不存在；两者均需回读地址列表确认不再存在才标记本地为已删除。其他删除错误保留别名并交给 <code>cleanup_pending</code> 审计状态。
+创建遇到 <code>412</code> 或服务端校验明确拒绝时最多换候选重试；首个创建 <code>409</code> 立即停止本批次并只做一次历史校准，分类为 <code>lifetime_capacity_full</code>、<code>active_capacity_full</code>、<code>remote_create_conflict</code> 或 <code>capacity_unknown</code>。达到重试上限、容量满、认证/风控失败、字段缺失或回读未确认都会终止当前任务，绝不回退使用母号直接注册或隐式换用其他来源。删除接受 <code>204</code> 成功与 <code>404</code> 已不存在；不因删除立即读取历史，生命周期累计数不减少。其他删除错误保留别名并交给 <code>cleanup_pending</code> 审计状态。
 
 ## 6. 状态码与错误处理
 
@@ -672,21 +704,29 @@ POST /emailAddressesRemovals/<alias>/removals
 ```text
 email, password, status, used_at,
 mail_access_token, mail_access_token_expires_at,
-mail_access_token_updated_at, mail_auth_error
+mail_access_token_updated_at, mail_auth_error,
+remote_active_alias_count, remote_lifetime_alias_count,
+remote_lifetime_alias_limit, remote_history_synced_at,
+remote_capacity_status, remote_history_unknown_count,
+remote_history_error
 ```
 
 alias 记录位于独立的 `mailcom_aliases` 集合，至少保存：
 
 ```text
 alias_email, parent_email, local_part, domain, status,
-job_id, registration_started_at, registered_account_id,
+registration_job_id, registration_started_at, registered_account_id,
 created_at, deleted_at, plan_check_status, cleanup_status, last_error
 ```
+
+邮箱池 `status` 统一使用五种值：`available`（可领取）、`registering`（注册中）、
+`used`（已消耗）、`failed`（注册失败且永久不可领取）和 `disabled`（停用/远端删除且不可领取）。
+其中只有 `available` 可以被注册任务领取；`failed` 与 `disabled` 不会因导入、同步或重试恢复。
 
 - SQLite 模式分别使用 `runtime_records(kind=mailcom_emails)` 与 `runtime_records(kind=mailcom_aliases)`；JSON 回退模式使用独立、已忽略的 `mailcom_emails.json` 与 `mailcom_aliases.json`。
 - alias 地址和母号地址以小写键保存，`alias_email` 全局唯一。重复创建同一地址只返回原有同母号记录；归属不同母号时显式失败。
 - alias 记录不复制密码、mailbox AT、Cookie、`sid`、settings 认证材料或邮件正文。WebUI 的 `GET /api/mailcom/aliases` 只返回 alias、母号掩码、生命周期、任务/账号关联、套餐/清理摘要和脱敏错误。
-- 母号只在创建 alias 的短临界区被领取。alias 远端确认后立即释放母号租约；成功账号消耗 alias 槽位，不会把母号标记为 `used`。注册失败只把 alias 标记为 `registration_failed`，不会自动删除 alias。
+- 母号只在创建 alias 的短临界区被领取。alias 远端确认后立即释放母号租约；成功账号消耗 alias 槽位，不会把母号标记为 `used`。注册成功的 alias 标记为 `used`；没有本地账号的终态失败标记为 `failed`，不会自动复用 alias。
 
 ### 7.2 alias 到母号的 OTP 路由
 
@@ -764,7 +804,7 @@ WWW-Authenticate: Bearer error="invalid_token", error_description="Provided toke
 
 套餐解析结果必须同时满足以下条件才允许调用 settings 删除接口：
 
-1. 对应 OpenAI 账号已关联一个状态为 `active` 的 alias；
+1. 对应 OpenAI 账号已关联一个状态为 `used` 的 alias；
 2. 开关已启用；
 3. `ok=true`；
 4. `trial_eligibility_known=true`，即套餐和促销资格字段已完整解析；
@@ -779,8 +819,8 @@ WebUI 显示为“Plus 试用资格未明确”；它绝不能被折叠为 `fals
 字段缺失或不可判定           -> plan_check_status=incomplete,  cleanup_status=not_requested
 明确有试用资格               -> plan_check_status=success,     cleanup_status=not_eligible
 开关关闭                     -> plan_check_status=success,     cleanup_status=not_requested
-满足条件并删除确认           -> status=deleted, cleanup_status=deleted
-删除请求失败或回读未确认     -> status=active, cleanup_status=cleanup_pending
+满足条件并删除确认           -> status=disabled, cleanup_status=deleted
+删除请求失败或回读未确认     -> status=used, cleanup_status=cleanup_pending
 ```
 
 清理权由 `claim_mailcom_alias_cleanup()` 原子领取。`cleanup_pending`、`cleanup_running` 和 `deleted` 不会因同一套餐结果再次自动发送删除请求；人工重试/批量修复不属于本变更范围。

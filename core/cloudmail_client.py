@@ -309,7 +309,7 @@ def get_account_context(email: str) -> CloudMailAccount | None:
     return _CONTEXT_CACHE.get(_cache_key(email))
 
 
-def release_account(email: str, status: str = "available", note: str | None = None) -> None:
+def release_account(email: str, status: str = "failed", note: str | None = None) -> None:
     _CONTEXT_CACHE.pop(_cache_key(email), None)
     logger.info("[CloudMail] 已释放邮箱上下文: %s（status=%s, note=%s）", email, status, note or "")
 

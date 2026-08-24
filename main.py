@@ -35,7 +35,8 @@ from core.account_export import (
     save_account_data,
     create_batch_archive_dir,
 )
-from core.email_provider import acquire_email, wait_for_otp
+from core.email_provider import acquire_email, wait_for_otp, release_email_if_unconsumed
+from core.email_pool_status import canonical_status
 from core.humanize import delay as human_delay
 from core.name_samples import random_display_name
 from core.profile_utils import generate_random_birthday
@@ -154,6 +155,55 @@ def prepare_registration_inputs() -> tuple[str, str, str]:
     return email, name, birthday
 
 
+def _prepare_persisted_email_registration(email: str) -> bool:
+    """确保直接调用注册入口也经过邮箱池的 ``available -> registering`` 边界。
+
+    WebUI 任务通常已经由 provider 领取邮箱；CLI 或测试可能直接传入池中地址，
+    此处补做一次指定地址的原子领取，避免绕过五态契约。未知的手动邮箱不受影响。
+    """
+    from core import db
+
+    alias = db.get_mailcom_alias_internal(email)
+    if alias is not None:
+        state = canonical_status(alias.get("status"), missing="disabled", unknown="disabled")
+        if state == "available":
+            claimed = db.claim_mailcom_alias(email)
+            if claimed is None:
+                raise RuntimeError("mail.com 别名当前不可领取，或所属母号正在处理其它注册任务")
+            state = "registering"
+        if state != "registering":
+            raise RuntimeError(f"邮箱池条目不可用于完整注册: status={state}")
+        if not db.mark_mailcom_alias_registration_started(email):
+            raise RuntimeError("mail.com 别名注册状态写入失败")
+        return True
+
+    # 其它持久化来源由各自 provider 领取；这里仅识别已由上层领取的条目，
+    # 不把用户手动输入且未入池的地址强行写入某个来源。
+    for getter in (
+        db.get_outlook_by_email,
+        db.get_generic_api_email_by_email,
+        db.get_domain_email_by_email,
+        db.get_icloud_email_by_email,
+        db.get_mailcom_email_by_email,
+    ):
+        row = getter(email)
+        if row is None:
+            continue
+        state = canonical_status(row.get("status"), missing="disabled", unknown="disabled")
+        if state != "registering":
+            raise RuntimeError(f"邮箱池条目不可用于完整注册: status={state}")
+        return True
+    return False
+
+
+def _release_persisted_email_after_entry_failure(email: str, reason: str) -> None:
+    """直接注册入口在驱动选择/初始化失败时也落失败终态。"""
+    try:
+        release_email_if_unconsumed(email, note=f"注册入口失败: {reason[:220]}")
+    except Exception:
+        logger.exception("[邮箱] 注册入口失败后的终态写入失败: %s", email)
+
+
 def run_registration(
     email: str,
     name: str,
@@ -178,13 +228,7 @@ def run_registration(
     """
     # 别名一旦交给注册流程，就先固定本次任务的时间下界。WebUI 任务入口
     # 也会做同样的记录；存储层只保留首次时间，因此不会被后续重试放宽。
-    try:
-        from core import db as _runtime_db
-
-        if _runtime_db.get_mailcom_alias_internal(email):
-            _runtime_db.mark_mailcom_alias_registration_started(email)
-    except Exception:
-        logger.warning("[MailComAlias] 注册开始时间写入失败，后续取码仍将按传入时间窗口执行: %s", email)
+    persisted_email = _prepare_persisted_email_registration(email)
 
     # 可选注册驱动：
     #   protocol     = 原有纯协议（curl_cffi）
@@ -234,6 +278,8 @@ def run_registration(
             batch_dir=batch_dir,
         )
     if driver_mode not in ("protocol", "api", "http"):
+        if persisted_email:
+            _release_persisted_email_after_entry_failure(email, f"不支持的 REGISTRATION_DRIVER={driver_mode!r}")
         raise RuntimeError(
             f"不支持的 REGISTRATION_DRIVER={driver_mode!r}，可选 protocol / roxy / cloak / browser_use / skyvern"
         )
@@ -553,30 +599,15 @@ def run_registration(
     except Exception as e:
         logger.error(f"[失败] {email}: {type(e).__name__}: {e}")
         logger.debug("详细错误信息:", exc_info=True)
-        # 邮箱状态回收策略，三种情况：
-        #   1. 账号已废（account_deactivated 等）：邮箱素材本身不可用，标 failed 直接剔除。
-        #   2. 创建接口通过后失败：远端已消耗这个邮箱，直接废弃，避免重复注册。
-        #   3. 创建接口通过前的普通失败：邮箱还可以下次继续尝试，放回 available。
-        from core.openai_auth import AccountUnusableError
-        account_dead = isinstance(e, AccountUnusableError)
+        # 已领取邮箱一旦进入注册流程，任何未落库失败都永久进入 failed；
+        # 若账号已经落库，统一状态接口会保留邮箱为 used，不能再次注册。
         try:
             if email:
-                from core.email_provider import release_email
-                if account_dead:
-                    src = release_email(
-                        email, status="failed",
-                        note=f"账号已废弃，邮箱不可用: {str(e)[:180]}",
-                    )
-                    logger.warning(f"[邮箱:{src}] {email} 账号已废弃，标记为 failed，不再重新注册")
-                elif create_acknowledged:
-                    src = release_email(
-                        email, status="failed",
-                        note=f"创建接口已通过但后续失败，已废弃: {str(e)[:180]}",
-                    )
-                    logger.warning(f"[邮箱:{src}] {email} 已创建但后续失败，标记为 failed，不再重新注册")
-                else:
-                    src = release_email(email, status="available", note=f"上次失败: {str(e)[:180]}")
-                    logger.info(f"[邮箱:{src}] {email} 已恢复 available")
+                changed = release_email_if_unconsumed(
+                    email,
+                    note=f"openai_registration: {str(e)[:300]}",
+                )
+                logger.warning(f"[邮箱] {email} 注册失败，已标记不可复用 changed={changed}")
         except Exception:
             pass
         return {"success": False, "email": email, "error": str(e)}
@@ -612,6 +643,12 @@ def main():
     if args.workers > args.count:
         logger.info(f"[批量] 并发线程数 {args.workers} 大于目标数量，已按 {args.count} 个任务执行")
         args.workers = args.count
+
+    # CLI 入口与 WebUI 注册服务使用同一份幂等迁移，先收敛历史状态再领取邮箱。
+    from core import db as runtime_db
+    migration = runtime_db.migrate_email_pool_statuses()
+    if migration.get("rows_normalized"):
+        logger.warning("已迁移邮箱池历史状态: %s", migration)
 
     if args.workers > 1:
         batch_dir = create_batch_archive_dir(args.count, args.workers)

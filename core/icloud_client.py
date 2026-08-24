@@ -28,5 +28,5 @@ def fetch_latest_otp(email: str, after_ts: float | None = None, **kwargs) -> str
 def get_account_context(email: str):
     return db.get_icloud_email_by_email(email)
 
-def release_account(email: str, status: str = "available", note: str | None = None) -> None:
+def release_account(email: str, status: str = "failed", note: str | None = None) -> None:
     db.release_icloud_email(email, status=status, note=note)

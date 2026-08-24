@@ -63,7 +63,6 @@ class MailComProviderTests(unittest.TestCase):
         _Client.auth_calls = _Client.read_calls = 0
         _Client.mode = "ok"
         db.import_mailcom_emails([{"email": "worker@mail.com", "password": "password"}])
-        db.claim_next_mailcom_email()
 
     def tearDown(self):
         self.env_patch.stop()
@@ -149,7 +148,6 @@ class MailComProviderTests(unittest.TestCase):
         assert_other_lock_acquires(at_lock, alias_lock)
 
     def test_pick_account_returns_existing_alias_and_holds_parent_lease(self):
-        db.release_mailcom_email("worker@mail.com", status="available")
         db.create_mailcom_alias(
             alias_email="new@example.com", parent_email="worker@mail.com",
             local_part="new", domain="example.com",
@@ -157,15 +155,14 @@ class MailComProviderTests(unittest.TestCase):
         with patch("core.registration_service._THREAD_CTX.job_id", 73, create=True):
             picked = MailComProvider().pick_account()
         self.assertEqual(picked.email, "new@example.com")
-        self.assertEqual(db.get_mailcom_internal_record("worker@mail.com")["status"], "available")
+        self.assertEqual(db.get_mailcom_internal_record("worker@mail.com")["status"], "registering")
         alias = db.get_mailcom_alias_internal("new@example.com")
         self.assertEqual(alias["parent_email"], "worker@mail.com")
         self.assertNotIn("job_id", alias)
-        self.assertEqual(alias["status"], "leased")
+        self.assertEqual(alias["status"], "registering")
         self.assertEqual(db.get_mailcom_internal_record("worker@mail.com")["registration_lease_job_id"], 73)
 
     def test_missing_alias_fails_without_creating_or_fallback(self):
-        db.release_mailcom_email("worker@mail.com", status="available")
         with self.assertRaisesRegex(MailComProviderError, "别名池没有可用地址"):
             MailComProvider().pick_account()
         parent = db.get_mailcom_internal_record("worker@mail.com")

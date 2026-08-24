@@ -33,7 +33,7 @@ class MailComStorageTests(unittest.TestCase):
                 self.assertNotIn("password", public)
                 self.assertNotIn("mail_access_token", public)
                 self.assertTrue(db.release_unconsumed_mailcom_email("one@mail.com"))
-                self.assertEqual(db.get_mailcom_internal_record("one@mail.com")["status"], "available")
+                self.assertEqual(db.get_mailcom_internal_record("one@mail.com")["status"], "failed")
 
     def test_conditional_token_write_preserves_newer_at(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -105,7 +105,11 @@ class MailComStorageTests(unittest.TestCase):
                 self.assertEqual([row["alias_email"] for row in replaced], ["new@example.com"])
                 self.assertEqual(
                     [row["alias_email"] for row in store.load("mailcom_aliases")],
-                    ["new@example.com"],
+                    ["alias@example.com", "new@example.com"],
+                )
+                self.assertEqual(
+                    db.get_mailcom_alias_internal("alias@example.com")["status"],
+                    "disabled",
                 )
 
     def test_alias_account_link_does_not_consume_parent(self):
@@ -125,7 +129,7 @@ class MailComStorageTests(unittest.TestCase):
                 self.assertEqual(db.get_mailcom_internal_record("mother@mail.com")["status"], "available")
                 alias = db.get_mailcom_alias_internal("alias@example.com")
                 self.assertEqual(alias["registered_account_id"], 1)
-                self.assertEqual(alias["status"], "registered")
+                self.assertEqual(alias["status"], "used")
 
     def test_unconsumed_alias_marks_alias_only(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -138,7 +142,7 @@ class MailComStorageTests(unittest.TestCase):
                     local_part="alias", domain="example.com",
                 )
                 self.assertTrue(db.release_unconsumed_mailcom_email("alias@example.com", note="failed"))
-                self.assertEqual(db.get_mailcom_alias_internal("alias@example.com")["status"], "registration_failed")
+                self.assertEqual(db.get_mailcom_alias_internal("alias@example.com")["status"], "failed")
                 self.assertEqual(db.get_mailcom_internal_record("mother@mail.com")["status"], "available")
 
 

@@ -53,14 +53,14 @@ class MailComWebUITests(unittest.TestCase):
 
     def test_pool_status_and_delete_require_mailcom_source(self):
         self.client.post("/api/mailcom/import", json={"text": "one@mail.com----secret"}, headers=self.headers)
-        with patch.object(web_app.db, "update_mailcom_alias", return_value=True) as release:
+        with patch.object(web_app.db, "release_mailcom_email", return_value=True) as release:
             response = self.client.post(
                 "/api/outlook/status",
                 json={"email": "one@mail.com", "source": "mailcom", "status": "disabled"},
                 headers=self.headers,
             )
         self.assertEqual(response.status_code, 200)
-        release.assert_called_once_with("one@mail.com", status="deleted", last_error="")
+        release.assert_called_once_with("one@mail.com", status="disabled", note=None)
 
         with patch("core.mailcom_alias_pool_service.delete_alias_now", return_value={"ok": True, "deleted": True}) as delete:
             response = self.client.post(
@@ -68,8 +68,9 @@ class MailComWebUITests(unittest.TestCase):
                 json={"email": "one@mail.com", "source": "mailcom"},
                 headers=self.headers,
             )
-        self.assertEqual(response.status_code, 200)
-        delete.assert_called_once_with("one@mail.com")
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()["error"], "mailcom_alias_management_required")
+        delete.assert_not_called()
 
     def test_config_and_job_precheck_distinguish_missing_credentials(self):
         with patch.object(web_app.db, "mailcom_pool_health", return_value={"configured": 0, "has_available_credentials": False}):
@@ -149,6 +150,32 @@ class MailComWebUITests(unittest.TestCase):
         self.assertIn("btnEnableAllMailcomDomainsV2", html)
         self.assertIn("btnDisableAllMailcomDomainsV2", html)
         self.assertIn("/api/mailcom/domains/bulk-status", html)
+        self.assertIn("remote_lifetime_alias_count", html)
+        self.assertIn("刷新历史", html)
+        self.assertIn("/api/mailcom/parents/${encodeURIComponent(parentId)}/history-refresh", html)
+
+    def test_parent_history_refresh_is_read_only_async_and_list_uses_snapshot(self):
+        self.client.post("/api/mailcom/import", json={"text": "one@mail.com----secret"}, headers=self.headers)
+        parent = self.client.get("/api/mailcom", headers=self.headers).get_json()["items"][0]
+        self.assertEqual(parent["remote_lifetime_alias_count"], None)
+        self.assertEqual(parent["remote_lifetime_alias_limit"], 99)
+        self.assertEqual(parent["remote_capacity_status"], "unknown")
+        with patch(
+            "core.mailcom_alias_pool_service.enqueue_parent_history_refresh",
+            return_value={"accepted": True, "busy": False, "parent_email": "one@mail.com"},
+        ) as enqueue:
+            response = self.client.post(
+                f"/api/mailcom/parents/{parent['id']}/history-refresh",
+                headers=self.headers,
+            )
+        self.assertEqual(response.status_code, 202)
+        self.assertTrue(response.get_json()["accepted"])
+        enqueue.assert_called_once_with("one@mail.com")
+        # 普通列表读取只返回本地快照，不会隐式调用历史刷新队列。
+        with patch("core.mailcom_alias_pool_service.enqueue_parent_history_refresh") as unexpected:
+            listed = self.client.get("/api/mailcom", headers=self.headers)
+        self.assertEqual(listed.status_code, 200)
+        unexpected.assert_not_called()
 
     def test_alias_api_is_redacted_and_cleanup_switch_requires_json_boolean(self):
         web_app.db.create_mailcom_alias(

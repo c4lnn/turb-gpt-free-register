@@ -153,7 +153,7 @@ class MailComAliasLifecycleTests(unittest.TestCase):
             )
         )
         saved = db.get_mailcom_alias_internal("gone@example.com")
-        self.assertEqual(saved["status"], "deleted")
+        self.assertEqual(saved["status"], "disabled")
         self.assertEqual(saved["cleanup_status"], "deleted")
         self.assertEqual(settings.list_calls, 0)
 
@@ -229,7 +229,7 @@ class MailComAliasLifecycleTests(unittest.TestCase):
                 )
             self.assertEqual(outcome["reason"], reason)
             saved = db.get_mailcom_alias_internal(alias_email)
-            self.assertEqual(saved["status"], "registered")
+            self.assertEqual(saved["status"], "used")
             self.assertEqual(saved["plan_check_status"], plan_status)
             self.assertEqual(saved["cleanup_status"], cleanup_status)
 
@@ -258,7 +258,7 @@ class MailComAliasLifecycleTests(unittest.TestCase):
         self.assertEqual(second["reason"], "cleanup_already_handled")
         self.assertEqual(attempts, ["pending@example.com"])
         saved = db.get_mailcom_alias_internal("pending@example.com")
-        self.assertEqual(saved["status"], "registered")
+        self.assertEqual(saved["status"], "used")
         self.assertEqual(saved["cleanup_status"], "cleanup_pending")
 
 

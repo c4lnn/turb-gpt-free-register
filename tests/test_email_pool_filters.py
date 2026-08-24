@@ -107,6 +107,7 @@ class EmailPoolFilterTemplateTests(unittest.TestCase):
         for value, label in (
             ("all", "全部状态"),
             ("available", "可用"),
+            ("registering", "注册中"),
             ("used", "已用"),
             ("failed", "失败"),
             ("disabled", "已停用"),

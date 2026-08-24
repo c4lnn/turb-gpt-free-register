@@ -52,10 +52,10 @@ class MailComAliasPoolRefactorTests(unittest.TestCase):
         self.assertEqual(first["alias_email"], "a@example.com")
         self.assertIsNone(db.claim_next_mailcom_alias(job_id=2))
         self.assertTrue(db.release_mailcom_registration_lease(
-            first["alias_email"], job_id=1, alias_status="available"
+            first["alias_email"], job_id=1, alias_status="failed", error="test failure"
         ))
         second = db.claim_next_mailcom_alias(job_id=2)
-        self.assertEqual(second["alias_email"], "a@example.com")
+        self.assertEqual(second["alias_email"], "b@example.com")
 
     def test_snapshot_replacement_refuses_active_registration_lease(self):
         claimed = db.claim_next_mailcom_alias(job_id=7)
@@ -65,14 +65,14 @@ class MailComAliasPoolRefactorTests(unittest.TestCase):
             ["a@example.com", "remote@example.com"],
         )
         self.assertIsNone(replacement)
-        self.assertEqual(db.get_mailcom_alias_internal("a@example.com")["status"], "leased")
+        self.assertEqual(db.get_mailcom_alias_internal("a@example.com")["status"], "registering")
         self.assertIsNone(db.get_mailcom_alias_internal("remote@example.com"))
 
     def test_provider_claims_existing_alias_without_creating(self):
         with patch("core.registration_service._THREAD_CTX.job_id", 31, create=True):
             picked = MailComProvider().pick_account()
         self.assertEqual(picked.email, "a@example.com")
-        self.assertEqual(db.get_mailcom_alias_internal("a@example.com")["status"], "leased")
+        self.assertEqual(db.get_mailcom_alias_internal("a@example.com")["status"], "registering")
         self.assertEqual(db.get_mailcom_internal_record("mother@mail.com")["registration_lease_job_id"], 31)
 
     def test_sync_discovers_remote_aliases_and_fills_to_nine(self):
@@ -385,7 +385,7 @@ class MailComAliasPoolRefactorTests(unittest.TestCase):
                 delete_alias_fn=lambda _: True,
             )
         self.assertTrue(outcome["deleted"])
-        self.assertEqual(db.get_mailcom_alias_internal("a@example.com")["status"], "deleted")
+        self.assertEqual(db.get_mailcom_alias_internal("a@example.com")["status"], "disabled")
         enqueue.assert_called_once_with("mother@mail.com")
 
     def test_archived_account_is_never_deleted(self):
@@ -408,7 +408,7 @@ class MailComAliasPoolRefactorTests(unittest.TestCase):
                 delete_alias_fn=lambda _: self.fail("归档账号不应删除 alias"),
             )
         self.assertEqual(outcome["reason"], "account_archived")
-        self.assertNotEqual(db.get_mailcom_alias_internal("a@example.com")["status"], "deleted")
+        self.assertEqual(db.get_mailcom_alias_internal("a@example.com")["status"], "used")
 
     def test_unconfirmed_cleanup_stays_pending_and_is_not_retried(self):
         account_id = db.insert_account(

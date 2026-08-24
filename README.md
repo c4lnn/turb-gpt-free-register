@@ -658,7 +658,7 @@ REGISTER_PASSWORD = "你的固定密码"
 | `config/email.py` | 邮箱来源、OTP 轮询、QQ IMAP、域名邮箱、Cloudflare Worker 临时邮箱 |
 | `config/proxy.py` | 代理池 |
 | `config/register.py` | 默认邮箱、密码、显示名 |
-| `config/twofa.py` | 2FA 开关 |
+| `config/twofa.py` | 2FA 开关；协议和 Roxy 分别使用各自会话上下文 |
 | `config/humanize.py` | 随机停顿/人工节奏 |
 | `config/flow_trigger.py` | 注册成功后触发 Flow |
 | `config/browser.py` | 协议模式浏览器指纹 |
@@ -742,7 +742,7 @@ accounts/20260709-10个-3线程/
   ↓
 进入 ChatGPT，读取 /api/auth/session accessToken
   ↓
-可选 2FA
+可选 2FA：Roxy 在当前 Selenium Profile 内重新认证、取第二封邮箱 OTP、enroll/activate TOTP
   ↓
 可选 Codex OAuth
   ↓

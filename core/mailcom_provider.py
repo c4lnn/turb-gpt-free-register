@@ -104,7 +104,7 @@ class MailComProvider:
         alias_account = MailComAccount(
             id=alias.get("id"),
             email=str(alias.get("alias_email") or ""),
-            status="leased",
+            status="registering",
             used_at=alias.get("lease_started_at") or alias.get("created_at"),
         )
         logger.info(
@@ -116,16 +116,20 @@ class MailComProvider:
 
     def get_account_context(self, email: str) -> MailComAccount | None:
         alias = db.get_mailcom_alias_internal(email)
+        alias_status = None
         if alias:
-            if str(alias.get("status") or "") not in {"available", "leased", "registered"}:
+            alias_status = str(alias.get("status") or "")
+            if alias_status not in {"available", "registering", "used"}:
                 return None
             email = alias.get("parent_email") or email
         record = db.get_mailcom_internal_record(email)
-        if not record or str(record.get("status") or "") in {"disabled", "failed"}:
+        if not record or str(record.get("status") or "") == "failed":
+            return None
+        if record and str(record.get("status") or "") == "disabled" and alias_status != "used":
             return None
         return _account_from_record(record)
 
-    def release_account(self, email: str, status: str = "available", note: str | None = None) -> None:
+    def release_account(self, email: str, status: str = "failed", note: str | None = None) -> None:
         alias = db.get_mailcom_alias_internal(email)
         if alias:
             # 别名任务失败只影响该别名；不能把共享母号误标为 failed/disabled。
@@ -193,14 +197,14 @@ class MailComProvider:
         return current
 
     def _ensure_token(self, email: str, *, expected_token: str | None = None,
-                      force_login: bool = False) -> dict:
+                      force_login: bool = False, allow_disabled: bool = False) -> dict:
         """邮箱级锁 + 二次检查，返回持久化的新/旧 token 记录。"""
         lock = _email_lock(email)
         with lock:
             record = db.get_mailcom_internal_record(email)
             if not record:
                 raise MailComProviderError("mail.com 邮箱池中找不到该账号")
-            if record.get("status") == "disabled":
+            if record.get("status") == "disabled" and not allow_disabled:
                 raise MailComProviderError("mail.com 账号已禁用，请修复账密或人工验证后再启用")
             now = self.clock()
             current_token = str(record.get("mail_access_token") or "")
@@ -236,9 +240,15 @@ class MailComProvider:
         record = db.get_mailcom_internal_record(parent_email)
         if not record:
             raise MailComProviderError("mail.com 别名对应的母号不在邮箱池中")
-        if alias and str(alias.get("status") or "") not in {"leased", "registered"}:
+        if alias and str(alias.get("status") or "") not in {"registering", "used"}:
             raise MailComProviderError("mail.com 别名已失效，不能继续取码")
-        if str(record.get("status") or "") in {"disabled", "failed"}:
+        parent_disabled_used_alias = bool(
+            alias and str(alias.get("status") or "") == "used"
+            and str(record.get("status") or "") == "disabled"
+        )
+        if str(record.get("status") or "") == "failed" or (
+            str(record.get("status") or "") == "disabled" and not parent_disabled_used_alias
+        ):
             raise MailComProviderError("mail.com 别名对应的母号不可用")
         if alias:
             started_at = alias.get("registration_started_at")
@@ -250,7 +260,12 @@ class MailComProvider:
                 after_ts = max(float(after_ts), started_at) if after_ts is not None else started_at
         original_token = str(record.get("mail_access_token") or "")
         if not _has_valid_token(record, self.clock()):
-            record = self._ensure_token(parent_email, expected_token=original_token, force_login=False)
+            record = self._ensure_token(
+                parent_email,
+                expected_token=original_token,
+                force_login=False,
+                allow_disabled=parent_disabled_used_alias,
+            )
         token = str(record.get("mail_access_token") or "")
         try:
             return self._new_client(access_token=token).fetch_latest_otp(
@@ -262,7 +277,12 @@ class MailComProvider:
             )
         except MailComInvalidTokenError:
             # 只处理已验证的 401 + Bearer error=invalid_token；单次恢复后只重试原读。
-            refreshed = self._ensure_token(parent_email, expected_token=token, force_login=True)
+            refreshed = self._ensure_token(
+                parent_email,
+                expected_token=token,
+                force_login=True,
+                allow_disabled=parent_disabled_used_alias,
+            )
             fresh_token = str(refreshed.get("mail_access_token") or "")
             try:
                 return self._new_client(access_token=fresh_token).fetch_latest_otp(
@@ -280,7 +300,12 @@ class MailComProvider:
             if exc.error_type == "unauthorized":
                 # 部分 mail.com 401 响应没有 Bearer invalid_token challenge，
                 # 仍应立即刷新一次 Mailbox AT，而不是让轮询等到 timeout。
-                refreshed = self._ensure_token(parent_email, expected_token=token, force_login=True)
+                refreshed = self._ensure_token(
+                    parent_email,
+                    expected_token=token,
+                    force_login=True,
+                    allow_disabled=parent_disabled_used_alias,
+                )
                 fresh_token = str(refreshed.get("mail_access_token") or "")
                 try:
                     return self._new_client(access_token=fresh_token).fetch_latest_otp(
@@ -313,7 +338,7 @@ def fetch_latest_otp(email: str, **kwargs: Any) -> str:
     return _DEFAULT_PROVIDER.fetch_latest_otp(email, **kwargs)
 
 
-def release_account(email: str, status: str = "available", note: str | None = None) -> None:
+def release_account(email: str, status: str = "failed", note: str | None = None) -> None:
     _DEFAULT_PROVIDER.release_account(email, status=status, note=note)
 
 

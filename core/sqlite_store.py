@@ -15,7 +15,17 @@ from typing import Any, Iterable
 
 
 SCHEMA_VERSION = 1
-KINDS = ("accounts", "jobs", "outlook_emails", "icloud_emails", "generic_api_emails", "domain_emails", "mailcom_emails", "mailcom_aliases")
+KINDS = (
+    "accounts",
+    "jobs",
+    "outlook_emails",
+    "icloud_emails",
+    "generic_api_emails",
+    "domain_emails",
+    "mailcom_emails",
+    "mailcom_aliases",
+    "email_pool_lifecycle",
+)
 logger = logging.getLogger(__name__)
 
 

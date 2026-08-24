@@ -499,7 +499,7 @@ def pick_account() -> GenericApiEmailAccount:
     return account
 
 
-def import_from_file(path: str | Path | None = None) -> tuple[int, int]:
+def import_from_file(path: str | Path | None = None, *, reactivate_existing: bool = False) -> tuple[int, int]:
     """从文本文件导入通用 API 邮箱，每行：email----code_url 或 email====code_url。"""
     from core.db import import_generic_api_emails
     p = Path(path) if path else _ACCOUNTS_FILE
@@ -517,7 +517,7 @@ def import_from_file(path: str | Path | None = None) -> tuple[int, int]:
         if len(parts) < 2:
             continue
         records.append({"email": parts[0], "code_url": parts[1]})
-    return import_generic_api_emails(records)
+    return import_generic_api_emails(records, reactivate_existing=reactivate_existing)
 
 
 def get_account_context(email: str) -> GenericApiEmailAccount | None:
@@ -532,7 +532,7 @@ def get_account_context(email: str) -> GenericApiEmailAccount | None:
     return account
 
 
-def release_account(email: str, status: str = "available", note: str | None = None) -> None:
+def release_account(email: str, status: str = "failed", note: str | None = None) -> None:
     from core.db import release_generic_api_email
     release_generic_api_email(email, status=status, note=note)
     _CONTEXT_CACHE.pop(email, None)

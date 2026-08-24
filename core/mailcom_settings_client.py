@@ -17,6 +17,11 @@ from uuid import uuid4
 
 from config import email as _email_cfg
 from core.mailcom_client import MailComClient, MailComCredentialError, MailComError
+from core.mailcom_capacity import (
+    MAX_LIFETIME_ALIASES,
+    MailComCapacitySnapshot,
+    aggregate_history_payload,
+)
 from core.mailcom_protocol import redact_mapping, safe_request_diagnostic
 
 
@@ -52,6 +57,16 @@ class MailComSettingsCredentialError(MailComSettingsError):
 class MailComSettingsConflictError(MailComSettingsError):
     def __init__(self, message: str = "mail.com 别名地址不可创建", **kwargs: Any) -> None:
         super().__init__(message, error_type="address_conflict", **kwargs)
+
+
+class MailComSettingsRemoteConflictError(MailComSettingsError):
+    """创建端点返回 HTTP 409 的远端业务冲突。
+
+    该错误与候选地址的 412 冲突严格分开，调用方可据此触发一次容量校准。
+    """
+
+    def __init__(self, message: str = "mail.com 别名创建遭遇远端业务冲突", **kwargs: Any) -> None:
+        super().__init__(message, error_type="remote_create_conflict", **kwargs)
 
 
 class MailComSettingsConfirmationError(MailComSettingsError):
@@ -363,6 +378,66 @@ class MailComSettingsClient:
             )
             return self._list_addresses_once()
 
+    def _history_snapshot_once(self) -> MailComCapacitySnapshot:
+        """读取不带 ``q.state.in`` 的全量地址并立即聚合。"""
+        media = "application/vnd.ui.trinity.mailaddress.list-v5+json"
+        response = self._request(
+            "GET",
+            "/mailaccount/primary/emailAddresses",
+            endpoint="email_addresses_history",
+            expected={200},
+            params={"absoluteURI": "false", "q.type.in": "MANAGED,DOMAIN_HOSTING"},
+            headers=self._headers(media, media),
+        )
+        payload = self._json(response, "email_addresses_history")
+        try:
+            snapshot = aggregate_history_payload(
+                payload,
+                lifetime_limit=MAX_LIFETIME_ALIASES,
+            )
+        except ValueError as exc:
+            logger.warning(
+                "[MailComSettings] stage=email_addresses_history action=error error_type=protocol_error"
+            )
+            raise MailComSettingsError(
+                "mail.com settings 历史地址响应协议不完整",
+                error_type="protocol_error",
+                diagnostic=safe_request_diagnostic(
+                    endpoint="email_addresses_history",
+                    status=getattr(response, "status_code", None),
+                    headers=getattr(response, "headers", {}),
+                    error_type="protocol_error",
+                ),
+            ) from exc
+        if not snapshot.complete:
+            logger.warning(
+                "[MailComSettings] stage=email_addresses_history action=error error_type=protocol_incomplete"
+            )
+        return snapshot
+
+    def history_snapshot(self) -> MailComCapacitySnapshot:
+        """历史容量 GET 在 token 401 后只刷新并重试一次。"""
+        try:
+            return self._history_snapshot_once()
+        except MailComSettingsError as exc:
+            if exc.error_type != "unauthorized" or not self._can_refresh_after_unauthorized():
+                raise
+            self._refresh_settings_token_after_unauthorized(
+                self._settings_access_token,
+                observed_entry=self._settings_cache_entry,
+            )
+            return self._history_snapshot_once()
+
+    # 这些名称用于调用方/契约测试的语义化别名；都只返回聚合对象，不暴露地址行。
+    def get_history_snapshot(self) -> MailComCapacitySnapshot:
+        return self.history_snapshot()
+
+    def list_address_history(self) -> MailComCapacitySnapshot:
+        return self.history_snapshot()
+
+    def list_addresses_history(self) -> MailComCapacitySnapshot:
+        return self.history_snapshot()
+
     def _validate_address_once(self, candidate: str) -> None:
         response = self._request(
             "POST",
@@ -402,7 +477,7 @@ class MailComSettingsClient:
             "POST",
             "/mailaccount/primary/emailAddresses",
             endpoint="email_address_create",
-            expected={201, 412},
+            expected={201, 409, 412},
             params={"absoluteURI": "false"},
             json={
                 "address": candidate,
@@ -414,7 +489,20 @@ class MailComSettingsClient:
             },
             headers=self._headers(media, media),
         )
-        if int(getattr(response, "status_code", 0) or 0) == 412:
+        status = int(getattr(response, "status_code", 0) or 0)
+        if status == 409:
+            logger.warning(
+                "[MailComSettings] stage=email_address_create action=error status=409 error_type=remote_create_conflict"
+            )
+            raise MailComSettingsRemoteConflictError(
+                diagnostic=safe_request_diagnostic(
+                    endpoint="email_address_create",
+                    status=409,
+                    headers=getattr(response, "headers", {}),
+                    error_type="remote_create_conflict",
+                )
+            )
+        if status == 412:
             logger.warning("[MailComSettings] stage=email_address_create action=error status=412 error_type=address_conflict")
             raise MailComSettingsConflictError(
                 "mail.com 拒绝创建候选别名",
@@ -489,6 +577,7 @@ __all__ = [
     "MailComSettingsConflictError",
     "MailComSettingsCredentialError",
     "MailComSettingsError",
+    "MailComSettingsRemoteConflictError",
     "SETTINGS_API",
     "SETTINGS_TOKEN_REFRESH_SKEW_SECONDS",
     "canonical_email",

@@ -33,6 +33,8 @@ HUMANIZE_DELAYS = {
     "form": (1.8, 5.0),
     # 注册完成后进入应用、拉 session。
     "post_auth": (1.5, 4.0),
+    # 初始 session 读取完成后，进入可选 2FA 设置前。
+    "twofa_start": (1.5, 4.0),
     # 并发任务错峰。
     "job_stagger": (0.4, 1.8),
     # 点击前观察/移动鼠标。

@@ -233,7 +233,7 @@ def wait_for_otp(
     return fetch_latest_otp(email, after_ts=after_ts, **extra_kwargs)
 
 
-def release_email(email: str, status: str = "available", note: str | None = None) -> str:
+def release_email(email: str, status: str = "failed", note: str | None = None) -> str:
     """按邮箱实际来源回收状态，返回来源名。"""
     source = resolve_email_source(email)
     if source == "gptmail":
@@ -267,7 +267,7 @@ def release_email(email: str, status: str = "available", note: str | None = None
 
 
 def release_email_if_unconsumed(email: str, note: str | None = None) -> bool:
-    """回收仍停留在 used 的任务领取，且绝不覆盖已注册/已判废状态。"""
+    """将仍处于注册中的持久化邮箱标记为 failed，且绝不重新放回领取队列。"""
     if not (email or "").strip():
         return False
 
@@ -288,7 +288,7 @@ def release_email_if_unconsumed(email: str, note: str | None = None) -> bool:
         # 临时邮箱不重新进入本地池，只清理进程上下文；已有本地账号时保留上下文。
         if db.get_account_by_email(email) is not None:
             return False
-        release_email(email, status="available", note=note)
+        release_email(email, status="failed", note=note)
         changed = True
 
     if changed:

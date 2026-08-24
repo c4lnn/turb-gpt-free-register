@@ -107,6 +107,7 @@ mail_test.txt
 mailcom_emails.json
 mailcom_aliases.json
 mailcom_alias_domain_states.json
+email_pool_lifecycle.json
 webui.log
 webui.pid
 logs/

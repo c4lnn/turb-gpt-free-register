@@ -294,7 +294,7 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "ENABLE_2FA", "file": "twofa.py", "type": "bool", "group": "功能开关",
-        "label": "启用 2FA(TOTP)", "help": "注册完成后自动设置动态口令（会多收一封 OTP 邮件）",
+        "label": "启用 2FA(TOTP)", "help": "注册完成后自动设置动态口令（会多收一封 OTP 邮件）；Roxy 在当前 Selenium Profile 内重认证，失败会保存账号并记录 2FA 状态",
     },
     {
         "key": "ENABLE_FLOW_TRIGGER", "file": "flow_trigger.py", "type": "bool", "group": "功能开关",
@@ -349,6 +349,14 @@ EDITABLE_FIELDS = [
     {
         "key": "MAILCOM_MAX_PAGES", "file": "email.py", "type": "int", "group": "邮箱 / OTP",
         "label": "mail.com 最大扫描页数", "help": "避免异常收件箱响应导致无限分页",
+    },
+    {
+        "key": "MAILCOM_LIFETIME_SNAPSHOT_TTL_SECONDS", "file": "email.py", "type": "int", "group": "邮箱 / OTP",
+        "label": "mail.com 历史快照 TTL(秒)", "help": "创建前历史容量快照缓存时长；默认 43200 秒（12 小时）",
+    },
+    {
+        "key": "MAILCOM_LIFETIME_NEAR_LIMIT", "file": "email.py", "type": "int", "group": "邮箱 / OTP",
+        "label": "mail.com 接近上限阈值", "help": "生命周期剩余不超过该数量时创建前强制刷新；默认 9",
     },
     {
         "key": "MAILCOM_DELETE_ALIAS_IF_NO_TRIAL", "file": "email.py", "type": "bool", "group": "邮箱 / OTP",

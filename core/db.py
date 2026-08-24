@@ -21,10 +21,34 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
+from config import email as _email_cfg
 from core.sqlite_store import SQLiteRuntimeStore
 from core.mailcom_alias_domains import (
     MailComAliasDomainError,
     load_alias_domains,
+)
+from core.mailcom_capacity import (
+    CAPACITY_UNKNOWN,
+    DEFAULT_NEAR_LIMIT_REMAINING,
+    MAX_ACTIVE_ALIASES,
+    MAX_LIFETIME_ALIASES,
+    MailComCapacitySnapshot,
+    capacity_status,
+    lifetime_remaining,
+)
+from core.email_pool_status import (
+    EMAIL_POOL_STATUSES,
+    EMAIL_POOL_STATUS_SET,
+    TERMINAL_EMAIL_POOL_STATUSES,
+    can_transition,
+    can_mark_used,
+    canonical_status,
+    is_manual_restorable,
+    is_claimable,
+    require_transition,
+    status_counts,
+    validate_status,
+    LEGACY_EMAIL_POOL_STATUS_MAP,
 )
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -44,6 +68,7 @@ _GENERIC_API_EMAIL_TXT = _PROJECT_ROOT / "用于注册的API邮箱.txt"
 _ICLOUD_EMAIL_JSON = _PROJECT_ROOT / "用于注册的iCloud邮箱.json"
 _MAILCOM_EMAIL_JSON = _PROJECT_ROOT / "mailcom_emails.json"
 _MAILCOM_ALIAS_JSON = _PROJECT_ROOT / "mailcom_aliases.json"
+_EMAIL_POOL_LIFECYCLE_JSON = _PROJECT_ROOT / "email_pool_lifecycle.json"
 _MAILCOM_ALIAS_DOMAIN_STATE_JSON = _PROJECT_ROOT / "mailcom_alias_domain_states.json"
 _ACCOUNTS_JSON = _PROJECT_ROOT / "注册成功的邮箱.json"
 _ACCOUNTS_TXT = _PROJECT_ROOT / "注册成功的邮箱.txt"
@@ -78,6 +103,138 @@ _SQLITE_MAILCOM_PATH_BINDINGS = {
 }
 
 
+class EmailPoolLifecycleError(ValueError):
+    """邮箱池生命周期操作的稳定冲突结果。"""
+
+    def __init__(self, code: str, message: str | None = None, **details: Any):
+        self.code = str(code)
+        self.details = details
+        super().__init__(message or self.code)
+
+
+def _email_pool_lifecycle_path() -> Path:
+    configured = _EMAIL_POOL_LIFECYCLE_JSON
+    # 测试/多实例会替换 mail.com 快照目录；生命周期记录必须跟随同一数据根，
+    # 避免临时后端读取到另一个实例的 deletion block。
+    if configured == _PROJECT_ROOT / "email_pool_lifecycle.json" and _MAILCOM_EMAIL_JSON != _PROJECT_ROOT / "mailcom_emails.json":
+        return Path(_MAILCOM_EMAIL_JSON).with_name("email_pool_lifecycle.json")
+    return configured
+
+
+def _load_email_pool_lifecycle() -> list[dict]:
+    if _sqlite_enabled():
+        rows = _SQLITE_STORE.load("email_pool_lifecycle")
+    else:
+        rows = _read_json(_email_pool_lifecycle_path(), [])
+    return [dict(row) for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+
+
+def _save_email_pool_lifecycle(rows: list[dict]) -> None:
+    if _sqlite_enabled():
+        _SQLITE_STORE.replace_all("email_pool_lifecycle", rows)
+    else:
+        _write_json(_email_pool_lifecycle_path(), rows)
+
+
+def _lifecycle_key(kind: str, value: str) -> str:
+    return f"{str(kind or '').strip().casefold()}:{str(value or '').strip().casefold()}"
+
+
+def _get_lifecycle_record_locked(kind: str, value: str) -> dict | None:
+    key = _lifecycle_key(kind, value)
+    rows = _load_email_pool_lifecycle()
+    return next(
+        (row for row in rows if _lifecycle_key(row.get("kind"), row.get("key")) == key),
+        None,
+    )
+
+
+def _write_lifecycle_record_locked(
+    kind: str,
+    value: str,
+    *,
+    action: str,
+    reason: str | None = None,
+    parent_email: str | None = None,
+    alias_email: str | None = None,
+    generation: int | None = None,
+    observed_at: str | None = None,
+    actor: str | None = None,
+    account_id: int | None = None,
+) -> dict:
+    rows = _load_email_pool_lifecycle()
+    key = str(value or "").strip().casefold()
+    now = _now()
+    existing = next(
+        (row for row in rows if _lifecycle_key(row.get("kind"), row.get("key")) == _lifecycle_key(kind, key)),
+        None,
+    )
+    if existing is None:
+        existing = {"id": _next_id(rows), "kind": str(kind), "key": key}
+        rows.append(existing)
+    existing.update({
+        "action": str(action),
+        "reason": str(reason or "")[:500] or None,
+        "parent_email": str(parent_email or "").strip().casefold() or None,
+        "alias_email": str(alias_email or "").strip().casefold() or None,
+        "generation": int(generation) if generation is not None else existing.get("generation"),
+        "deleted_at": existing.get("deleted_at") or (now if action in {"delete", "parent_delete", "alias_delete"} else None),
+        "observed_at": str(observed_at or now),
+        "actor": str(actor or "manual")[:80],
+        "account_id": int(account_id) if account_id is not None else existing.get("account_id"),
+        "updated_at": now,
+    })
+    _save_email_pool_lifecycle(rows)
+    return dict(existing)
+
+
+def _remove_lifecycle_record_locked(kind: str, value: str) -> bool:
+    key = _lifecycle_key(kind, value)
+    rows = _load_email_pool_lifecycle()
+    remaining = [row for row in rows if _lifecycle_key(row.get("kind"), row.get("key")) != key]
+    if len(remaining) == len(rows):
+        return False
+    _save_email_pool_lifecycle(remaining)
+    return True
+
+
+def _observe_lifecycle_record_locked(kind: str, value: str, *, observed_at: str | None = None) -> bool:
+    record = _get_lifecycle_record_locked(kind, value)
+    if record is None:
+        return False
+    rows = _load_email_pool_lifecycle()
+    key = _lifecycle_key(kind, value)
+    for row in rows:
+        if _lifecycle_key(row.get("kind"), row.get("key")) == key:
+            row["observed_at"] = str(observed_at or _now())
+            row["updated_at"] = _now()
+            _save_email_pool_lifecycle(rows)
+            return True
+    return False
+
+
+def _mailcom_near_limit_remaining() -> int:
+    try:
+        value = int(getattr(_email_cfg, "MAILCOM_LIFETIME_NEAR_LIMIT", DEFAULT_NEAR_LIMIT_REMAINING))
+    except (TypeError, ValueError):
+        value = DEFAULT_NEAR_LIMIT_REMAINING
+    return value if value >= 0 else DEFAULT_NEAR_LIMIT_REMAINING
+
+
+def _sanitize_mailcom_error(value: Any) -> str | None:
+    """错误字段只允许脱敏类别/短消息，不携带凭据或完整地址。"""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    lowered = text.casefold()
+    if any(secret in lowered for secret in (
+        "password", "authorization", "cookie", "sid", "access_token", "refresh_token", "bearer ", "token=",
+    )):
+        return "[redacted]"
+    text = re.sub(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", "[redacted-email]", text, flags=re.IGNORECASE)
+    return text[:500]
+
+
 def _sqlite_enabled() -> bool:
     backend = str(os.environ.get("RUNTIME_STORAGE_BACKEND") or "").strip().lower()
     bindings = {**_SQLITE_PATH_BINDINGS, **_SQLITE_MAILCOM_PATH_BINDINGS}
@@ -95,6 +252,637 @@ def validate_runtime_storage() -> None:
 
 def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
+
+
+def _current_registration_job_id() -> int | None:
+    """读取当前注册线程的任务 ID，避免模块导入阶段产生循环依赖。"""
+    try:
+        from core import registration_service
+
+        value = getattr(registration_service._THREAD_CTX, "job_id", None)
+        if value in (None, ""):
+            return None
+        return int(value)
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def _normalize_pool_row(row: dict, *, missing_status: str = "disabled", alias: bool = False) -> dict:
+    """在所有持久化入口规范化邮箱池状态和通用审计字段。"""
+    raw_status = str(row.get("status") or "").strip().casefold()
+    row["status"] = canonical_status(raw_status, missing=missing_status, unknown="disabled")
+    if alias and raw_status == "active":
+        row["status"] = "used" if row.get("registered_account_id") not in (None, "") else "available"
+    if raw_status not in EMAIL_POOL_STATUS_SET and raw_status not in LEGACY_EMAIL_POOL_STATUS_MAP:
+        row.setdefault(
+            "status_migration_reason",
+            "邮箱池 status 缺失或未知，已安全迁移为 disabled",
+        )
+    elif raw_status in LEGACY_EMAIL_POOL_STATUS_MAP:
+        row.setdefault("status_migration_source", raw_status)
+        row.setdefault(
+            "status_migration_reason",
+            f"历史状态 {raw_status} 已迁移为 {row['status']}",
+        )
+    row.setdefault("status_updated_at", row.get("updated_at") or row.get("imported_at"))
+    row.setdefault("registration_job_id", None)
+    row.setdefault("registration_started_at", None)
+    row.setdefault("registration_completed_at", None)
+    row.setdefault("failure_reason", None)
+    row.setdefault("status_change_source", row.get("status_migration_source") or "legacy")
+    row.setdefault("status_change_reason", row.get("status_migration_reason"))
+    row.setdefault("manual_reactivated_from", None)
+    row.setdefault("manual_reactivated_at", None)
+    row.setdefault("manual_reactivated_by", None)
+    row.setdefault("deleted_at", None)
+    return row
+
+
+def _mark_pool_row_used(row: dict, account_id: int | None = None) -> bool:
+    """成功落库的内部状态边界。
+
+    ``available -> used`` 只允许从明确的成功落库/已注册导入路径调用；
+    失败和停用终态即使后来出现同名账号也不被复活。
+    """
+    current = canonical_status(row.get("status"), missing="disabled", unknown="disabled")
+    if not can_mark_used(current):
+        return False
+    if current != "used":
+        # can_transition 保持对外 API 的严格生命周期；这里是受控的账号
+        # 落库边界，允许导入型 available 记录直接进入 used。
+        _transition_pool_row(row, "used", force=True)
+    if account_id is not None:
+        row["registered_account_id"] = int(account_id)
+    row["completed_at"] = row.get("completed_at") or _now()
+    return True
+
+
+def _normalize_pool_rows(rows: list[dict] | None, *, missing_status: str = "disabled", alias: bool = False) -> list[dict]:
+    normalized: list[dict] = []
+    for raw in rows or []:
+        if not isinstance(raw, dict):
+            continue
+        normalized.append(_normalize_pool_row(dict(raw), missing_status=missing_status, alias=alias))
+    return normalized
+
+
+def _transition_pool_row(
+    row: dict,
+    target: str,
+    *,
+    note: str | None = None,
+    job_id: int | None = None,
+    force: bool = False,
+    change_source: str | None = None,
+    change_reason: str | None = None,
+    reactivated_from: str | None = None,
+) -> bool:
+    """在内存行上执行统一状态迁移；force 仅供历史迁移使用。"""
+    current = canonical_status(row.get("status"), missing="disabled", unknown="disabled")
+    destination = validate_status(target)
+    if not force and current != destination and not can_transition(current, destination):
+        return False
+    now = _now()
+    row["status"] = destination
+    row["status_updated_at"] = now
+    previous_source = row.get("status_change_source")
+    row["status_change_source"] = str(
+        change_source or ("automatic" if previous_source in (None, "", "legacy") else previous_source)
+    )[:80]
+    if change_reason is not None:
+        row["status_change_reason"] = str(change_reason)[:500] or None
+    elif note is not None:
+        row["status_change_reason"] = str(note)[:500] or None
+    if reactivated_from is not None:
+        row["manual_reactivated_from"] = str(reactivated_from)
+        row["manual_reactivated_at"] = now
+    if destination == "available":
+        row["used_at"] = None
+    else:
+        row["used_at"] = row.get("used_at") or now
+    if destination == "registering":
+        row["registration_started_at"] = row.get("registration_started_at") or now
+        row["registration_job_id"] = int(job_id) if job_id is not None else row.get("registration_job_id")
+        row["registration_completed_at"] = None
+    elif destination in TERMINAL_EMAIL_POOL_STATUSES:
+        if job_id is not None:
+            row["registration_job_id"] = int(job_id)
+        row["registration_completed_at"] = now
+    if note is not None:
+        row["note"] = str(note)[:500]
+    return True
+
+
+def _pool_rows_for_email_locked(email: str) -> tuple[str | None, list[dict] | None, dict | None]:
+    """返回邮箱所属池的 (kind, rows, row)，调用方必须持有 _LOCK。"""
+    target = str(email or "").strip().casefold()
+    if not target:
+        return None, None, None
+    pools = (
+        ("outlook_emails", _load_outlook(), _find_by_email),
+        ("generic_api_emails", _load_generic_api_emails(), _find_by_email),
+        ("domain_emails", _load_domain_pool(), _find_domain_email),
+        ("icloud_emails", _load_icloud_emails(), _find_by_email),
+        ("mailcom_emails", _load_mailcom_emails(), _find_by_email),
+    )
+    for kind, rows, finder in pools:
+        row = finder(rows, target)
+        if row is not None:
+            return kind, rows, row
+    aliases = _load_mailcom_aliases()
+    alias = _find_mailcom_alias(aliases, target)
+    if alias is not None:
+        return "mailcom_aliases", aliases, alias
+    return None, None, None
+
+
+def _save_pool_rows(kind: str, rows: list[dict]) -> None:
+    if kind == "outlook_emails":
+        _save_outlook(rows)
+    elif kind == "generic_api_emails":
+        _save_generic_api_emails(rows)
+    elif kind == "domain_emails":
+        _save_domain_pool(rows)
+    elif kind == "icloud_emails":
+        _save_icloud_emails(rows)
+    elif kind == "mailcom_emails":
+        _save_mailcom_emails(rows)
+    elif kind == "mailcom_aliases":
+        _save_mailcom_aliases(rows)
+
+
+def _active_registration_conflict_locked(kind: str, row: dict) -> str | None:
+    """在统一锁内判断条目是否仍被注册任务/母号租约占用。"""
+    state = canonical_status(row.get("status"), missing="disabled", unknown="disabled")
+    if state == "registering":
+        return "registration_busy"
+    active_job_ids = {
+        int(job.get("id") or 0)
+        for job in _load_jobs()
+        if str(job.get("status") or "") in {"pending", "running", "stopping"}
+        and str(job.get("job_type") or "registration") == "registration"
+        and str(job.get("id") or "").strip()
+    }
+    try:
+        registration_job_id = int(row.get("registration_job_id"))
+    except (TypeError, ValueError):
+        registration_job_id = None
+    if registration_job_id is not None and registration_job_id in active_job_ids:
+        return "registration_busy"
+    if kind == "mailcom_emails":
+        if row.get("registration_lease_job_id") not in (None, ""):
+            return "registration_busy"
+    elif kind == "mailcom_aliases":
+        parent = _find_by_email(_load_mailcom_emails(), row.get("parent_email") or "")
+        if parent and parent.get("registration_lease_job_id") not in (None, ""):
+            return "registration_busy"
+        if row.get("lease_started_at") and row.get("lease_completed_at") in (None, ""):
+            return "registration_busy"
+    return None
+
+
+def _pool_account_locked(email: str, row: dict | None = None) -> dict | None:
+    target = str(email or "").strip().casefold()
+    accounts = _load_accounts()
+    account = _find_by_email(accounts, target)
+    if account is not None:
+        return account
+    if row and row.get("registered_account_id") not in (None, ""):
+        try:
+            account_id = int(row.get("registered_account_id"))
+        except (TypeError, ValueError):
+            account_id = None
+        if account_id is not None:
+            return next((item for item in accounts if int(item.get("id") or 0) == account_id), None)
+    return None
+
+
+def restore_email_pool_entry(
+    email: str,
+    *,
+    source: str = "manual",
+    reason: str | None = None,
+    actor: str | None = None,
+    expected_status: str | None = None,
+) -> dict:
+    """唯一的人工/显式导入恢复边界，不放宽自动迁移规则。"""
+    source = str(source or "manual").strip().casefold()
+    if source not in {"manual", "import"}:
+        raise EmailPoolLifecycleError("restore_source_invalid", "恢复来源非法")
+    reason_text = str(reason or "").strip()
+    if not reason_text:
+        raise EmailPoolLifecycleError("restore_reason_required", "恢复原因不能为空")
+    with _LOCK:
+        kind, rows, row = _pool_rows_for_email_locked(email)
+        if kind is None or rows is None or row is None:
+            raise EmailPoolLifecycleError("email_not_found", "邮箱不存在")
+        current = canonical_status(row.get("status"), missing="disabled", unknown="disabled")
+        if expected_status is not None and current != canonical_status(expected_status):
+            raise EmailPoolLifecycleError(
+                "status_changed", "邮箱状态已变化", current_status=current,
+            )
+        if current == "registering" or _active_registration_conflict_locked(kind, row):
+            raise EmailPoolLifecycleError("registration_busy", "邮箱仍有活动注册任务或租约")
+        if not is_manual_restorable(current):
+            raise EmailPoolLifecycleError("restore_not_allowed", "当前状态不允许人工恢复", current_status=current)
+        now = _now()
+        if not _transition_pool_row(
+            row,
+            "available",
+            force=True,
+            change_source=source,
+            change_reason=reason_text,
+            reactivated_from=current,
+        ):
+            raise EmailPoolLifecycleError("restore_failed", "邮箱恢复失败")
+        row["manual_reactivated_from"] = current
+        row["manual_reactivated_at"] = now
+        row["manual_reactivated_by"] = str(actor or "manual")[:80]
+        row["registration_job_id"] = None
+        row["registration_started_at"] = None
+        row["deleted_at"] = None
+        row["note"] = reason_text[:500]
+        if kind == "mailcom_aliases":
+            row["lease_started_at"] = None
+            row["lease_completed_at"] = None
+            _save_mailcom_parents_with_aliases(_load_mailcom_emails(), rows)
+        else:
+            _save_pool_rows(kind, rows)
+        return {
+            "email": row.get("alias_email") or row.get("email"),
+            "source": source,
+            "status": "available",
+            "previous_status": current,
+            "manual_reactivated_from": current,
+            "manual_reactivated_at": now,
+        }
+
+
+def set_email_pool_status(
+    email: str,
+    status: str,
+    *,
+    source: str | None = None,
+    reason: str | None = None,
+    actor: str | None = None,
+) -> dict:
+    """统一人工状态 API；终态到 available 必须经过恢复边界。"""
+    destination = validate_status(status)
+    raw_reason = str(reason or "").strip()
+    if destination == "available" and raw_reason == "":
+        with _LOCK:
+            _, _, existing_row = _pool_rows_for_email_locked(email)
+            existing_state = canonical_status((existing_row or {}).get("status"), missing="disabled", unknown="disabled")
+        if existing_row is not None and existing_state != "available":
+            raise EmailPoolLifecycleError("restore_reason_required", "恢复邮箱必须填写原因")
+    reason_text = (raw_reason or "手动修改邮箱池状态")[:500]
+    with _LOCK:
+        kind, rows, row = _pool_rows_for_email_locked(email)
+        if kind is None or rows is None or row is None:
+            raise EmailPoolLifecycleError("email_not_found", "邮箱不存在")
+        if source and str(source).strip().casefold() not in {
+            "outlook", "generic_api", "cloudflare_domain", "icloud", "mailcom",
+        }:
+            raise EmailPoolLifecycleError("source_invalid", "邮箱来源非法")
+        normalized_source = str(source or "").strip().casefold()
+        expected_kind = {
+            "outlook": "outlook_emails",
+            "generic_api": "generic_api_emails",
+            "cloudflare_domain": "domain_emails",
+            "icloud": "icloud_emails",
+        }.get(normalized_source)
+        if expected_kind and expected_kind != kind:
+            raise EmailPoolLifecycleError("source_mismatch", "邮箱不属于指定来源", actual_source=kind)
+        if normalized_source == "mailcom" and kind not in {"mailcom_emails", "mailcom_aliases"}:
+            raise EmailPoolLifecycleError("source_mismatch", "邮箱不属于指定来源", actual_source=kind)
+        current = canonical_status(row.get("status"), missing="disabled", unknown="disabled")
+    if destination == "available" and current != "available":
+        return restore_email_pool_entry(
+            email,
+            source="manual",
+            reason=reason_text,
+            actor=actor,
+            expected_status=current,
+        )
+    with _LOCK:
+        kind, rows, row = _pool_rows_for_email_locked(email)
+        if kind is None or rows is None or row is None:
+            raise EmailPoolLifecycleError("email_not_found", "邮箱不存在")
+        current = canonical_status(row.get("status"), missing="disabled", unknown="disabled")
+        if current == destination:
+            return {"email": row.get("alias_email") or row.get("email"), "status": current, "previous_status": current}
+        if _active_registration_conflict_locked(kind, row):
+            raise EmailPoolLifecycleError("registration_busy", "邮箱仍有活动注册任务或租约")
+        if not _transition_pool_row(
+            row,
+            destination,
+            note=reason_text,
+            change_source="manual",
+            change_reason=reason_text,
+        ):
+            raise EmailPoolLifecycleError(
+                "status_transition_invalid",
+                f"邮箱状态不可迁移: {current} -> {destination}",
+                current_status=current,
+                target_status=destination,
+            )
+        row["status_change_source"] = "manual"
+        row["status_change_reason"] = reason_text
+        if destination != "available":
+            row["manual_reactivated_from"] = None
+            row["manual_reactivated_at"] = None
+        if kind == "mailcom_aliases":
+            _save_mailcom_parents_with_aliases(_load_mailcom_emails(), rows)
+        else:
+            _save_pool_rows(kind, rows)
+        return {
+            "email": row.get("alias_email") or row.get("email"),
+            "status": destination,
+            "previous_status": current,
+        }
+
+
+def check_email_pool_delete(
+    email: str,
+    *,
+    source: str | None = None,
+    force: bool = False,
+    reason: str | None = None,
+) -> dict:
+    """统一物理删除前置检查；调用方必须在同一锁内重新执行删除。"""
+    with _LOCK:
+        kind, rows, row = _pool_rows_for_email_locked(email)
+        if kind is None or rows is None or row is None:
+            raise EmailPoolLifecycleError("email_not_found", "邮箱不存在")
+        expected_kind = {
+            "outlook": "outlook_emails",
+            "generic_api": "generic_api_emails",
+            "cloudflare_domain": "domain_emails",
+            "icloud": "icloud_emails",
+            "mailcom": "mailcom_aliases",
+        }.get(str(source or "").strip().casefold()) if source else None
+        if expected_kind and expected_kind != kind:
+            raise EmailPoolLifecycleError("source_mismatch", "邮箱不属于指定来源", actual_source=kind)
+        if kind == "mailcom_aliases":
+            raise EmailPoolLifecycleError("mailcom_alias_management_required", "mail.com 别名只能在母号管理中删除")
+        conflict = _active_registration_conflict_locked(kind, row)
+        if conflict:
+            raise EmailPoolLifecycleError(conflict, "邮箱仍有活动注册任务或租约")
+        account = _pool_account_locked(row.get("alias_email") or row.get("email"), row)
+        if account is not None and not force:
+            raise EmailPoolLifecycleError(
+                "used_account_protected",
+                "邮箱已关联注册账号，需 force=true 和删除原因",
+                account_id=account.get("id"),
+            )
+        if account is not None and force and not str(reason or "").strip():
+            raise EmailPoolLifecycleError("force_reason_required", "强制删除必须填写原因")
+        return {
+            "kind": kind,
+            "email": row.get("alias_email") or row.get("email"),
+            "status": canonical_status(row.get("status"), missing="disabled", unknown="disabled"),
+            "account_id": account.get("id") if account else None,
+            "force": bool(force),
+        }
+
+
+def delete_email_pool_entry(
+    email: str,
+    *,
+    source: str | None = None,
+    force: bool = False,
+    reason: str | None = None,
+    actor: str | None = None,
+) -> dict:
+    """按来源物理删除非 mail.com 条目，并保留高风险操作审计。"""
+    with _LOCK:
+        kind, _, parent_row = _pool_rows_for_email_locked(email)
+        if kind == "mailcom_emails" and parent_row is not None and str(source or "").strip().casefold() in {"", "mailcom"}:
+            return delete_mailcom_parent(email, reason=reason, actor=actor)
+        check = check_email_pool_delete(email, source=source, force=force, reason=reason)
+        kind, rows, row = _pool_rows_for_email_locked(email)
+        if kind is None or rows is None or row is None:
+            raise EmailPoolLifecycleError("email_not_found", "邮箱不存在")
+        target = str(row.get("alias_email") or row.get("email") or "").strip().casefold()
+        remaining = [item for item in rows if item is not row and str(item.get("alias_email") or item.get("email") or "").strip().casefold() != target]
+        _save_pool_rows(kind, remaining)
+        audit = _write_lifecycle_record_locked(
+            "email",
+            target,
+            action="delete",
+            reason=reason or "用户永久删除邮箱池条目",
+            actor=actor,
+            account_id=check.get("account_id"),
+        )
+        return {"email": target, "source": source or kind, "deleted": True, "audit": audit, **check}
+
+
+def mark_registration_success(email: str, account_id: int | None = None) -> bool:
+    """把已生成本地账号的邮箱条目标记为 used，且不允许复活其它终态。"""
+    with _LOCK:
+        kind, rows, row = _pool_rows_for_email_locked(email)
+        if row is None or rows is None or kind is None:
+            return False
+        current = canonical_status(row.get("status"), missing="disabled", unknown="disabled")
+        if current in {"failed", "disabled"}:
+            return False
+        if current not in {"available", "registering", "used"}:
+            return False
+        if kind == "mailcom_aliases":
+            if account_id is not None:
+                row["registered_account_id"] = int(account_id)
+            if not _mark_pool_row_used(row, account_id=account_id):
+                return False
+            # 先把 alias/account 关联持久化，再释放母号租约。否则释放函数
+            # 重新加载旧快照时会丢掉刚写入的 registered_account_id。
+            _save_pool_rows(kind, rows)
+            return release_mailcom_registration_lease(email, alias_status=None)
+        if not _mark_pool_row_used(row, account_id=account_id):
+            return False
+        _save_pool_rows(kind, rows)
+        return True
+
+
+def mark_registration_failed(
+    email: str,
+    reason: str | None = None,
+    *,
+    stage: str | None = None,
+    job_id: int | None = None,
+) -> bool:
+    """将未生成账号的已领取邮箱置为 failed；账号已存在时保持 used。"""
+    with _LOCK:
+        if _find_by_email(_load_accounts(), email) is not None:
+            return mark_registration_success(email)
+        kind, rows, row = _pool_rows_for_email_locked(email)
+        if row is None or rows is None or kind is None:
+            return False
+        current = canonical_status(row.get("status"), missing="disabled", unknown="disabled")
+        if current in {"failed", "disabled"}:
+            return False
+        note = str(reason or "注册失败")[:420]
+        if stage:
+            note = f"{stage}: {note}"[:500]
+        if kind == "mailcom_aliases":
+            return release_mailcom_registration_lease(
+                email,
+                alias_status="failed",
+                error=note,
+                job_id=job_id,
+            )
+        if not _transition_pool_row(row, "failed", note=note, job_id=job_id):
+            return False
+        row["failure_reason"] = note
+        _save_pool_rows(kind, rows)
+        return True
+
+
+def disable_registration_email(
+    email: str,
+    reason: str | None = None,
+    *,
+    job_id: int | None = None,
+) -> bool:
+    """将邮箱条目标记为 disabled；任何 disabled 条目都不可领取。"""
+    with _LOCK:
+        kind, rows, row = _pool_rows_for_email_locked(email)
+        if row is None or rows is None or kind is None:
+            return False
+        note = str(reason or "邮箱已停用")[:500]
+        if kind == "mailcom_aliases":
+            return release_mailcom_registration_lease(
+                email,
+                alias_status="disabled",
+                error=note,
+                job_id=job_id,
+            )
+        if not _transition_pool_row(row, "disabled", note=note, job_id=job_id):
+            return False
+        row["failure_reason"] = note
+        _save_pool_rows(kind, rows)
+        return True
+
+
+def migrate_email_pool_statuses() -> dict[str, int]:
+    """幂等迁移旧邮箱池状态，并恢复启动时孤立的注册条目。
+
+    迁移以不可复用为安全默认：没有账号且没有活动注册任务的旧 used 或
+    registering 条目进入 failed，而不是重新暴露为 available。
+    """
+    with _LOCK:
+        accounts = _load_accounts()
+        account_emails = {
+            str(row.get("email") or "").strip().casefold()
+            for row in accounts
+            if str(row.get("email") or "").strip()
+        }
+        jobs = _load_jobs()
+        active_emails = {
+            str(row.get("email") or "").strip().casefold()
+            for row in jobs
+            if str(row.get("status") or "") in {"pending", "running", "stopping"}
+            and str(row.get("job_type") or "registration") == "registration"
+            and str(row.get("email") or "").strip()
+        }
+        active_job_ids = {
+            int(row.get("id") or 0)
+            for row in jobs
+            if str(row.get("status") or "") in {"pending", "running", "stopping"}
+            and str(row.get("job_type") or "registration") == "registration"
+            and row.get("id") not in (None, "")
+        }
+        changed = 0
+        failed = 0
+        normalized = 0
+
+        def migrate_rows(kind: str, rows: list[dict], *, aliases: bool = False) -> None:
+            nonlocal changed, failed, normalized
+            dirty = False
+            for row in rows:
+                before = dict(row)
+                email = str(row.get("alias_email") or row.get("email") or "").strip().casefold()
+                raw_status = str(row.get("status") or "").strip().casefold()
+                current = canonical_status(raw_status, missing="disabled", unknown="disabled")
+                source_status = str(row.get("status_migration_source") or raw_status).strip().casefold()
+                known_status = source_status in EMAIL_POOL_STATUS_SET or source_status in {
+                    "active", "leased", "registered", "registration_failed", "deleted",
+                }
+
+                # 失败/停用是不可逆审计终态，不能因为后来发现同名账号或
+                # 远端同步结果而改成 used/available。
+                if current in {"failed", "disabled"}:
+                    target = current
+                elif source_status == "registered":
+                    target = "used"
+                elif not known_status:
+                    target = "disabled"
+                elif row.get("registered_account_id") not in (None, "") or email in account_emails:
+                    target = "used"
+                elif current in {"used", "registering"}:
+                    job_id = row.get("registration_job_id")
+                    try:
+                        job_is_active = int(job_id) in active_job_ids
+                    except (TypeError, ValueError):
+                        job_is_active = False
+                    target = "registering" if email in active_emails or job_is_active else "failed"
+                else:
+                    # available/active 且没有本地账号的记录继续可领取。
+                    target = current
+
+                _normalize_pool_row(row, missing_status="disabled", alias=aliases)
+                if target != row.get("status"):
+                    _transition_pool_row(
+                        row,
+                        target,
+                        note="邮箱池状态启动迁移" if target in {"failed", "used", "registering"} else None,
+                        force=True,
+                    )
+                if target == "failed" and current != "failed":
+                    row["failure_reason"] = row.get("failure_reason") or "历史状态未确认成功，安全迁移为 failed"
+                    failed += 1
+                if row != before:
+                    dirty = True
+                    normalized += 1
+            if dirty:
+                _save_pool_rows(kind, rows)
+                changed += 1
+
+        migrate_rows("outlook_emails", _load_outlook())
+        migrate_rows("generic_api_emails", _load_generic_api_emails())
+        migrate_rows("domain_emails", _load_domain_pool())
+        migrate_rows("icloud_emails", _load_icloud_emails())
+        migrate_rows("mailcom_emails", _load_mailcom_emails())
+        migrate_rows("mailcom_aliases", _load_mailcom_aliases(), aliases=True)
+
+        # mail.com 母号租约恢复：终态别名不可复活，但母号共享资源可释放。
+        parents = _load_mailcom_emails()
+        aliases = _load_mailcom_aliases()
+        parent_dirty = False
+        for parent in parents:
+            lease_job = parent.get("registration_lease_job_id")
+            if lease_job in (None, ""):
+                continue
+            alias = _find_mailcom_alias(aliases, parent.get("registration_lease_alias") or "")
+            job = next((item for item in jobs if int(item.get("id") or 0) == int(lease_job)), None)
+            live = bool(job and str(job.get("status") or "") in {"pending", "running", "stopping"})
+            if live:
+                continue
+            if alias is not None and canonical_status(alias.get("status"), missing="disabled", unknown="disabled") == "registering":
+                target = "used" if alias.get("registered_account_id") not in (None, "") or _alias_key(alias.get("alias_email")) in account_emails else "failed"
+                if _transition_pool_row(alias, target, note="启动恢复释放注册租约", force=True):
+                    alias["failure_reason"] = "启动恢复释放注册租约" if target == "failed" else alias.get("failure_reason")
+                    parent_dirty = True
+            if canonical_status(parent.get("status"), missing="disabled", unknown="disabled") == "registering":
+                _transition_pool_row(parent, "available", force=True)
+                parent_dirty = True
+            parent["registration_lease_job_id"] = None
+            parent["registration_lease_alias"] = None
+            parent["registration_lease_started_at"] = None
+            parent_dirty = True
+        if parent_dirty:
+            _save_mailcom_parents_with_aliases(parents, aliases)
+            changed += 1
+        return {"stores_changed": changed, "rows_normalized": normalized, "rows_failed": failed}
 
 
 def _ensure_storage() -> None:
@@ -208,9 +996,7 @@ def _viewer_snapshot(outlook_rows: list[dict], account_rows: list[dict]) -> dict
         "summary": {
             "accounts": len(account_rows),
             "outlook_total": len(outlook_rows),
-            "outlook_available": sum(1 for r in outlook_rows if r.get("status") == "available"),
-            "outlook_used": sum(1 for r in outlook_rows if r.get("status") == "used"),
-            "outlook_failed": sum(1 for r in outlook_rows if r.get("status") == "failed"),
+            **{f"outlook_{status}": sum(1 for r in outlook_rows if r.get("status") == status) for status in EMAIL_POOL_STATUSES},
         },
     }
 
@@ -316,7 +1102,9 @@ def _render_static_viewer(outlook_rows: list[dict] | None = None, account_rows: 
     .pill {{ display: inline-flex; min-width: 48px; justify-content: center; padding: 3px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; }}
     .status-available {{ color: var(--blue); background: #eef4ff; }}
     .status-used {{ color: #475467; background: #f2f4f7; }}
+    .status-registering {{ color: var(--amber); background: #fff7e6; }}
     .status-failed {{ color: var(--red); background: #fff0ef; }}
+    .status-disabled {{ color: #475467; background: #f2f4f7; }}
     .actions {{ display: flex; gap: 8px; flex-wrap: wrap; }}
     #toast {{
       position: fixed;
@@ -413,7 +1201,7 @@ function btn(label, value, cls = '') {{
   return `<button class="${{cls}}" data-copy-id="${{id}}" ${{id ? '' : 'disabled'}}>${{label}}</button>`;
 }}
 function pill(status) {{
-  const map = {{ available: '可用', used: '已用', failed: '失败' }};
+  const map = {{ available: '可用', registering: '注册中', used: '已用', failed: '失败', disabled: '已停用' }};
   const label = map[status] || status || '-';
   return `<span class="pill status-${{esc(status)}}">${{esc(label)}}</span>`;
 }}
@@ -515,11 +1303,12 @@ render();
 
 def _load_outlook() -> list[dict]:
     if _sqlite_enabled():
-        return _SQLITE_STORE.load("outlook_emails")
+        rows = _SQLITE_STORE.load("outlook_emails")
+        return _normalize_pool_rows(rows, missing_status="disabled")
     rows = _read_json(_OUTLOOK_JSON, None)
     if not isinstance(rows, list):
         rows = _read_json(_LEGACY_OUTLOOK_JSON, [])
-    return rows if isinstance(rows, list) else []
+    return _normalize_pool_rows(rows if isinstance(rows, list) else [], missing_status="disabled")
 
 
 def _save_outlook(rows: list[dict]) -> None:
@@ -533,9 +1322,10 @@ def _save_outlook(rows: list[dict]) -> None:
 
 def _load_generic_api_emails() -> list[dict]:
     if _sqlite_enabled():
-        return _SQLITE_STORE.load("generic_api_emails")
+        rows = _SQLITE_STORE.load("generic_api_emails")
+        return _normalize_pool_rows(rows, missing_status="disabled")
     rows = _read_json(_GENERIC_API_EMAIL_JSON, [])
-    return rows if isinstance(rows, list) else []
+    return _normalize_pool_rows(rows if isinstance(rows, list) else [], missing_status="disabled")
 
 
 def _save_generic_api_emails(rows: list[dict]) -> None:
@@ -801,9 +1591,17 @@ def insert_account(
     with _LOCK:
         accounts = _load_accounts()
         outlook_rows = _load_outlook()
+        generic_rows = _load_generic_api_emails()
+        domain_rows = _load_domain_pool()
+        icloud_rows = _load_icloud_emails()
+        mailcom_parent_rows = _load_mailcom_emails()
         mailcom_alias_rows = _load_mailcom_aliases()
         existing = _find_by_email(accounts, email)
         outlook_row = _find_by_email(outlook_rows, email)
+        generic_row = _find_by_email(generic_rows, email)
+        domain_row = _find_domain_email(domain_rows, email)
+        icloud_row = _find_by_email(icloud_rows, email)
+        mailcom_parent_row = _find_by_email(mailcom_parent_rows, email)
         mailcom_alias_row = _find_mailcom_alias(mailcom_alias_rows, email)
         extra_json = json.dumps(extra, ensure_ascii=False) if extra else None
 
@@ -840,35 +1638,66 @@ def insert_account(
             row["client_id"] = outlook_row.get("client_id")
             row["refresh_token"] = outlook_row.get("refresh_token")
             row["original_email_line"] = _outlook_line(outlook_row)
-            outlook_row["status"] = "used"
-            outlook_row["used_at"] = outlook_row.get("used_at") or _now()
-            outlook_row["registered_account_id"] = row_id
+            _mark_pool_row_used(outlook_row, account_id=row_id)
             outlook_row["access_token"] = access_token
             outlook_row["completed_at"] = _now()
             if totp_secret:
                 outlook_row["totp_secret"] = totp_secret
 
+        # 其它持久化邮箱池也必须在账号落库的同一生命周期边界变为 used。
+        for pool_row in (generic_row, domain_row, icloud_row, mailcom_parent_row):
+            if pool_row is None:
+                continue
+            _mark_pool_row_used(pool_row, account_id=row_id)
+            pool_row["completed_at"] = _now()
+            if access_token:
+                pool_row["access_token"] = access_token
+
         if mailcom_alias_row:
             # 成功账号只消耗已确认的别名槽位。母号是共享收件箱和认证资源，
             # 绝不能因一次注册被永久标记为 used。
-            if str(mailcom_alias_row.get("status") or "") not in {"available", "leased", "registered"}:
-                raise ValueError("mail.com 成功账号不能关联不可用别名")
-            existing_account_id = mailcom_alias_row.get("registered_account_id")
-            if existing_account_id not in (None, "", row_id):
-                raise ValueError("mail.com 别名已经关联其他成功账号")
-            mailcom_alias_row["registered_account_id"] = row_id
-            mailcom_alias_row["status"] = "registered"
-            mailcom_alias_row["plan_check_status"] = "queued"
-            mailcom_alias_row["cleanup_status"] = "pending"
-            mailcom_alias_row["last_error"] = None
-            mailcom_alias_row["updated_at"] = _now()
+            alias_state = canonical_status(mailcom_alias_row.get("status"), missing="disabled", unknown="disabled")
+            if alias_state in {"failed", "disabled"}:
+                # 账号导入/补写不能复活失败或停用别名；保留账号记录，但
+                # 邮箱池终态继续用于审计且不可领取。
+                mailcom_alias_row = None
+            else:
+                existing_account_id = mailcom_alias_row.get("registered_account_id")
+                if existing_account_id not in (None, "", row_id):
+                    raise ValueError("mail.com 别名已经关联其他成功账号")
+                _mark_pool_row_used(mailcom_alias_row, account_id=row_id)
+                mailcom_alias_row["plan_check_status"] = "queued"
+                mailcom_alias_row["cleanup_status"] = "pending"
+                mailcom_alias_row["last_error"] = None
+                mailcom_alias_row["updated_at"] = _now()
 
         row["copy_line"] = _account_line(row)
         if mailcom_alias_row:
             _save_accounts_with_mailcom_aliases(accounts, mailcom_alias_rows)
             release_mailcom_registration_lease(email)
         else:
-            _save_accounts_with_pool(accounts, "outlook_emails", outlook_rows)
+            changed_pools = {
+                "outlook_emails": outlook_rows if outlook_row else None,
+                "generic_api_emails": generic_rows if generic_row else None,
+                "domain_emails": domain_rows if domain_row else None,
+                "icloud_emails": icloud_rows if icloud_row else None,
+                "mailcom_emails": mailcom_parent_rows if mailcom_parent_row else None,
+            }
+            changed_pools = {kind: rows for kind, rows in changed_pools.items() if rows is not None}
+            if _sqlite_enabled():
+                payload = {"accounts": accounts, **changed_pools}
+                _SQLITE_STORE.replace_many(payload)
+                _sync_accounts_txt(accounts)
+                _sync_tokens_txt(accounts)
+                if "outlook_emails" in changed_pools:
+                    _sync_outlook_txt(outlook_rows)
+                    _render_static_viewer(outlook_rows=outlook_rows, account_rows=accounts)
+                if "generic_api_emails" in changed_pools:
+                    _sync_generic_api_email_txt(generic_rows)
+            else:
+                _save_accounts(accounts)
+                for kind, rows in changed_pools.items():
+                    _save_pool_rows(kind, rows)
         return row_id
 
 
@@ -2103,7 +2932,7 @@ def delete_accounts(account_ids: list[int] | None = None, emails: list[str] | No
 # outlook_pool
 # ============================================================
 
-def import_outlook_accounts(records: list[dict]) -> tuple[int, int]:
+def import_outlook_accounts(records: list[dict], *, reactivate_existing: bool = False) -> tuple[int, int]:
     """
     批量导入 Outlook 账号。
     records 元素：{email, password, client_id, refresh_token}
@@ -2117,8 +2946,31 @@ def import_outlook_accounts(records: list[dict]) -> tuple[int, int]:
             if not email:
                 skipped += 1
                 continue
-            if _find_by_email(rows, email):
-                skipped += 1
+            existing = _find_by_email(rows, email)
+            if existing:
+                if not reactivate_existing:
+                    skipped += 1
+                    continue
+                previous_status = canonical_status(existing.get("status"), missing="disabled", unknown="disabled")
+                try:
+                    restore_email_pool_entry(
+                        email,
+                        source="import",
+                        reason="显式重新导入并恢复邮箱池条目",
+                        expected_status=previous_status,
+                    )
+                except EmailPoolLifecycleError:
+                    skipped += 1
+                    continue
+                existing["status"] = "available"
+                existing["status_change_source"] = "import"
+                existing["status_change_reason"] = "显式重新导入并恢复邮箱池条目"
+                existing["manual_reactivated_from"] = previous_status
+                existing["manual_reactivated_at"] = _now()
+                existing["password"] = (raw.get("password") or "").strip()
+                existing["client_id"] = (raw.get("client_id") or raw.get("clientId") or "").strip()
+                existing["refresh_token"] = (raw.get("refresh_token") or raw.get("refreshToken") or "").strip()
+                inserted += 1
                 continue
             row = {
                 "id": _next_id(rows),
@@ -2127,6 +2979,8 @@ def import_outlook_accounts(records: list[dict]) -> tuple[int, int]:
                 "client_id": (raw.get("client_id") or raw.get("clientId") or "").strip(),
                 "refresh_token": (raw.get("refresh_token") or raw.get("refreshToken") or "").strip(),
                 "status": "available",
+                "status_change_source": "import",
+                "status_change_reason": "导入邮箱池素材",
                 "used_at": None,
                 "note": None,
                 "imported_at": _now(),
@@ -2199,6 +3053,7 @@ def import_registered_email_accounts(records: list[dict], source: str | None) ->
             now = _now()
             original_line = email
             pool_row = None
+            pool_terminal = False
 
             if source == "generic_api":
                 code_url = (raw.get("code_url") or raw.get("url") or "").strip()
@@ -2219,10 +3074,12 @@ def import_registered_email_accounts(records: list[dict], source: str | None) ->
                     generic_rows.append(pool_row)
                 else:
                     pool_row["code_url"] = code_url or pool_row.get("code_url")
-                pool_row["status"] = "used"
-                pool_row["used_at"] = pool_row.get("used_at") or now
-                pool_row["completed_at"] = pool_row.get("completed_at") or now
-                pool_row["note"] = pool_row.get("note") or "导入为已注册账号，用于 Codex 授权"
+                pool_terminal = canonical_status(pool_row.get("status"), missing="disabled", unknown="disabled") in {"failed", "disabled"}
+                if not pool_terminal:
+                    _mark_pool_row_used(pool_row)
+                    pool_row["used_at"] = pool_row.get("used_at") or now
+                    pool_row["completed_at"] = pool_row.get("completed_at") or now
+                    pool_row["note"] = pool_row.get("note") or "导入为已注册账号，用于 Codex 授权"
                 pool_row["copy_line"] = _generic_api_email_line(pool_row)
                 original_line = _generic_api_email_line(pool_row)
             elif source == "outlook":
@@ -2250,10 +3107,12 @@ def import_registered_email_accounts(records: list[dict], source: str | None) ->
                     pool_row["password"] = password or pool_row.get("password")
                     pool_row["client_id"] = client_id or pool_row.get("client_id")
                     pool_row["refresh_token"] = refresh_token or pool_row.get("refresh_token")
-                pool_row["status"] = "used"
-                pool_row["used_at"] = pool_row.get("used_at") or now
-                pool_row["completed_at"] = pool_row.get("completed_at") or now
-                pool_row["note"] = pool_row.get("note") or "导入为已注册账号，用于 Codex 授权"
+                pool_terminal = canonical_status(pool_row.get("status"), missing="disabled", unknown="disabled") in {"failed", "disabled"}
+                if not pool_terminal:
+                    _mark_pool_row_used(pool_row)
+                    pool_row["used_at"] = pool_row.get("used_at") or now
+                    pool_row["completed_at"] = pool_row.get("completed_at") or now
+                    pool_row["note"] = pool_row.get("note") or "导入为已注册账号，用于 Codex 授权"
                 pool_row["copy_line"] = _outlook_line(pool_row)
                 original_line = _outlook_line(pool_row)
             else:
@@ -2268,10 +3127,12 @@ def import_registered_email_accounts(records: list[dict], source: str | None) ->
                         "imported_at": now,
                     }
                     icloud_rows.append(pool_row)
-                pool_row["status"] = "used"
-                pool_row["used_at"] = pool_row.get("used_at") or now
-                pool_row["completed_at"] = pool_row.get("completed_at") or now
-                pool_row["note"] = pool_row.get("note") or "导入为已注册账号，用于邮箱 OTP"
+                pool_terminal = canonical_status(pool_row.get("status"), missing="disabled", unknown="disabled") in {"failed", "disabled"}
+                if not pool_terminal:
+                    _mark_pool_row_used(pool_row)
+                    pool_row["used_at"] = pool_row.get("used_at") or now
+                    pool_row["completed_at"] = pool_row.get("completed_at") or now
+                    pool_row["note"] = pool_row.get("note") or "导入为已注册账号，用于邮箱 OTP"
 
             row_id = _next_id(accounts)
             access_token = (raw.get("access_token") or raw.get("token") or "").strip()
@@ -2302,7 +3163,8 @@ def import_registered_email_accounts(records: list[dict], source: str | None) ->
             account["copy_line"] = _account_line(account)
             accounts.append(account)
 
-            pool_row["registered_account_id"] = row_id
+            if not pool_terminal:
+                pool_row["registered_account_id"] = row_id
             pool_row["access_token"] = access_token
             if totp_secret:
                 pool_row["totp_secret"] = totp_secret
@@ -2317,63 +3179,64 @@ def import_registered_email_accounts(records: list[dict], source: str | None) ->
         return inserted, skipped
 
 
-def claim_next_outlook() -> dict | None:
-    """原子领取一个可用 Outlook 账号并标记为 used。"""
+def claim_next_outlook(job_id: int | None = None) -> dict | None:
+    """原子领取一个可用 Outlook 账号并标记为 registering。"""
+    job_id = _current_registration_job_id() if job_id is None else int(job_id)
     with _LOCK:
         rows = sorted(_load_outlook(), key=lambda x: int(x.get("id") or 0))
         row = next((r for r in rows if r.get("status") == "available"), None)
         if row is None:
             return None
-        row["status"] = "used"
-        row["used_at"] = _now()
+        if not _transition_pool_row(row, "registering", job_id=job_id):
+            return None
         row["note"] = None
         _save_outlook(rows)
         return _decorate_outlook(row)
 
 
-def release_outlook(email: str, status: str = "available", note: str | None = None) -> None:
-    """把账号状态改回 available，或标记为 used/failed/disabled。"""
+def release_outlook(email: str, status: str = "failed", note: str | None = None) -> bool:
+    """更新 Outlook 状态；失败回收不得把已领取条目改回 available。"""
+    status = validate_status(status)
     with _LOCK:
         rows = _load_outlook()
         row = _find_by_email(rows, email)
         if row is None:
-            return
-        row["status"] = status
-        if status == "available":
-            row["used_at"] = None
-        elif status in ("used", "failed", "disabled"):
-            row["used_at"] = row.get("used_at") or _now()
-        if note is not None:
-            row["note"] = note
+            return False
+        if not _transition_pool_row(row, status, note=note):
+            raise ValueError(f"邮箱状态不可迁移: {row.get('status')} -> {status}")
         _save_outlook(rows)
+        return True
 
 
 def release_unconsumed_outlook(email: str, note: str | None = None) -> bool:
-    """原子回收未生成本地账号且仍为 used 的 Outlook 邮箱。"""
+    """将未生成本地账号的已领取 Outlook 邮箱置为 failed，永久不复用。"""
     with _LOCK:
         if _find_by_email(_load_accounts(), email) is not None:
             return False
         rows = _load_outlook()
         row = _find_by_email(rows, email)
-        if row is None or row.get("status") != "used":
+        if row is None or row.get("status") in {"failed", "disabled", "used"}:
             return False
-        row["status"] = "available"
-        row["used_at"] = None
-        if note is not None:
-            row["note"] = note
+        if not _transition_pool_row(row, "failed", note=note):
+            return False
         _save_outlook(rows)
         return True
 
 
-def delete_outlook(email: str) -> bool:
-    """从邮箱池彻底删除一个邮箱（按 email 匹配）。返回是否删到。"""
+def delete_outlook(email: str, *, physical: bool = False, force: bool = False, reason: str | None = None) -> bool:
+    """兼容旧调用；新删除 API 通过统一前置检查物理移除。"""
+    if physical:
+        delete_email_pool_entry(email, source="outlook", force=force, reason=reason)
+        return True
     with _LOCK:
         rows = _load_outlook()
-        target = (email or "").lower()
-        new_rows = [r for r in rows if (r.get("email") or "").lower() != target]
-        if len(new_rows) == len(rows):
+        row = _find_by_email(rows, email)
+        if row is None:
             return False
-        _save_outlook(new_rows)
+        if not _transition_pool_row(row, "disabled", note="用户删除邮箱池条目"):
+            return False
+        row["deleted_at"] = _now()
+        _save_outlook(rows)
         return True
 
 
@@ -2385,6 +3248,7 @@ def list_outlook_pool(status: str | None = None, limit: int = 500) -> list[dict]
         }
         rows = _load_outlook()
         if status:
+            status = validate_status(status)
             rows = [r for r in rows if r.get("status") == status]
         rows = sorted(rows, key=lambda x: int(x.get("id") or 0), reverse=True)
         return [_decorate_outlook(r, account_by_email) for r in rows[:limit]]
@@ -2392,12 +3256,7 @@ def list_outlook_pool(status: str | None = None, limit: int = 500) -> list[dict]
 
 def outlook_pool_summary() -> dict:
     with _LOCK:
-        out = {"available": 0, "used": 0, "failed": 0}
-        for row in _load_outlook():
-            status = row.get("status") or "available"
-            out[status] = out.get(status, 0) + 1
-        out["total"] = sum(v for k, v in out.items() if k != "total")
-        return out
+        return status_counts(_load_outlook())
 
 
 def get_outlook_by_email(email: str) -> dict | None:
@@ -2410,7 +3269,7 @@ def get_outlook_by_email(email: str) -> dict | None:
 # generic_api email pool
 # ============================================================
 
-def import_generic_api_emails(records: list[dict]) -> tuple[int, int]:
+def import_generic_api_emails(records: list[dict], *, reactivate_existing: bool = False) -> tuple[int, int]:
     """
     批量导入通用 API 取码邮箱。
     records 元素：{email, code_url}
@@ -2425,14 +3284,35 @@ def import_generic_api_emails(records: list[dict]) -> tuple[int, int]:
             if not email or not code_url:
                 skipped += 1
                 continue
-            if _find_by_email(rows, email):
-                skipped += 1
+            existing = _find_by_email(rows, email)
+            if existing:
+                if not reactivate_existing:
+                    skipped += 1
+                    continue
+                try:
+                    restore_email_pool_entry(
+                        email,
+                        source="import",
+                        reason="显式重新导入并恢复邮箱池条目",
+                        expected_status=existing.get("status"),
+                    )
+                except EmailPoolLifecycleError:
+                    skipped += 1
+                    continue
+                existing["status"] = "available"
+                existing["status_change_source"] = "import"
+                existing["status_change_reason"] = "显式重新导入并恢复邮箱池条目"
+                existing["manual_reactivated_at"] = _now()
+                existing["code_url"] = code_url
+                inserted += 1
                 continue
             row = {
                 "id": _next_id(rows),
                 "email": email,
                 "code_url": code_url,
                 "status": "available",
+                "status_change_source": "import",
+                "status_change_reason": "导入邮箱池素材",
                 "used_at": None,
                 "note": None,
                 "imported_at": _now(),
@@ -2444,63 +3324,64 @@ def import_generic_api_emails(records: list[dict]) -> tuple[int, int]:
         return inserted, skipped
 
 
-def claim_next_generic_api_email() -> dict | None:
-    """原子领取一个可用通用 API 邮箱并标记为 used。"""
+def claim_next_generic_api_email(job_id: int | None = None) -> dict | None:
+    """原子领取一个可用通用 API 邮箱并标记为 registering。"""
+    job_id = _current_registration_job_id() if job_id is None else int(job_id)
     with _LOCK:
         rows = sorted(_load_generic_api_emails(), key=lambda x: int(x.get("id") or 0))
         row = next((r for r in rows if r.get("status") == "available"), None)
         if row is None:
             return None
-        row["status"] = "used"
-        row["used_at"] = _now()
+        if not _transition_pool_row(row, "registering", job_id=job_id):
+            return None
         row["note"] = None
         _save_generic_api_emails(rows)
         return _decorate_generic_api_email(row)
 
 
-def release_generic_api_email(email: str, status: str = "available", note: str | None = None) -> None:
-    """把通用 API 邮箱状态改回 available，或标记为 failed/used。"""
+def release_generic_api_email(email: str, status: str = "failed", note: str | None = None) -> bool:
+    """更新通用 API 邮箱状态；失败条目不可回收到 available。"""
+    status = validate_status(status)
     with _LOCK:
         rows = _load_generic_api_emails()
         row = _find_by_email(rows, email)
         if row is None:
-            return
-        row["status"] = status
-        if status == "available":
-            row["used_at"] = None
-        elif status in ("used", "failed", "disabled"):
-            row["used_at"] = row.get("used_at") or _now()
-        if note is not None:
-            row["note"] = note
+            return False
+        if not _transition_pool_row(row, status, note=note):
+            raise ValueError(f"邮箱状态不可迁移: {row.get('status')} -> {status}")
         _save_generic_api_emails(rows)
+        return True
 
 
 def release_unconsumed_generic_api_email(email: str, note: str | None = None) -> bool:
-    """原子回收未生成本地账号且仍为 used 的通用 API 邮箱。"""
+    """将未生成本地账号的已领取通用 API 邮箱置为 failed。"""
     with _LOCK:
         if _find_by_email(_load_accounts(), email) is not None:
             return False
         rows = _load_generic_api_emails()
         row = _find_by_email(rows, email)
-        if row is None or row.get("status") != "used":
+        if row is None or row.get("status") in {"failed", "disabled", "used"}:
             return False
-        row["status"] = "available"
-        row["used_at"] = None
-        if note is not None:
-            row["note"] = note
+        if not _transition_pool_row(row, "failed", note=note):
+            return False
         _save_generic_api_emails(rows)
         return True
 
 
-def delete_generic_api_email(email: str) -> bool:
-    """从通用 API 邮箱池彻底删除一个邮箱。"""
+def delete_generic_api_email(email: str, *, physical: bool = False, force: bool = False, reason: str | None = None) -> bool:
+    """兼容旧调用；新删除 API 通过统一前置检查物理移除。"""
+    if physical:
+        delete_email_pool_entry(email, source="generic_api", force=force, reason=reason)
+        return True
     with _LOCK:
         rows = _load_generic_api_emails()
-        target = (email or "").lower()
-        new_rows = [r for r in rows if (r.get("email") or "").lower() != target]
-        if len(new_rows) == len(rows):
+        row = _find_by_email(rows, email)
+        if row is None:
             return False
-        _save_generic_api_emails(new_rows)
+        if not _transition_pool_row(row, "disabled", note="用户删除邮箱池条目"):
+            return False
+        row["deleted_at"] = _now()
+        _save_generic_api_emails(rows)
         return True
 
 
@@ -2512,6 +3393,7 @@ def list_generic_api_email_pool(status: str | None = None, limit: int = 500) -> 
         }
         rows = _load_generic_api_emails()
         if status:
+            status = validate_status(status)
             rows = [r for r in rows if r.get("status") == status]
         rows = sorted(rows, key=lambda x: int(x.get("id") or 0), reverse=True)
         return [_decorate_generic_api_email(r, account_by_email) for r in rows[:limit]]
@@ -2519,12 +3401,7 @@ def list_generic_api_email_pool(status: str | None = None, limit: int = 500) -> 
 
 def generic_api_email_pool_summary() -> dict:
     with _LOCK:
-        out = {"available": 0, "used": 0, "failed": 0}
-        for row in _load_generic_api_emails():
-            status = row.get("status") or "available"
-            out[status] = out.get(status, 0) + 1
-        out["total"] = sum(v for k, v in out.items() if k != "total")
-        return out
+        return status_counts(_load_generic_api_emails())
 
 
 def get_generic_api_email_by_email(email: str) -> dict | None:
@@ -2948,8 +3825,18 @@ def _migrate_legacy_sqlite() -> dict:
                 })
             ins, skip = import_outlook_accounts(records)
             for item in statuses:
-                if item["status"] != "available":
-                    release_outlook(item["email"], status=item["status"], note=item["note"])
+                legacy_status = canonical_status(
+                    item.get("status"),
+                    missing="disabled",
+                    unknown="disabled",
+                )
+                if legacy_status != "available":
+                    try:
+                        release_outlook(item["email"], status=legacy_status, note=item.get("note"))
+                    except ValueError:
+                        # 旧快照可能把已消费条目标为 available；安全地保留为
+                        # failed，避免迁移阶段把它重新暴露给注册任务。
+                        release_outlook(item["email"], status="failed", note=item.get("note"))
             summary["sqlite_outlook_imported"] += ins
             summary["sqlite_outlook_skipped"] += skip
         if _table_exists(conn, "registered_accounts"):
@@ -3065,6 +3952,7 @@ def storage_paths() -> dict:
         "jobs_json": str(_JOBS_JSON),
         "mailcom_emails_json": str(_MAILCOM_EMAIL_JSON),
         "mailcom_aliases_json": str(_MAILCOM_ALIAS_JSON),
+        "email_pool_lifecycle_json": str(_EMAIL_POOL_LIFECYCLE_JSON),
         "logs_dir": str(_LOG_DIR),
     }
 
@@ -3082,6 +3970,7 @@ def export_runtime_snapshots() -> dict[str, str]:
         domain = _load_domain_pool()
         mailcom = _load_mailcom_emails()
         mailcom_aliases = _load_mailcom_aliases()
+        lifecycle = _load_email_pool_lifecycle()
         _write_json(_ACCOUNTS_JSON, accounts)
         _write_json(_JOBS_JSON, jobs)
         _write_json(_OUTLOOK_JSON, outlook)
@@ -3090,6 +3979,7 @@ def export_runtime_snapshots() -> dict[str, str]:
         _write_json(_DOMAIN_EMAIL_JSON, domain)
         _write_json(_MAILCOM_EMAIL_JSON, mailcom)
         _write_json(_MAILCOM_ALIAS_JSON, mailcom_aliases)
+        _write_json(_EMAIL_POOL_LIFECYCLE_JSON, lifecycle)
         _sync_outlook_txt(outlook)
         _sync_generic_api_email_txt(generic)
         _sync_accounts_txt(accounts)
@@ -3135,9 +4025,10 @@ _DOMAIN_EMAIL_JSON = _PROJECT_ROOT / "用于注册的域名邮箱.json"
 
 def _load_domain_pool() -> list[dict]:
     if _sqlite_enabled():
-        return _SQLITE_STORE.load("domain_emails")
+        rows = _SQLITE_STORE.load("domain_emails")
+        return _normalize_pool_rows(rows, missing_status="disabled")
     rows = _read_json(_DOMAIN_EMAIL_JSON, [])
-    return rows if isinstance(rows, list) else []
+    return _normalize_pool_rows(rows if isinstance(rows, list) else [], missing_status="disabled")
 
 
 def _save_domain_pool(rows: list[dict]) -> None:
@@ -3152,13 +4043,39 @@ def _find_domain_email(rows: list[dict], email: str) -> dict | None:
     return next((r for r in rows if (r.get("email") or "").lower() == target), None)
 
 
-def claim_next_domain_email(email: str) -> dict:
-    """记录一个新的域名邮箱地址到池中（标记为 available）。"""
+def claim_next_domain_email(
+    email: str,
+    job_id: int | None = None,
+    *,
+    reactivate_existing: bool = False,
+) -> dict | None:
+    """记录并领取一个新的域名邮箱地址（标记为 registering）。"""
+    job_id = _current_registration_job_id() if job_id is None else int(job_id)
     with _LOCK:
         rows = _load_domain_pool()
         if _find_domain_email(rows, email):
-            # 已存在，直接返回
             row = _find_domain_email(rows, email)
+            if row and row.get("status") == "available":
+                if not _transition_pool_row(row, "registering", job_id=job_id):
+                    raise ValueError("域名邮箱领取状态迁移失败")
+                _save_domain_pool(rows)
+            elif row is not None and reactivate_existing:
+                previous_status = canonical_status(row.get("status"), missing="disabled", unknown="disabled")
+                try:
+                    restore_email_pool_entry(
+                        email,
+                        source="import",
+                        reason="显式重新导入并恢复域名邮箱",
+                        expected_status=previous_status,
+                    )
+                except EmailPoolLifecycleError:
+                    return None
+                row["status"] = "available"
+                if not _transition_pool_row(row, "registering", job_id=job_id):
+                    return None
+                _save_domain_pool(rows)
+            elif row is not None:
+                return None
             return row
         row = {
             "id": _next_id(rows),
@@ -3168,41 +4085,39 @@ def claim_next_domain_email(email: str) -> dict:
             "note": None,
             "created_at": _now(),
         }
+        _normalize_pool_row(row)
+        if not _transition_pool_row(row, "registering", job_id=job_id):
+            raise RuntimeError("域名邮箱初始化领取失败")
         rows.append(row)
         _save_domain_pool(rows)
         return dict(row)
 
 
-def release_domain_email(email: str, status: str = "available", note: str | None = None) -> None:
+def release_domain_email(email: str, status: str = "failed", note: str | None = None) -> bool:
     """更新域名邮箱状态。"""
+    status = validate_status(status)
     with _LOCK:
         rows = _load_domain_pool()
         row = _find_domain_email(rows, email)
         if row is None:
-            return
-        row["status"] = status
-        if status == "available":
-            row["used_at"] = None
-        elif status in ("used", "failed", "disabled"):
-            row["used_at"] = row.get("used_at") or _now()
-        if note is not None:
-            row["note"] = note
+            return False
+        if not _transition_pool_row(row, status, note=note):
+            raise ValueError(f"邮箱状态不可迁移: {row.get('status')} -> {status}")
         _save_domain_pool(rows)
+        return True
 
 
 def release_unconsumed_domain_email(email: str, note: str | None = None) -> bool:
-    """原子回收未生成本地账号且仍为 used 的域名邮箱。"""
+    """将未生成本地账号的域名邮箱置为 failed。"""
     with _LOCK:
         if _find_by_email(_load_accounts(), email) is not None:
             return False
         rows = _load_domain_pool()
         row = _find_domain_email(rows, email)
-        if row is None or row.get("status") != "used":
+        if row is None or row.get("status") in {"failed", "disabled", "used"}:
             return False
-        row["status"] = "available"
-        row["used_at"] = None
-        if note is not None:
-            row["note"] = note
+        if not _transition_pool_row(row, "failed", note=note):
+            return False
         _save_domain_pool(rows)
         return True
 
@@ -3217,29 +4132,30 @@ def list_domain_email_pool(status: str | None = None, limit: int = 500) -> list[
     with _LOCK:
         rows = sorted(_load_domain_pool(), key=lambda x: int(x.get("id") or 0), reverse=True)
         if status:
+            status = validate_status(status)
             rows = [r for r in rows if r.get("status") == status]
         return [dict(r) for r in rows[:limit]]
 
 
 def domain_email_pool_summary() -> dict:
     with _LOCK:
-        out: dict[str, int] = {"available": 0, "used": 0, "failed": 0}
-        for row in _load_domain_pool():
-            s = row.get("status") or "available"
-            out[s] = out.get(s, 0) + 1
-        out["total"] = sum(v for k, v in out.items() if k != "total")
-        return out
+        return status_counts(_load_domain_pool())
 
 
-def delete_domain_email(email: str) -> bool:
-    """从域名邮箱池删除一个邮箱。"""
+def delete_domain_email(email: str, *, physical: bool = False, force: bool = False, reason: str | None = None) -> bool:
+    """兼容旧调用；新删除 API 通过统一前置检查物理移除。"""
+    if physical:
+        delete_email_pool_entry(email, source="cloudflare_domain", force=force, reason=reason)
+        return True
     with _LOCK:
         rows = _load_domain_pool()
-        target = (email or "").lower()
-        new_rows = [r for r in rows if (r.get("email") or "").lower() != target]
-        if len(new_rows) == len(rows):
+        row = _find_domain_email(rows, email)
+        if row is None:
             return False
-        _save_domain_pool(new_rows)
+        if not _transition_pool_row(row, "disabled", note="用户删除邮箱池条目"):
+            return False
+        row["deleted_at"] = _now()
+        _save_domain_pool(rows)
         return True
 
 
@@ -3249,9 +4165,10 @@ def delete_domain_email(email: str) -> bool:
 
 def _load_icloud_emails() -> list[dict]:
     if _sqlite_enabled():
-        return _SQLITE_STORE.load("icloud_emails")
+        rows = _SQLITE_STORE.load("icloud_emails")
+        return _normalize_pool_rows(rows, missing_status="disabled")
     rows = _read_json(_ICLOUD_EMAIL_JSON, [])
-    return rows if isinstance(rows, list) else []
+    return _normalize_pool_rows(rows if isinstance(rows, list) else [], missing_status="disabled")
 
 def _save_icloud_emails(rows: list[dict]) -> None:
     if _sqlite_enabled():
@@ -3259,49 +4176,70 @@ def _save_icloud_emails(rows: list[dict]) -> None:
     else:
         _write_json(_ICLOUD_EMAIL_JSON, rows)
 
-def import_icloud_emails(records: list[dict]) -> tuple[int, int]:
+def import_icloud_emails(records: list[dict], *, reactivate_existing: bool = False) -> tuple[int, int]:
     with _LOCK:
         rows = _load_icloud_emails()
         inserted = skipped = 0
         for raw in records:
             email = (str(raw.get("email") or "") if isinstance(raw, dict) else str(raw or "")).strip()
-            if not email or "@" not in email or _find_by_email(rows, email):
+            if not email or "@" not in email:
                 skipped += 1
+                continue
+            existing = _find_by_email(rows, email)
+            if existing:
+                if not reactivate_existing:
+                    skipped += 1
+                    continue
+                try:
+                    restore_email_pool_entry(
+                        email,
+                        source="import",
+                        reason="显式重新导入并恢复邮箱池条目",
+                        expected_status=existing.get("status"),
+                    )
+                except EmailPoolLifecycleError:
+                    skipped += 1
+                    continue
+                existing["status"] = "available"
+                existing["status_change_source"] = "import"
+                existing["status_change_reason"] = "显式重新导入并恢复邮箱池条目"
+                existing["manual_reactivated_at"] = _now()
+                inserted += 1
                 continue
             rows.append({
                 "id": _next_id(rows), "email": email, "status": "available",
+                "status_change_source": "import",
+                "status_change_reason": "导入邮箱池素材",
                 "used_at": None, "note": None, "imported_at": _now(),
             })
             inserted += 1
         _save_icloud_emails(rows)
         return inserted, skipped
 
-def claim_next_icloud_email() -> dict | None:
+def claim_next_icloud_email(job_id: int | None = None) -> dict | None:
+    job_id = _current_registration_job_id() if job_id is None else int(job_id)
     with _LOCK:
         rows = sorted(_load_icloud_emails(), key=lambda x: int(x.get("id") or 0))
         row = next((r for r in rows if r.get("status") == "available"), None)
         if row is None:
             return None
-        row["status"] = "used"
-        row["used_at"] = _now()
+        if not _transition_pool_row(row, "registering", job_id=job_id):
+            return None
         row["note"] = None
         _save_icloud_emails(rows)
         return dict(row)
 
-def release_icloud_email(email: str, status: str = "available", note: str | None = None) -> None:
+def release_icloud_email(email: str, status: str = "failed", note: str | None = None) -> bool:
+    status = validate_status(status)
     with _LOCK:
         rows = _load_icloud_emails()
         row = _find_by_email(rows, email)
         if row is None:
-            return
-        row["status"] = status
-        if status == "available":
-            row["used_at"] = None
-        elif status in ("used", "failed", "disabled"):
-            row["used_at"] = row.get("used_at") or _now()
-        if note is not None:
-            row["note"] = note
+            return False
+        if not _transition_pool_row(row, status, note=note):
+            raise ValueError(f"邮箱状态不可迁移: {row.get('status')} -> {status}")
         _save_icloud_emails(rows)
+        return True
 
 def release_unconsumed_icloud_email(email: str, note: str | None = None) -> bool:
     with _LOCK:
@@ -3309,40 +4247,41 @@ def release_unconsumed_icloud_email(email: str, note: str | None = None) -> bool
             return False
         rows = _load_icloud_emails()
         row = _find_by_email(rows, email)
-        if row is None or row.get("status") != "used":
+        if row is None or row.get("status") in {"failed", "disabled", "used"}:
             return False
-        row["status"] = "available"
-        row["used_at"] = None
-        if note is not None:
-            row["note"] = note
+        if not _transition_pool_row(row, "failed", note=note):
+            return False
         _save_icloud_emails(rows)
         return True
 
-def delete_icloud_email(email: str) -> bool:
+def delete_icloud_email(email: str, *, physical: bool = False, force: bool = False, reason: str | None = None) -> bool:
+    """兼容旧调用；新删除 API 通过统一前置检查物理移除。"""
+    if physical:
+        delete_email_pool_entry(email, source="icloud", force=force, reason=reason)
+        return True
     with _LOCK:
         rows = _load_icloud_emails()
-        new_rows = [r for r in rows if (r.get("email") or "").lower() != (email or "").lower()]
-        if len(new_rows) == len(rows):
+        row = _find_by_email(rows, email)
+        if row is None:
             return False
-        _save_icloud_emails(new_rows)
+        if not _transition_pool_row(row, "disabled", note="用户删除邮箱池条目"):
+            return False
+        row["deleted_at"] = _now()
+        _save_icloud_emails(rows)
         return True
 
 def list_icloud_email_pool(status: str | None = None, limit: int = 500) -> list[dict]:
     with _LOCK:
         rows = _load_icloud_emails()
         if status:
+            status = validate_status(status)
             rows = [r for r in rows if r.get("status") == status]
         rows = sorted(rows, key=lambda x: int(x.get("id") or 0), reverse=True)
         return [dict(r) for r in rows[:limit]]
 
 def icloud_email_pool_summary() -> dict:
     with _LOCK:
-        out = {"available": 0, "used": 0, "failed": 0}
-        for row in _load_icloud_emails():
-            status = row.get("status") or "available"
-            out[status] = out.get(status, 0) + 1
-        out["total"] = sum(v for k, v in out.items() if k != "total")
-        return out
+        return status_counts(_load_icloud_emails())
 
 def get_icloud_email_by_email(email: str) -> dict | None:
     with _LOCK:
@@ -3365,15 +4304,29 @@ def _load_mailcom_emails() -> list[dict]:
             continue
         row = dict(raw)
         row.setdefault("sync_status", "pending")
+        row.setdefault("sync_action", None)
+        row.setdefault("sync_result", None)
         row.setdefault("sync_requested_at", None)
         row.setdefault("sync_started_at", None)
         row.setdefault("sync_completed_at", None)
         row.setdefault("sync_error", None)
         row.setdefault("remote_active_alias_count", None)
+        row.setdefault("remote_lifetime_alias_count", None)
+        row.setdefault("remote_lifetime_alias_limit", MAX_LIFETIME_ALIASES)
+        row.setdefault("remote_history_synced_at", None)
+        row.setdefault("remote_capacity_status", CAPACITY_UNKNOWN)
+        row.setdefault("remote_history_error", None)
+        row.setdefault("remote_history_unknown_count", 0)
         row.setdefault("registration_lease_job_id", None)
         row.setdefault("registration_lease_alias", None)
         row.setdefault("registration_lease_started_at", None)
-        normalized.append(row)
+        row.setdefault("lifecycle_generation", 1)
+        row.setdefault("status_change_source", "legacy")
+        row.setdefault("status_change_reason", None)
+        row.setdefault("manual_reactivated_from", None)
+        row.setdefault("manual_reactivated_at", None)
+        row.setdefault("deleted_at", None)
+        normalized.append(_normalize_pool_row(row, missing_status="disabled"))
     return normalized
 
 
@@ -3389,10 +4342,36 @@ def _mailcom_public_row(row: dict | None) -> dict | None:
     if row is None:
         return None
     token = str(row.get("mail_access_token") or "").strip()
+    active_count = row.get("remote_active_alias_count")
+    lifetime_count = row.get("remote_lifetime_alias_count")
+    try:
+        active_count = None if active_count is None else max(0, int(active_count))
+    except (TypeError, ValueError):
+        active_count = None
+    try:
+        lifetime_limit = max(1, int(row.get("remote_lifetime_alias_limit") or MAX_LIFETIME_ALIASES))
+    except (TypeError, ValueError):
+        lifetime_limit = MAX_LIFETIME_ALIASES
+    try:
+        lifetime_count = None if lifetime_count is None else max(0, min(lifetime_limit, int(lifetime_count)))
+    except (TypeError, ValueError):
+        lifetime_count = None
+    stored_capacity_status = str(row.get("remote_capacity_status") or "").strip()
+    capacity = stored_capacity_status or capacity_status(
+        active_count,
+        lifetime_count,
+        lifetime_limit=lifetime_limit,
+        near_limit_remaining=_mailcom_near_limit_remaining(),
+    )
+    try:
+        unknown_count = max(0, int(row.get("remote_history_unknown_count") or 0))
+    except (TypeError, ValueError):
+        unknown_count = 0
+    history_error = _sanitize_mailcom_error(row.get("remote_history_error")) or ""
     out = {
         "id": row.get("id"),
         "email": row.get("email") or "",
-        "status": row.get("status") or "available",
+        "status": canonical_status(row.get("status"), missing="disabled", unknown="disabled"),
         "used_at": row.get("used_at"),
         "note": row.get("note") or "",
         "imported_at": row.get("imported_at"),
@@ -3403,13 +4382,24 @@ def _mailcom_public_row(row: dict | None) -> dict | None:
         "password_configured": bool(str(row.get("password") or "").strip()),
         "registered_account_id": row.get("registered_account_id"),
         "sync_status": row.get("sync_status") or "pending",
+        "sync_action": row.get("sync_action"),
+        "sync_result": dict(row.get("sync_result") or {}) if isinstance(row.get("sync_result"), dict) else None,
         "sync_requested_at": row.get("sync_requested_at"),
         "sync_started_at": row.get("sync_started_at"),
         "sync_completed_at": row.get("sync_completed_at"),
         "sync_error": row.get("sync_error") or "",
-        "remote_active_alias_count": row.get("remote_active_alias_count"),
+        "remote_active_alias_count": active_count,
+        "remote_lifetime_alias_count": lifetime_count,
+        "remote_lifetime_alias_limit": lifetime_limit,
+        "remote_lifetime_remaining": lifetime_remaining(lifetime_count, lifetime_limit),
+        "remote_history_synced_at": row.get("remote_history_synced_at"),
+        "remote_capacity_status": capacity,
+        "remote_history_error": history_error,
+        "remote_history_unknown_count": unknown_count,
         "registration_busy": bool(row.get("registration_lease_job_id")),
         "registration_lease_job_id": row.get("registration_lease_job_id"),
+        "lifecycle_generation": int(row.get("lifecycle_generation") or 1),
+        "parent_deleted_at": row.get("deleted_at"),
     }
     return out
 
@@ -3418,7 +4408,12 @@ def _mailcom_internal_row(row: dict | None) -> dict | None:
     return dict(row) if isinstance(row, dict) else None
 
 
-def import_mailcom_emails(records: list[dict], *, update_existing: bool = False) -> tuple[int, int, list[dict]]:
+def import_mailcom_emails(
+    records: list[dict],
+    *,
+    update_existing: bool = False,
+    reactivate_existing: bool = False,
+) -> tuple[int, int, list[dict]]:
     """导入 ``email----password`` 记录，返回 ``(新增, 跳过, 错误明细)``。
 
     ``update_existing=True`` 用于单条配置修改；修改密码会清除旧 AT。
@@ -3440,6 +4435,35 @@ def import_mailcom_emails(records: list[dict], *, update_existing: bool = False)
                 continue
             row = _find_by_email(rows, email)
             if row is not None:
+                if reactivate_existing:
+                    previous_status = canonical_status(row.get("status"), missing="disabled", unknown="disabled")
+                    try:
+                        restore_email_pool_entry(
+                            email,
+                            source="import",
+                            reason="显式重新导入并恢复 mail.com 母号",
+                            expected_status=previous_status,
+                        )
+                    except EmailPoolLifecycleError as exc:
+                        skipped += 1
+                        errors.append({"email": email, "reason": str(exc), "error": exc.code})
+                        continue
+                    row["status"] = "available"
+                    row["status_change_source"] = "import"
+                    row["status_change_reason"] = "显式重新导入并恢复 mail.com 母号"
+                    row["manual_reactivated_from"] = previous_status
+                    row["manual_reactivated_at"] = _now()
+                    row["deleted_at"] = None
+                    row["password"] = password
+                    row["sync_status"] = "queued"
+                    row["sync_action"] = "sync"
+                    row["sync_result"] = None
+                    row["sync_requested_at"] = _now()
+                    row["sync_error"] = None
+                    row["updated_at"] = _now()
+                    _remove_lifecycle_record_locked("parent", email)
+                    inserted += 1
+                    continue
                 if not update_existing:
                     skipped += 1
                     errors.append({"email": email, "reason": "邮箱已存在"})
@@ -3450,19 +4474,34 @@ def import_mailcom_emails(records: list[dict], *, update_existing: bool = False)
                     row["mail_access_token_expires_at"] = None
                     row["mail_access_token_updated_at"] = None
                     row["mail_auth_error"] = None
-                row["status"] = "available" if row.get("status") == "disabled" else (row.get("status") or "available")
+                current_status = canonical_status(row.get("status"), missing="disabled", unknown="disabled")
+                # 更新账密只刷新认证/同步元数据；失败或停用条目不得被导入操作复活。
+                row["status"] = current_status
                 row["sync_status"] = "queued"
+                row["sync_action"] = "sync"
+                row["sync_result"] = None
                 row["sync_requested_at"] = _now()
                 row["sync_error"] = None
                 row["updated_at"] = _now()
                 inserted += 1
                 continue
+            parent_block = _get_lifecycle_record_locked("parent", email)
+            lifecycle_generation = 1
+            if parent_block is not None:
+                if not reactivate_existing:
+                    skipped += 1
+                    errors.append({"email": email, "reason": "母号已删除，需显式重新导入恢复", "error": "parent_deleted"})
+                    continue
+                lifecycle_generation = max(1, int(parent_block.get("generation") or 1))
+                _remove_lifecycle_record_locked("parent", email)
             now = _now()
             row = {
                 "id": _next_id(rows),
                 "email": email,
                 "password": password,
                 "status": "available",
+                "status_change_source": "import",
+                "status_change_reason": "导入 mail.com 母号",
                 "used_at": None,
                 "note": None,
                 "imported_at": now,
@@ -3471,14 +4510,23 @@ def import_mailcom_emails(records: list[dict], *, update_existing: bool = False)
                 "mail_access_token_updated_at": None,
                 "mail_auth_error": None,
                 "sync_status": "queued",
+                "sync_action": "sync",
+                "sync_result": None,
                 "sync_requested_at": now,
                 "sync_started_at": None,
                 "sync_completed_at": None,
                 "sync_error": None,
                 "remote_active_alias_count": None,
+                "remote_lifetime_alias_count": None,
+                "remote_lifetime_alias_limit": MAX_LIFETIME_ALIASES,
+                "remote_history_synced_at": None,
+                "remote_capacity_status": CAPACITY_UNKNOWN,
+                "remote_history_error": None,
+                "remote_history_unknown_count": 0,
                 "registration_lease_job_id": None,
                 "registration_lease_alias": None,
                 "registration_lease_started_at": None,
+                "lifecycle_generation": lifecycle_generation,
                 "updated_at": now,
             }
             rows.append(row)
@@ -3488,15 +4536,16 @@ def import_mailcom_emails(records: list[dict], *, update_existing: bool = False)
         return inserted, skipped, errors
 
 
-def claim_next_mailcom_email() -> dict | None:
+def claim_next_mailcom_email(job_id: int | None = None) -> dict | None:
     """原子领取一个 mail.com 账号，返回内部记录（调用方不得直接序列化）。"""
+    job_id = _current_registration_job_id() if job_id is None else int(job_id)
     with _LOCK:
         rows = sorted(_load_mailcom_emails(), key=lambda x: int(x.get("id") or 0))
         row = next((r for r in rows if r.get("status") == "available" and str(r.get("password") or "").strip()), None)
         if row is None:
             return None
-        row["status"] = "used"
-        row["used_at"] = _now()
+        if not _transition_pool_row(row, "registering", job_id=job_id):
+            return None
         row["note"] = None
         row["mail_auth_error"] = None
         row["updated_at"] = _now()
@@ -3504,20 +4553,18 @@ def claim_next_mailcom_email() -> dict | None:
         return dict(row)
 
 
-def release_mailcom_email(email: str, status: str = "available", note: str | None = None) -> None:
-    if status not in {"available", "used", "failed", "disabled"}:
-        raise ValueError("mail.com 邮箱状态非法")
+def release_mailcom_email(email: str, status: str = "failed", note: str | None = None) -> bool:
+    status = validate_status(status)
     with _LOCK:
         rows = _load_mailcom_emails()
         row = _find_by_email(rows, email)
         if row is None:
-            return
-        row["status"] = status
-        row["used_at"] = None if status == "available" else (row.get("used_at") or _now())
-        if note is not None:
-            row["note"] = str(note)[:500]
+            return False
+        if not _transition_pool_row(row, status, note=note):
+            raise ValueError(f"mail.com 母号状态不可迁移: {row.get('status')} -> {status}")
         row["updated_at"] = _now()
         _save_mailcom_emails(rows)
+        return True
 
 
 def release_unconsumed_mailcom_email(email: str, note: str | None = None) -> bool:
@@ -3529,37 +4576,173 @@ def release_unconsumed_mailcom_email(email: str, note: str | None = None) -> boo
         if alias is not None:
             if alias.get("registered_account_id") not in (None, ""):
                 return False
-            if str(alias.get("status") or "") not in {"available", "leased"}:
+            if str(alias.get("status") or "") not in {"available", "registering"}:
                 return False
             return release_mailcom_registration_lease(
                 email,
-                alias_status="registration_failed",
+                alias_status="failed",
                 error=note or "任务未消耗别名",
             )
         if _find_by_email(_load_accounts(), email) is not None:
             return False
         rows = _load_mailcom_emails()
         row = _find_by_email(rows, email)
-        if row is None or row.get("status") != "used":
+        if row is None or row.get("status") in {"failed", "disabled", "used"}:
             return False
-        row["status"] = "available"
-        row["used_at"] = None
-        if note is not None:
-            row["note"] = str(note)[:500]
+        if not _transition_pool_row(row, "failed", note=note):
+            return False
         row["updated_at"] = _now()
         _save_mailcom_emails(rows)
         return True
 
 
 def delete_mailcom_email(email: str) -> bool:
-    with _LOCK:
-        rows = _load_mailcom_emails()
-        target = str(email or "").casefold()
-        new_rows = [r for r in rows if str(r.get("email") or "").casefold() != target]
-        if len(new_rows) == len(rows):
-            return False
-        _save_mailcom_emails(new_rows)
+    try:
+        result = delete_mailcom_parent(email, reason="用户物理删除 mail.com 母号", actor="legacy")
+    except EmailPoolLifecycleError:
+        return False
+    return bool(result.get("deleted"))
+
+
+def _mailcom_parent_busy_locked(parent_key: str, parents: list[dict], aliases: list[dict]) -> bool:
+    parent = _find_by_email(parents, parent_key)
+    if parent is None:
+        return False
+    if parent.get("registration_lease_job_id") not in (None, ""):
         return True
+    return any(
+        _alias_key(alias.get("parent_email")) == parent_key
+        and _active_registration_conflict_locked("mailcom_aliases", alias)
+        for alias in aliases
+    )
+
+
+def disable_mailcom_parent(email: str, *, reason: str | None = None, actor: str | None = None) -> dict:
+    """本地停用 mail.com 母号，仅级联停用 available 别名。"""
+    parent_key = _alias_key(email)
+    with _LOCK:
+        parents = _load_mailcom_emails()
+        aliases = _load_mailcom_aliases()
+        parent = _find_by_email(parents, parent_key)
+        if parent is None:
+            raise EmailPoolLifecycleError("parent_missing", "mail.com 母号不存在")
+        if _mailcom_parent_busy_locked(parent_key, parents, aliases):
+            raise EmailPoolLifecycleError("parent_registration_busy", "母号或别名存在活动注册任务/租约")
+        now = _now()
+        previous_status = canonical_status(parent.get("status"), missing="disabled", unknown="disabled")
+        if previous_status != "disabled":
+            _transition_pool_row(
+                parent,
+                "disabled",
+                force=True,
+                note=reason or "用户停用 mail.com 母号",
+                change_source="manual",
+                change_reason=reason or "用户停用 mail.com 母号",
+            )
+        disabled_aliases = 0
+        used_aliases = failed_aliases = preserved_disabled_aliases = 0
+        for alias in aliases:
+            if _alias_key(alias.get("parent_email")) != parent_key:
+                continue
+            state = canonical_status(alias.get("status"), missing="disabled", unknown="disabled")
+            if state == "available":
+                _transition_pool_row(
+                    alias,
+                    "disabled",
+                    force=True,
+                    note=reason or "所属 mail.com 母号已停用",
+                    change_source="parent_disable",
+                    change_reason=reason or "所属 mail.com 母号已停用",
+                )
+                disabled_aliases += 1
+            elif state == "used":
+                used_aliases += 1
+            elif state == "failed":
+                failed_aliases += 1
+            elif state == "disabled":
+                preserved_disabled_aliases += 1
+        parent["updated_at"] = now
+        parent["status_change_source"] = "manual"
+        parent["status_change_reason"] = str(reason or "用户停用 mail.com 母号")[:500]
+        _save_mailcom_parents_with_aliases(parents, aliases)
+        return {
+            "parent_email": parent_key,
+            "action": "disable",
+            "status": "disabled",
+            "disabled_alias_count": disabled_aliases,
+            "preserved_used_alias_count": used_aliases,
+            "preserved_failed_alias_count": failed_aliases,
+            "preserved_disabled_alias_count": preserved_disabled_aliases,
+            "previous_status": previous_status,
+            "updated_at": now,
+            "actor": str(actor or "manual")[:80],
+        }
+
+
+def delete_mailcom_parent(email: str, *, reason: str | None = None, actor: str | None = None) -> dict:
+    """本地物理删除 mail.com 母号及别名；used 别名存在时只允许停用。"""
+    parent_key = _alias_key(email)
+    with _LOCK:
+        parents = _load_mailcom_emails()
+        aliases = _load_mailcom_aliases()
+        parent = _find_by_email(parents, parent_key)
+        if parent is None:
+            raise EmailPoolLifecycleError("parent_missing", "mail.com 母号不存在")
+        if _mailcom_parent_busy_locked(parent_key, parents, aliases):
+            raise EmailPoolLifecycleError("parent_registration_busy", "母号或别名存在活动注册任务/租约")
+        owned = [alias for alias in aliases if _alias_key(alias.get("parent_email")) == parent_key]
+        used_aliases = [alias for alias in owned if canonical_status(alias.get("status"), missing="disabled", unknown="disabled") == "used"]
+        if used_aliases:
+            raise EmailPoolLifecycleError(
+                "parent_has_used_aliases",
+                "母号存在已用别名，只能停用不能物理删除",
+                used_alias_count=len(used_aliases),
+            )
+        generation = int(parent.get("lifecycle_generation") or 1)
+        new_generation = generation + 1
+        remaining_parents = [item for item in parents if item is not parent]
+        remaining_aliases = [item for item in aliases if item not in owned]
+        _save_mailcom_parents_with_aliases(remaining_parents, remaining_aliases)
+        _write_lifecycle_record_locked(
+            "parent",
+            parent_key,
+            action="parent_delete",
+            reason=reason or "用户物理删除 mail.com 母号",
+            parent_email=parent_key,
+            generation=new_generation,
+            actor=actor,
+        )
+        for alias in owned:
+            alias_key = _alias_key(alias.get("alias_email"))
+            _write_lifecycle_record_locked(
+                "alias",
+                alias_key,
+                action="parent_delete",
+                reason=reason or "所属 mail.com 母号已物理删除",
+                parent_email=parent_key,
+                alias_email=alias_key,
+                generation=new_generation,
+                actor=actor,
+            )
+        return {
+            "parent_email": parent_key,
+            "action": "delete",
+            "deleted": True,
+            "deleted_alias_count": len(owned),
+            "preserved_used_alias_count": 0,
+            "lifecycle_generation": new_generation,
+        }
+
+
+def list_email_pool_lifecycle(*, kind: str | None = None, key: str | None = None) -> list[dict]:
+    with _LOCK:
+        rows = _load_email_pool_lifecycle()
+        if kind:
+            rows = [row for row in rows if str(row.get("kind") or "") == str(kind)]
+        if key:
+            normalized = str(key).strip().casefold()
+            rows = [row for row in rows if str(row.get("key") or "").casefold() == normalized]
+        return [dict(row) for row in rows]
 
 
 def list_mailcom_email_pool(status: str | None = None, limit: int = 500) -> list[dict]:
@@ -3567,14 +4750,10 @@ def list_mailcom_email_pool(status: str | None = None, limit: int = 500) -> list
         rows = _load_mailcom_aliases()
         parents = {_alias_key(row.get("email")): row for row in _load_mailcom_emails()}
         if status:
-            accepted = {
-                "used": {"leased", "registered"},
-                "failed": {"registration_failed"},
-                "disabled": {"deleted"},
-            }.get(status, {status})
-            rows = [r for r in rows if r.get("status") in accepted]
+            status = validate_status(status)
+            rows = [r for r in rows if r.get("status") == status]
         else:
-            rows = [r for r in rows if str(r.get("status") or "") != "deleted"]
+            rows = [r for r in rows if str(r.get("status") or "") != "disabled"]
         rows = sorted(rows, key=lambda x: int(x.get("id") or 0), reverse=True)
         out = []
         for row in rows[:max(0, int(limit))]:
@@ -3594,24 +4773,23 @@ def list_mailcom_parents(limit: int = 500) -> list[dict]:
             public = _mailcom_public_row(parent) or {}
             public["email"] = _alias_key(parent.get("email") or "")
             public["email_masked"] = public["email"]
-            summary = {"available": 0, "leased": 0, "registered": 0, "registration_failed": 0, "deleted": 0}
+            summary = {status: 0 for status in EMAIL_POOL_STATUSES}
             for alias in aliases:
                 if _alias_key(alias.get("parent_email")) != _alias_key(parent.get("email")):
                     continue
-                state = str(alias.get("status") or "available")
+                state = canonical_status(alias.get("status"), missing="disabled", unknown="disabled")
                 summary[state] = summary.get(state, 0) + 1
             public["alias_summary"] = summary
-            public["local_alias_count"] = sum(summary.values()) - summary.get("deleted", 0)
+            public["local_alias_count"] = sum(summary.values()) - summary.get("disabled", 0)
             out.append(public)
         return out
 
 
 def mailcom_pool_summary() -> dict:
     with _LOCK:
-        out: dict[str, int] = {"available": 0, "used": 0, "failed": 0, "disabled": 0}
+        out: dict[str, int] = {status: 0 for status in EMAIL_POOL_STATUSES}
         for row in _load_mailcom_aliases():
-            status = str(row.get("status") or "available")
-            status = {"leased": "used", "registered": "used", "registration_failed": "failed"}.get(status, status)
+            status = canonical_status(row.get("status"), missing="disabled", unknown="disabled")
             out[status] = out.get(status, 0) + 1
         out["total"] = sum(value for key, value in out.items() if key != "total")
         out["configured"] = sum(1 for row in _load_mailcom_emails() if str(row.get("password") or "").strip())
@@ -3845,7 +5023,7 @@ def get_enabled_mailcom_alias_domains() -> tuple[str, ...]:
 # mail.com 别名生命周期（不复制母号敏感认证材料）
 # ============================================================
 
-_MAILCOM_ALIAS_STATUSES = {"available", "leased", "registered", "registration_failed", "deleted"}
+_MAILCOM_ALIAS_STATUSES = set(EMAIL_POOL_STATUSES)
 _MAILCOM_ALIAS_CLEANUP_STATUSES = {
     "pending", "not_eligible", "not_requested", "cleanup_running", "deleted", "cleanup_pending",
 }
@@ -3865,11 +5043,11 @@ def _load_mailcom_aliases() -> list[dict]:
             continue
         row = dict(raw)
         row.pop("job_id", None)
-        status = str(row.get("status") or "available")
-        if status == "active":
-            status = "registered" if row.get("registered_account_id") not in (None, "") else "available"
-        row["status"] = status
+        _normalize_pool_row(row, missing_status="disabled", alias=True)
         row.setdefault("plan_result_class", "unknown")
+        row.setdefault("cleanup_status", "pending")
+        row.setdefault("plan_check_status", "pending")
+        row.setdefault("last_error", None)
         row.setdefault("lease_started_at", None)
         row.setdefault("lease_completed_at", None)
         normalized.append(row)
@@ -3917,7 +5095,7 @@ def _mailcom_alias_public_row(row: dict | None) -> dict | None:
         "domain": row.get("domain") or "",
         "email": row.get("alias_email") or "",
         "source": "mailcom",
-        "status": row.get("status") or "available",
+        "status": canonical_status(row.get("status"), missing="disabled", unknown="disabled"),
         "registration_started_at": row.get("registration_started_at"),
         "registered_account_id": row.get("registered_account_id"),
         "created_at": row.get("created_at"),
@@ -3929,6 +5107,10 @@ def _mailcom_alias_public_row(row: dict | None) -> dict | None:
         "lease_completed_at": row.get("lease_completed_at"),
         "last_error": row.get("last_error") or "",
         "updated_at": row.get("updated_at"),
+        "status_change_source": row.get("status_change_source") or "legacy",
+        "status_change_reason": row.get("status_change_reason") or "",
+        "manual_reactivated_from": row.get("manual_reactivated_from"),
+        "manual_reactivated_at": row.get("manual_reactivated_at"),
     }
 
 
@@ -3951,6 +5133,13 @@ def create_mailcom_alias(
     if alias != f"{local}@{normalized_domain}":
         raise ValueError("mail.com 别名与 local-part/domain 不一致")
     with _LOCK:
+        parent_row = _find_by_email(_load_mailcom_emails(), parent)
+        if parent_row is not None and canonical_status(parent_row.get("status"), missing="disabled", unknown="disabled") == "disabled":
+            raise EmailPoolLifecycleError("parent_disabled", "mail.com 母号已停用")
+        if _get_lifecycle_record_locked("parent", parent):
+            raise EmailPoolLifecycleError("parent_deleted", "mail.com 母号已被本地删除")
+        if _get_lifecycle_record_locked("alias", alias):
+            raise EmailPoolLifecycleError("alias_deleted", "mail.com 别名已被删除")
         rows = _load_mailcom_aliases()
         existing = _find_mailcom_alias(rows, alias)
         if existing is not None:
@@ -3965,6 +5154,8 @@ def create_mailcom_alias(
             "local_part": local,
             "domain": normalized_domain,
             "status": "available",
+            "status_change_source": "remote_create",
+            "status_change_reason": "远端确认后写入本地别名池",
             "registration_started_at": registration_started_at,
             "registered_account_id": None,
             "created_at": now,
@@ -3982,7 +5173,12 @@ def create_mailcom_alias(
         return dict(row)
 
 
-def replace_mailcom_alias_snapshot(parent_email: str, alias_emails: list[str]) -> list[dict] | None:
+def replace_mailcom_alias_snapshot(
+    parent_email: str,
+    alias_emails: list[str],
+    *,
+    expected_generation: int | None = None,
+) -> list[dict] | None:
     """以远端最终快照原子替换单个母号的 alias；有效注册租约存在时返回 None。"""
     parent_key = _alias_key(parent_email)
     if "@" not in parent_key:
@@ -4002,14 +5198,41 @@ def replace_mailcom_alias_snapshot(parent_email: str, alias_emails: list[str]) -
         parent = _find_by_email(parents, parent_key)
         if parent is None:
             raise ValueError("mail.com 母号不存在")
+        if expected_generation is not None and int(parent.get("lifecycle_generation") or 1) != int(expected_generation):
+            return None
+        if canonical_status(parent.get("status"), missing="disabled", unknown="disabled") == "disabled":
+            return None
+        if _get_lifecycle_record_locked("parent", parent_key):
+            return None
         if parent.get("registration_lease_job_id") not in (None, ""):
             return None
 
         all_aliases = _load_mailcom_aliases()
-        retained = [
-            row for row in all_aliases
-            if _alias_key(row.get("parent_email")) != parent_key
-        ]
+        previous = {
+            _alias_key(row.get("alias_email") or row.get("email")): row
+            for row in all_aliases
+            if _alias_key(row.get("parent_email")) == parent_key
+        }
+        # 远端完整地址列表不再返回的本地 alias 已被确认删除：保留审计记录
+        # 并转为 disabled，而不是从池中移除或重新暴露为 available。已有
+        # used/failed/disabled 终态保持不变；registering 只有在没有活动租约
+        # 时才会走到这里，同样安全停用。
+        remote_set = set(normalized)
+        retained: list[dict] = []
+        for row in all_aliases:
+            if _alias_key(row.get("parent_email")) != parent_key:
+                retained.append(row)
+                continue
+            alias_key = _alias_key(row.get("alias_email") or row.get("email"))
+            if alias_key in remote_set:
+                continue
+            state = canonical_status(row.get("status"), missing="disabled", unknown="disabled")
+            if state not in {"used", "failed", "disabled"}:
+                _transition_pool_row(row, "disabled", note="远端同步未发现该别名", force=True)
+                row["deleted_at"] = row.get("deleted_at") or _now()
+                row["last_error"] = row.get("last_error") or "远端同步未发现该别名"
+                row["updated_at"] = _now()
+            retained.append(row)
         accounts_by_email = {
             _alias_key(account.get("email")): account
             for account in _load_accounts()
@@ -4019,30 +5242,47 @@ def replace_mailcom_alias_snapshot(parent_email: str, alias_emails: list[str]) -
         now = _now()
         replacement: list[dict] = []
         for alias_email in normalized:
+            block = _get_lifecycle_record_locked("alias", alias_email)
+            if block is not None:
+                _observe_lifecycle_record_locked("alias", alias_email)
+                continue
             local_part, _, domain = alias_email.partition("@")
             account = accounts_by_email.get(alias_email)
-            row = {
-                "id": next_id,
-                "alias_email": alias_email,
-                "parent_email": parent_key,
-                "local_part": local_part,
-                "domain": domain,
-                "status": "registered" if account else "available",
-                "registration_started_at": None,
-                "registered_account_id": int(account["id"]) if account and account.get("id") is not None else None,
-                "created_at": now,
-                "deleted_at": None,
-                "plan_check_status": "pending",
-                "cleanup_status": "pending",
-                "plan_result_class": "unknown",
-                "lease_started_at": None,
-                "lease_completed_at": None,
-                "last_error": None,
-                "updated_at": now,
-            }
+            existing = previous.get(alias_email)
+            if existing is not None:
+                row = dict(existing)
+                row.update({"alias_email": alias_email, "parent_email": parent_key, "local_part": local_part, "domain": domain})
+                if account and row.get("registered_account_id") in (None, ""):
+                    row["registered_account_id"] = int(account["id"])
+                state = canonical_status(row.get("status"), missing="disabled", unknown="disabled")
+                if state not in {"failed", "disabled", "used", "registering"}:
+                    row["status"] = "used" if account else "available"
+                row["updated_at"] = now
+            else:
+                row = {
+                    "id": next_id,
+                    "alias_email": alias_email,
+                    "parent_email": parent_key,
+                    "local_part": local_part,
+                    "domain": domain,
+                    "status": "used" if account else "available",
+                    "status_change_source": "remote_snapshot",
+                    "status_change_reason": "远端快照新增别名",
+                    "registration_started_at": None,
+                    "registered_account_id": int(account["id"]) if account and account.get("id") is not None else None,
+                    "created_at": now,
+                    "deleted_at": None,
+                    "plan_check_status": "pending",
+                    "cleanup_status": "pending",
+                    "plan_result_class": "unknown",
+                    "lease_started_at": None,
+                    "lease_completed_at": None,
+                    "last_error": None,
+                    "updated_at": now,
+                }
+                next_id += 1
             replacement.append(row)
             retained.append(row)
-            next_id += 1
 
         _save_mailcom_aliases(retained)
         return [dict(row) for row in replacement]
@@ -4054,19 +5294,27 @@ def mailcom_parent_registration_busy(parent_email: str) -> bool:
         return bool(parent and parent.get("registration_lease_job_id") not in (None, ""))
 
 
-def claim_next_mailcom_alias(job_id: int | None = None) -> dict | None:
+def claim_next_mailcom_alias(
+    job_id: int | None = None,
+    *,
+    alias_email: str | None = None,
+) -> dict | None:
     """领取 alias，并为其母号建立跨 alias 的注册租约。"""
+    job_id = _current_registration_job_id() if job_id is None else int(job_id)
     with _LOCK:
         parents = _load_mailcom_emails()
         aliases = sorted(_load_mailcom_aliases(), key=lambda row: int(row.get("id") or 0))
         parent_by_email = {_alias_key(row.get("email")): row for row in parents}
         selected = None
         parent = None
+        requested_alias = _alias_key(alias_email) if alias_email else None
         for alias in aliases:
             if str(alias.get("status") or "") != "available":
                 continue
+            if requested_alias is not None and _alias_key(alias.get("alias_email")) != requested_alias:
+                continue
             candidate = parent_by_email.get(_alias_key(alias.get("parent_email")))
-            if not candidate or candidate.get("status") in {"disabled", "failed"}:
+            if not candidate or canonical_status(candidate.get("status"), missing="disabled", unknown="disabled") != "available":
                 continue
             if not str(candidate.get("password") or "").strip():
                 continue
@@ -4079,7 +5327,10 @@ def claim_next_mailcom_alias(job_id: int | None = None) -> dict | None:
             return None
         now = _now()
         started_at = datetime.now().timestamp()
-        selected["status"] = "leased"
+        if not _transition_pool_row(selected, "registering", job_id=job_id):
+            return None
+        if not _transition_pool_row(parent, "registering", job_id=job_id):
+            return None
         selected["registration_started_at"] = started_at
         selected["lease_started_at"] = now
         selected["lease_completed_at"] = None
@@ -4093,6 +5344,11 @@ def claim_next_mailcom_alias(job_id: int | None = None) -> dict | None:
         return dict(selected)
 
 
+def claim_mailcom_alias(alias_email: str, job_id: int | None = None) -> dict | None:
+    """原子领取指定 mail.com 别名；供直接注册入口补齐 provider 领取边界。"""
+    return claim_next_mailcom_alias(job_id=job_id, alias_email=alias_email)
+
+
 def release_mailcom_registration_lease(
     alias_email: str,
     *,
@@ -4101,8 +5357,8 @@ def release_mailcom_registration_lease(
     error: str | None = None,
 ) -> bool:
     """释放母号注册租约，可选地把 alias 写入终态。"""
-    if alias_status is not None and alias_status not in _MAILCOM_ALIAS_STATUSES:
-        raise ValueError("mail.com 别名状态非法")
+    if alias_status is not None:
+        alias_status = validate_status(alias_status)
     with _LOCK:
         parents = _load_mailcom_emails()
         aliases = _load_mailcom_aliases()
@@ -4115,16 +5371,28 @@ def release_mailcom_registration_lease(
             return False
         now = _now()
         if alias_status is not None:
-            alias["status"] = alias_status
+            current = canonical_status(alias.get("status"), missing="disabled", unknown="disabled")
+            if alias_status == "used" and current == "available":
+                # 只有已经写入成功账号关联的内部路径才能跳过 registering；
+                # 手动 API 仍由 _transition_pool_row 严格拒绝该迁移。
+                if alias.get("registered_account_id") in (None, "") or not _mark_pool_row_used(alias):
+                    return False
+            elif not _transition_pool_row(alias, alias_status, note=error, job_id=job_id):
+                return False
         alias["lease_completed_at"] = now
         if error is not None:
             alias["last_error"] = str(error)[:500] or None
         alias["updated_at"] = now
         if parent is not None:
-            parent["registration_lease_job_id"] = None
-            parent["registration_lease_alias"] = None
-            parent["registration_lease_started_at"] = None
-            parent["updated_at"] = now
+            leased_alias = _alias_key(parent.get("registration_lease_alias"))
+            releasing_parent_lease = leased_alias == _alias_key(alias_email)
+            if releasing_parent_lease:
+                if canonical_status(parent.get("status"), missing="disabled", unknown="disabled") == "registering":
+                    _transition_pool_row(parent, "available", force=True)
+                parent["registration_lease_job_id"] = None
+                parent["registration_lease_alias"] = None
+                parent["registration_lease_started_at"] = None
+                parent["updated_at"] = now
         _save_mailcom_parents_with_aliases(parents, aliases)
         return True
 
@@ -4132,7 +5400,7 @@ def release_mailcom_registration_lease(
 def mailcom_alias_is_leased(alias_email: str) -> bool:
     with _LOCK:
         alias = _find_mailcom_alias(_load_mailcom_aliases(), alias_email)
-        if alias is None or str(alias.get("status") or "") == "leased":
+        if alias is None or str(alias.get("status") or "") == "registering":
             return alias is not None
         parent = _find_by_email(_load_mailcom_emails(), alias.get("parent_email") or "")
         return bool(parent and _alias_key(parent.get("registration_lease_alias")) == _alias_key(alias_email))
@@ -4143,10 +5411,24 @@ def update_mailcom_parent_sync(
     *,
     sync_status: str,
     remote_active_alias_count: int | None = None,
+    remote_lifetime_alias_count: int | None = None,
+    remote_lifetime_alias_limit: int | None = None,
+    remote_history_synced_at: str | None = None,
+    remote_capacity_status: str | None = None,
+    remote_history_unknown_count: int | None = None,
+    remote_history_error: str | None = None,
     error: str | None = None,
+    sync_action: str | None = None,
+    sync_result: dict | None = None,
 ) -> bool:
     if sync_status not in {"pending", "queued", "syncing", "ready", "partial", "failed"}:
         raise ValueError("mail.com 母号同步状态非法")
+    if remote_capacity_status is not None and str(remote_capacity_status) not in {
+        "unknown", "normal", "near_limit", "active_full", "lifetime_full", "capacity_unknown",
+    }:
+        raise ValueError("mail.com 母号容量状态非法")
+    if sync_action is not None and str(sync_action) not in {"sync", "replenish", "history"}:
+        raise ValueError("mail.com 同步 action 非法")
     with _LOCK:
         rows = _load_mailcom_emails()
         row = _find_by_email(rows, email)
@@ -4154,6 +5436,8 @@ def update_mailcom_parent_sync(
             return False
         now = _now()
         row["sync_status"] = sync_status
+        if sync_action is not None:
+            row["sync_action"] = str(sync_action)
         if sync_status == "queued":
             row["sync_requested_at"] = now
         elif sync_status == "syncing":
@@ -4162,10 +5446,139 @@ def update_mailcom_parent_sync(
             row["sync_completed_at"] = now
         if remote_active_alias_count is not None:
             row["remote_active_alias_count"] = max(0, int(remote_active_alias_count))
+        if remote_lifetime_alias_count is not None:
+            limit = max(1, int(remote_lifetime_alias_limit or row.get("remote_lifetime_alias_limit") or MAX_LIFETIME_ALIASES))
+            row["remote_lifetime_alias_limit"] = limit
+            row["remote_lifetime_alias_count"] = max(0, min(limit, int(remote_lifetime_alias_count)))
+        elif remote_lifetime_alias_limit is not None:
+            row["remote_lifetime_alias_limit"] = max(1, int(remote_lifetime_alias_limit))
+        if remote_history_synced_at is not None:
+            row["remote_history_synced_at"] = str(remote_history_synced_at)
+        if remote_capacity_status is not None:
+            row["remote_capacity_status"] = str(remote_capacity_status)[:64]
+        if remote_history_unknown_count is not None:
+            row["remote_history_unknown_count"] = max(0, int(remote_history_unknown_count))
+        if remote_history_error is not None:
+            row["remote_history_error"] = _sanitize_mailcom_error(remote_history_error)
         row["sync_error"] = str(error or "")[:500] or None
+        if sync_result is not None:
+            allowed_result_keys = {
+                "remote_active_alias_count", "local_added_count", "local_disabled_count",
+                "local_alias_count", "create_request_count", "created_count",
+                "remote_lifetime_remaining", "remote_lifetime_alias_count",
+                "remote_lifetime_alias_limit", "remote_history_synced_at",
+            }
+            row["sync_result"] = {
+                str(key): value
+                for key, value in sync_result.items()
+                if str(key) in allowed_result_keys
+                and isinstance(value, (str, int, float, bool, type(None)))
+            }
         row["updated_at"] = now
         _save_mailcom_emails(rows)
         return True
+
+
+def mailcom_capacity_summary(row: dict | None) -> dict:
+    """从内部母号记录生成只含聚合字段的容量摘要。"""
+    public = _mailcom_public_row(row) or {}
+    return {
+        key: public.get(key)
+        for key in (
+            "remote_active_alias_count",
+            "remote_lifetime_alias_count",
+            "remote_lifetime_alias_limit",
+            "remote_lifetime_remaining",
+            "remote_history_synced_at",
+            "remote_capacity_status",
+            "remote_history_error",
+            "remote_history_unknown_count",
+        )
+    }
+
+
+def update_mailcom_capacity_snapshot(
+    email: str,
+    snapshot: MailComCapacitySnapshot | None = None,
+    *,
+    active_count: int | None = None,
+    lifetime_count: int | None = None,
+    lifetime_limit: int = MAX_LIFETIME_ALIASES,
+    unknown_state_count: int = 0,
+    synced_at: str | None = None,
+    error: str | None = None,
+    status: str | None = None,
+    local_active_delta: int = 0,
+    update_history_time: bool = True,
+) -> bool:
+    """写入成功历史快照，或在失败时保留旧值并标记未知。
+
+    ``error`` 非空时不改写旧计数/时间；这保证失败刷新不会伪装成实时观测。
+    ``local_active_delta`` 只用于已确认的删除/本地活动变更，生命周期计数永不减少。
+    """
+    observation_supplied = snapshot is not None or any(
+        value is not None
+        for value in (active_count, lifetime_count, synced_at, status)
+    ) or bool(unknown_state_count)
+    with _LOCK:
+        rows = _load_mailcom_emails()
+        row = _find_by_email(rows, email)
+        if row is None:
+            return False
+        now = _now()
+        if snapshot is not None:
+            active_count = snapshot.active_alias_count
+            lifetime_count = snapshot.lifetime_alias_count
+            lifetime_limit = snapshot.lifetime_alias_limit
+            unknown_state_count = snapshot.unknown_state_count
+            if not snapshot.complete:
+                error = error or "history_incomplete"
+        if error:
+            row["remote_capacity_status"] = CAPACITY_UNKNOWN
+            # 不完整/失败结果不能覆盖旧计数；只记录脱敏类别。
+            row["remote_history_error"] = _sanitize_mailcom_error(error)
+        elif observation_supplied:
+            limit = max(1, int(lifetime_limit or MAX_LIFETIME_ALIASES))
+            normalized_lifetime = None if lifetime_count is None else max(0, min(limit, int(lifetime_count)))
+            normalized_active = None if active_count is None else max(0, int(active_count))
+            row["remote_active_alias_count"] = normalized_active
+            row["remote_lifetime_alias_count"] = normalized_lifetime
+            row["remote_lifetime_alias_limit"] = limit
+            row["remote_history_unknown_count"] = max(0, int(unknown_state_count or 0))
+            if update_history_time:
+                row["remote_history_synced_at"] = str(synced_at or now)
+            row["remote_capacity_status"] = str(
+                status
+                or capacity_status(
+                    normalized_active,
+                    normalized_lifetime,
+                    lifetime_limit=limit,
+                    near_limit_remaining=_mailcom_near_limit_remaining(),
+                )
+            )[:64]
+            row["remote_history_error"] = None
+        if local_active_delta:
+            current = row.get("remote_active_alias_count")
+            if current is not None:
+                try:
+                    row["remote_active_alias_count"] = max(0, int(current) + int(local_active_delta))
+                    if not error:
+                        row["remote_capacity_status"] = capacity_status(
+                            row["remote_active_alias_count"],
+                            row.get("remote_lifetime_alias_count"),
+                            lifetime_limit=int(row.get("remote_lifetime_alias_limit") or MAX_LIFETIME_ALIASES),
+                            near_limit_remaining=_mailcom_near_limit_remaining(),
+                        )
+                except (TypeError, ValueError):
+                    row["remote_capacity_status"] = CAPACITY_UNKNOWN
+            row["remote_history_error"] = "local_activity_delta"
+        row["updated_at"] = now
+        _save_mailcom_emails(rows)
+        return True
+
+
+def mark_mailcom_capacity_unknown(email: str, error: str) -> bool:
+    return update_mailcom_capacity_snapshot(email, error=error, status=CAPACITY_UNKNOWN)
 
 
 def get_mailcom_parent_by_id(parent_id: int, *, include_secrets: bool = False) -> dict | None:
@@ -4180,6 +5593,11 @@ def recover_interrupted_mailcom_state() -> dict[str, int]:
         parents = _load_mailcom_emails()
         aliases = _load_mailcom_aliases()
         jobs = {int(row.get("id") or 0): row for row in _load_jobs()}
+        account_emails = {
+            _alias_key(row.get("email"))
+            for row in _load_accounts()
+            if _alias_key(row.get("email"))
+        }
         sync_recovered = lease_recovered = 0
         now = datetime.now()
         for parent in parents:
@@ -4201,11 +5619,20 @@ def recover_interrupted_mailcom_state() -> dict[str, int]:
                 stale = True
             if terminal or stale:
                 alias = _find_mailcom_alias(aliases, parent.get("registration_lease_alias") or "")
-                if alias and alias.get("status") == "leased":
-                    alias["status"] = "registration_failed"
+                if alias and canonical_status(alias.get("status"), missing="disabled", unknown="disabled") == "registering":
+                    has_account = (
+                        alias.get("registered_account_id") not in (None, "")
+                        or _alias_key(alias.get("alias_email")) in account_emails
+                    )
+                    # 账号已经落库时保留 used；只有无账号的孤立租约才进入
+                    # failed，且两者都不会重新进入领取队列。
+                    target = "used" if has_account else "failed"
+                    _transition_pool_row(alias, target, note="注册租约在启动恢复时释放")
                     alias["lease_completed_at"] = _now()
-                    alias["last_error"] = "注册租约在启动恢复时释放"
+                    alias["last_error"] = None if target == "used" else "注册租约在启动恢复时释放"
                     alias["updated_at"] = _now()
+                if canonical_status(parent.get("status"), missing="disabled", unknown="disabled") == "registering":
+                    _transition_pool_row(parent, "available", force=True)
                 parent["registration_lease_job_id"] = None
                 parent["registration_lease_alias"] = None
                 parent["registration_lease_started_at"] = None
@@ -4239,14 +5666,10 @@ def list_mailcom_aliases(
             parent = _alias_key(parent_email)
             rows = [row for row in rows if _alias_key(row.get("parent_email")) == parent]
         if status:
-            accepted = {
-                "used": {"leased", "registered"},
-                "failed": {"registration_failed"},
-                "disabled": {"deleted"},
-            }.get(status, {status})
-            rows = [row for row in rows if str(row.get("status") or "") in accepted]
+            status = validate_status(status)
+            rows = [row for row in rows if str(row.get("status") or "") == status]
         else:
-            rows = [row for row in rows if str(row.get("status") or "") != "deleted"]
+            rows = [row for row in rows if str(row.get("status") or "") != "disabled"]
         rows = sorted(rows, key=lambda row: int(row.get("id") or 0), reverse=True)
         out = []
         for row in rows[:max(0, int(limit))]:
@@ -4267,9 +5690,10 @@ def mailcom_alias_summary(parent_email: str | None = None) -> dict:
         if parent_email:
             parent = _alias_key(parent_email)
             rows = [row for row in rows if _alias_key(row.get("parent_email")) == parent]
-        out = {"available": 0, "leased": 0, "registered": 0, "registration_failed": 0, "deleted": 0, "cleanup_pending": 0}
+        out = {status: 0 for status in EMAIL_POOL_STATUSES}
+        out["cleanup_pending"] = 0
         for row in rows:
-            state = str(row.get("status") or "available")
+            state = canonical_status(row.get("status"), missing="disabled", unknown="disabled")
             out[state] = out.get(state, 0) + 1
             if row.get("cleanup_status") == "cleanup_pending":
                 out["cleanup_pending"] += 1
@@ -4291,8 +5715,8 @@ def update_mailcom_alias(
     deleted_at: str | None = None,
 ) -> bool:
     """更新非敏感别名生命周期字段。None 表示不修改对应字段。"""
-    if status is not None and status not in _MAILCOM_ALIAS_STATUSES:
-        raise ValueError("mail.com 别名状态非法")
+    if status is not None:
+        status = validate_status(status)
     if cleanup_status is not None and cleanup_status not in _MAILCOM_ALIAS_CLEANUP_STATUSES:
         raise ValueError("mail.com 别名清理状态非法")
     with _LOCK:
@@ -4300,8 +5724,8 @@ def update_mailcom_alias(
         row = _find_mailcom_alias(rows, alias_email)
         if row is None:
             return False
-        if status is not None:
-            row["status"] = status
+        if status is not None and not _transition_pool_row(row, status, note=last_error):
+            raise ValueError(f"mail.com 别名状态不可迁移: {row.get('status')} -> {status}")
         if registration_started_at is not None:
             row["registration_started_at"] = float(registration_started_at)
         if registered_account_id is not None:
@@ -4328,6 +5752,11 @@ def mark_mailcom_alias_registration_started(alias_email: str, job_id: int | None
         row = _find_mailcom_alias(rows, alias_email)
         if row is None:
             return False
+        state = canonical_status(row.get("status"), missing="disabled", unknown="disabled")
+        if state not in {"registering", "used"}:
+            return False
+        if job_id is not None:
+            row["registration_job_id"] = int(job_id)
         if row.get("registration_started_at") is None:
             row["registration_started_at"] = float(
                 started_at if started_at is not None else datetime.now().timestamp()
@@ -4340,20 +5769,15 @@ def mark_mailcom_alias_registration_started(alias_email: str, job_id: int | None
 def mark_mailcom_alias_registration_failed(alias_email: str, error: str | None = None) -> bool:
     return release_mailcom_registration_lease(
         alias_email,
-        alias_status="registration_failed",
+        alias_status="failed",
         error=error,
     )
 
 
 def link_mailcom_alias_account(alias_email: str, account_id: int) -> bool:
-    updated = update_mailcom_alias(
-        alias_email,
-        status="registered",
-        registered_account_id=account_id,
-        plan_check_status="queued",
-    )
+    updated = mark_registration_success(alias_email, account_id=account_id)
     if updated:
-        release_mailcom_registration_lease(alias_email)
+        update_mailcom_alias(alias_email, plan_check_status="queued")
     return updated
 
 
@@ -4370,11 +5794,65 @@ def get_mailcom_alias_by_account(account_id: int) -> dict | None:
 def mark_mailcom_alias_deleted(alias_email: str) -> bool:
     return update_mailcom_alias(
         alias_email,
-        status="deleted",
+        status="disabled",
         cleanup_status="deleted",
         deleted_at=_now(),
         last_error="",
     )
+
+
+def delete_mailcom_alias_entry(
+    alias_email: str,
+    *,
+    reason: str | None = None,
+    actor: str | None = None,
+    force: bool = False,
+) -> dict:
+    """远端确认后物理删除本地别名，并写入永久 deletion block。"""
+    alias_key = _alias_key(alias_email)
+    with _LOCK:
+        aliases = _load_mailcom_aliases()
+        alias = _find_mailcom_alias(aliases, alias_key)
+        if alias is None:
+            block = _get_lifecycle_record_locked("alias", alias_key)
+            if block is not None:
+                return {"alias_email": alias_key, "deleted": True, "already_deleted": True, "block": dict(block)}
+            raise EmailPoolLifecycleError("alias_missing", "mail.com 别名不存在")
+        if _active_registration_conflict_locked("mailcom_aliases", alias):
+            raise EmailPoolLifecycleError("alias_leased", "mail.com 别名存在活动注册租约")
+        account = _pool_account_locked(alias_key, alias)
+        if account is not None and not force:
+            raise EmailPoolLifecycleError(
+                "used_account_protected",
+                "别名已关联注册账号，需 force=true 和删除原因",
+                account_id=account.get("id"),
+            )
+        if account is not None and force and not str(reason or "").strip():
+            raise EmailPoolLifecycleError("force_reason_required", "强制删除必须填写原因")
+        parent_key = _alias_key(alias.get("parent_email"))
+        parents = _load_mailcom_emails()
+        remaining = [row for row in aliases if row is not alias and _alias_key(row.get("alias_email")) != alias_key]
+        _save_mailcom_parents_with_aliases(parents, remaining)
+        block = _write_lifecycle_record_locked(
+            "alias",
+            alias_key,
+            action="alias_delete",
+            reason=reason or "远端确认后删除 mail.com 别名",
+            parent_email=parent_key,
+            alias_email=alias_key,
+            generation=(
+                int(next((p for p in parents if _alias_key(p.get("email")) == parent_key), {}).get("lifecycle_generation") or 1)
+                if parents else 1
+            ),
+            actor=actor,
+            account_id=account.get("id") if account else None,
+        )
+        return {
+            "alias_email": alias_key,
+            "parent_email": parent_key,
+            "deleted": True,
+            "block": block,
+        }
 
 
 def claim_mailcom_alias_cleanup(account_id: int) -> dict | None:
@@ -4386,7 +5864,7 @@ def claim_mailcom_alias_cleanup(account_id: int) -> dict | None:
             (item for item in rows if int(item.get("registered_account_id") or 0) == target),
             None,
         )
-        if row is None or str(row.get("status") or "") != "registered":
+        if row is None or str(row.get("status") or "") != "used":
             return None
         if row.get("cleanup_status") in {"cleanup_running", "cleanup_pending", "deleted"}:
             return None

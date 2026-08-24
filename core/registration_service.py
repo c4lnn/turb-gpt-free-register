@@ -129,14 +129,19 @@ def _prepare_registration_args() -> tuple[str, str, str]:
     return email, name, birthday
 
 
-def _release_unconsumed_job_email(email: str | None, reason: str) -> None:
-    """任务失败兜底：只回收尚未生成账号、仍处于 used 的邮箱领取。"""
+def _release_unconsumed_job_email(email: str | None, reason: str, *, job_id: int | None = None) -> None:
+    """任务失败兜底：把已领取但未生成账号的邮箱永久标记为 failed。"""
     if not email:
         return
     try:
+        # 统一走 provider 兼容入口：持久化池写入 failed，临时邮箱清理
+        # 进程上下文；已有账号时入口会保持 used。
         from core.email_provider import release_email_if_unconsumed
 
-        release_email_if_unconsumed(email, note=f"任务未消耗，已自动回收: {reason[:180]}")
+        release_email_if_unconsumed(
+            email,
+            note=f"任务失败，邮箱不可复用: {reason[:180]}",
+        )
     except Exception:
         logger.exception("[Service] 回收未消耗邮箱失败: %s", email)
 
@@ -174,11 +179,18 @@ def _disable_job_email(email: str | None, reason: str) -> bool:
     if not email:
         return False
     try:
-        from core.email_provider import release_email
+        # 后置 Codex/Flow 失败不能把已经落库的账号改成 disabled。
+        if db.get_account_by_email(email) is not None:
+            db.mark_registration_success(email)
+            return False
+        changed = db.disable_registration_email(email, reason=f"自动停用: {reason[:180]}")
+        if not changed:
+            # 临时 provider 没有持久化池记录，但仍需清理本次地址上下文。
+            from core.email_provider import release_email
 
-        source = release_email(email, status="disabled", note=f"自动停用: {reason[:180]}")
-        logger.warning("[Service] 已自动停用邮箱: source=%s email=%s reason=%s", source, email, reason[:220])
-        return True
+            release_email(email, status="disabled", note=f"自动停用: {reason[:180]}")
+        logger.warning("[Service] 已自动停用邮箱: email=%s changed=%s reason=%s", email, changed, reason[:220])
+        return changed
     except Exception:
         logger.exception("[Service] 自动停用邮箱失败: %s", email)
         return False
@@ -388,12 +400,23 @@ def _run_one_job(job_id: int, log_file: str) -> None:
         if email and db.get_mailcom_alias_internal(email):
             try:
                 alias = db.get_mailcom_alias_internal(email) or {}
-                db.release_mailcom_registration_lease(
-                    email,
-                    job_id=job_id,
-                    alias_status="registration_failed" if alias.get("status") == "leased" else None,
-                    error="注册任务终态释放租约" if alias.get("status") == "leased" else None,
-                )
+                alias_status = str(alias.get("status") or "").strip().casefold()
+                if alias_status == "registering":
+                    # finally 可能在成功落库后、任务状态写回前执行；先按本地
+                    # 账号事实决定 used/failed，绝不遗留 registering 或复活失败别名。
+                    if db.get_account_by_email(email) is not None:
+                        db.mark_registration_success(email)
+                    else:
+                        db.mark_registration_failed(
+                            email,
+                            reason="注册任务终态释放租约",
+                            stage="registration_finally",
+                            job_id=job_id,
+                        )
+                else:
+                    # 成功/失败路径已写入 alias 终态，这里只负责清除可能残留
+                    # 的母号共享租约，不改写 used/failed/disabled。
+                    db.release_mailcom_registration_lease(email, job_id=job_id)
             except Exception:
                 log_logger.exception("[Job %s] 释放 mail.com 母号注册租约失败", job_id)
         _deactivate_job(job_id)
@@ -463,6 +486,10 @@ def submit_registration(count: int = 1, email_source: str | None = None, workers
     if email_source is None:
         from config import email as _email_cfg
         email_source = _email_cfg.EMAIL_SOURCE
+
+    # 注册服务接受新任务前完成幂等历史迁移和孤立租约恢复；之后各 provider
+    # 才会把 available 原子领取为 registering。
+    db.migrate_email_pool_statuses()
 
     # 创建/切换线程池和提交本批任务必须整体串行化：否则另一请求在本批提交中途
     # 切换 workers 并 shutdown 旧池，会导致后续 submit 报 cannot schedule new futures after shutdown。

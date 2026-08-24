@@ -147,6 +147,7 @@
     .pill { display: inline-flex; min-width: 48px; justify-content: center; padding: 3px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; }
     .status-available, .status-pending { color: var(--blue); background: #eef4ff; }
     .status-used, .status-cancelled, .status-stopped, .status-disabled { color: #475467; background: #f2f4f7; }
+    .status-registering { color: var(--amber); background: #fff7e6; }
     .status-stopping { color: var(--amber); background: #fff7e6; }
     .status-failed { color: var(--red); background: #fff0ef; }
     .status-partial_success { color: #9a6700; background: #fff7d6; }
@@ -775,7 +776,10 @@
     .accounts-table-v2 .col-plan { width: 240px; min-width: 240px; }
     .accounts-table-v2 .col-extract-link { width: 240px; min-width: 240px; }
     .accounts-table-v2 .col-note { width: 140px; }
-    .accounts-table-v2 .col-small { width: 72px; }
+    .accounts-table-v2 .col-small {
+      width: 100px; min-width: 100px;
+      white-space: normal; overflow: visible; text-overflow: clip;
+    }
     .accounts-table-v2 .col-status { width: 100px; }
     .accounts-table-v2 .col-time { width: 170px; }
     .accounts-table-v2 .col-actions { width: 160px; }
@@ -871,6 +875,26 @@
     }
     .accounts-table-v2 .pill.status-failed {
       color: #f56c6c; background: #fef0f0; border-color: #fbc4c4;
+    }
+    .accounts-table-v2 .twofa-cell {
+      display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+      min-width: 0;
+    }
+    .accounts-table-v2 .twofa-code-btn {
+      width: 82px; min-width: 82px; height: 26px; min-height: 26px; padding: 0 8px; border-radius: 4px;
+      border: 1px solid #c6e2ff; background: #ecf5ff; color: #377DFF;
+      font: inherit; font-size: 13px; font-weight: 500; line-height: 1;
+      cursor: pointer; text-align: center; white-space: nowrap;
+    }
+    .accounts-table-v2 .twofa-code-btn:hover:not(:disabled) {
+      background: #d9ecff; border-color: #79bbff;
+    }
+    .accounts-table-v2 .twofa-code-btn:disabled {
+      opacity: .55; cursor: not-allowed;
+    }
+    .accounts-table-v2 .twofa-code-btn.is-code {
+      color: #166534; border-color: #9ee0d6; background: #e7fcf8;
+      font-family: ui-monospace, Consolas, monospace; font-weight: 600;
     }
     .accounts-table-v2 .pill.status-running {
       color: #fa8c16; background: #fff7e6; border-color: #ffd591;
@@ -1494,6 +1518,9 @@
     }
     .outlook-table-v2 .pill.status-available {
       color: #377DFF; background: #EBF2FF; border-color: #9BBEFF;
+    }
+    .outlook-table-v2 .pill.status-registering {
+      color: #b7791f; background: #fff7e6; border-color: #f3d99b;
     }
     .outlook-table-v2 .pill.status-used {
       color: #909399; background: #f4f4f5; border-color: #e4e7ed;
@@ -2488,9 +2515,10 @@
         </div>
         <div class="acc-v2-btn-group">
           <label class="acc-v2-btn-group-title" for="accountAtExportFormatV2">格式</label>
-          <select class="acc-v2-export-format" id="accountAtExportFormatV2" title="选择账号 AT 的复制和 TXT 下载格式">
-            <option value="at" selected>at</option>
-            <option value="email_at">邮箱----at</option>
+          <select class="acc-v2-export-format" id="accountAtExportFormatV2" title="选择账号复制和 TXT 下载格式">
+            <option value="at" selected>AT</option>
+            <option value="email_at">邮箱----AT</option>
+            <option value="email_at_totp">邮箱----AT----2FA</option>
           </select>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCopyAllTokensV2" title="按所选格式复制当前页所有 AT，每个账号一行">复制当前页</button>
         </div>
@@ -2644,6 +2672,7 @@
           <div class="outlook-v2-select-menu" role="listbox">
             <button type="button" class="outlook-v2-select-item is-active" data-value="all" role="option">全部状态</button>
             <button type="button" class="outlook-v2-select-item" data-value="available" role="option">可用</button>
+            <button type="button" class="outlook-v2-select-item" data-value="registering" role="option">注册中</button>
             <button type="button" class="outlook-v2-select-item" data-value="used" role="option">已用</button>
             <button type="button" class="outlook-v2-select-item" data-value="failed" role="option">失败</button>
             <button type="button" class="outlook-v2-select-item" data-value="disabled" role="option">已停用</button>
@@ -2653,9 +2682,9 @@
         <div class="acc-v2-btn-group acc-v2-search-wrap">
           <input id="qOutlookV2" type="search" placeholder="搜索邮箱" autocomplete="off">
         </div>
-        <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnMarkSelectedOutlookAvailableV2" disabled title="把选中的邮箱批量标记为未使用/可用">标记未使用</button>
         <button type="button" class="jobs-tb-btn" id="btnDisableSelectedOutlookV2" disabled title="批量停用选中的邮箱；停用后不会被注册任务领取">停用选中</button>
         <button type="button" class="jobs-tb-btn" id="btnFailSelectedOutlookV2" disabled title="批量标记选中的邮箱为失败">标失败</button>
+        <button type="button" class="jobs-tb-btn" id="btnRestoreSelectedOutlookV2" disabled title="明确恢复选中的失败/停用/已用邮箱为可用">恢复选中</button>
         <button type="button" class="jobs-tb-btn jobs-tb-btn--danger" id="btnDeleteSelectedOutlookV2" disabled title="批量删除选中的邮箱素材">删除选中</button>
         <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="copyAllEmailsV2" title="复制当前页全部邮箱素材">复制全部邮箱素材</button>
         <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnImportOutlookV2" title="导入邮箱素材">导入</button>
@@ -2698,12 +2727,13 @@
           <strong>母号管理</strong>
           <span class="muted" id="mailcomAliasSummaryV2">-</span>
         </div>
+        <span class="muted">停用母号会停止新注册，但已用别名仍可接码</span>
         <button type="button" class="jobs-tb-btn jobs-tb-btn--danger" id="btnDeleteSelectedMailcomAliasesV2" disabled title="串行删除选中的 mail.com 别名">删除选中</button>
         <button type="button" class="jobs-tb-btn" id="btnRefreshMailcomAliasesV2" title="刷新 mail.com 别名状态">刷新</button>
       </div>
       <div class="outlook-table-v2-wrap">
         <table class="outlook-table-v2">
-          <thead><tr><th>母号</th><th>别名数量</th><th>同步状态</th><th>注册租约</th><th>最近同步</th><th>操作</th></tr></thead>
+          <thead><tr><th>母号</th><th>本地别名</th><th>远端容量</th><th>同步状态</th><th>注册租约</th><th>最近同步</th><th>操作</th></tr></thead>
           <tbody id="mailcomAliasBodyV2"></tbody>
         </table>
       </div>
@@ -2801,6 +2831,10 @@
       <label class="outlook-import-check">
         <input id="importAsRegisteredV2" type="checkbox">
         <span>导入后默认视为「注册成功账号」（mail.com 仅用于收取验证码，不能选择此项）</span>
+      </label>
+      <label class="outlook-import-check">
+        <input id="importReactivateExistingV2" type="checkbox">
+        <span>显式重新导入并恢复已有失败/停用/已用邮箱（会写入恢复审计）</span>
       </label>
       <label class="outlook-import-field">
         <span>邮箱素材</span>
@@ -3037,12 +3071,12 @@ function short(v, n=40) { const s = v || ''; return s.length > n ? s.slice(0,n)+
 function copyId(v) { if (!v) return ''; const id = 'c'+(++copySeq); copyStore.set(id, v); return id; }
 function cbtn(label, value, cls='') { const id = copyId(value); return `<button class="${cls}" data-copy-id="${id}" ${id?'':'disabled'}>${label}</button>`; }
 function pill(status) {
-  const map = { available:'可用', used:'已用', failed:'失败', partial_success:'部分成功', disabled:'已停用', pending:'排队', running:'运行中', stopping:'停止中', stopped:'已停止', success:'成功', cancelled:'已取消' };
+  const map = { available:'可用', registering:'注册中', used:'已用', failed:'失败', partial_success:'部分成功', disabled:'已停用', pending:'排队', running:'运行中', stopping:'停止中', stopped:'已停止', success:'成功', cancelled:'已取消' };
   return `<span class="pill status-${esc(status)}">${esc(map[status]||status||'-')}</span>`;
 }
 function pillV2(status) {
   const s = String(status || '');
-  const map = { available:'可用', used:'已用', failed:'失败', partial_success:'部分成功', disabled:'已停用', pending:'排队', running:'运行中', stopping:'停止中', stopped:'已停止', success:'成功', cancelled:'已取消' };
+  const map = { available:'可用', registering:'注册中', used:'已用', failed:'失败', partial_success:'部分成功', disabled:'已停用', pending:'排队', running:'运行中', stopping:'停止中', stopped:'已停止', success:'成功', cancelled:'已取消' };
   let cls = 'jobs-v2-pill--muted';
   if (s === 'success') cls = 'jobs-v2-pill--success';
   else if (s === 'failed') cls = 'jobs-v2-pill--failed';
@@ -3923,9 +3957,30 @@ function _tokenCellV2(r) {
   }
   return `<span class="pill status-failed">无AT</span>${liveHtml}`;
 }
+function _twofaCell(r) {
+  const status = String(r.twofa_status || '').toLowerCase();
+  const detail = [r.twofa_stage, r.twofa_error_code].filter(Boolean).join(' · ');
+  if (r.totp_enabled) {
+    return `<div class="twofa-cell"><button type="button" class="twofa-code-btn" data-account-totp-code="${esc(r.id)}" title="点击生成验证码" aria-live="polite" aria-busy="false">已启用</button></div>`;
+  }
+  let statusHtml;
+  if (status === 'enabled') {
+    statusHtml = `<span class="pill status-success" title="${esc(detail || 'TOTP 已启用')}">已启用</span>`;
+  } else if (status === 'already_enabled') {
+    const alreadyTitle = ['远端已启用 TOTP，但本地未保存 Secret', detail].filter(Boolean).join(' · ');
+    statusHtml = `<span class="pill status-used" title="${esc(alreadyTitle)}">已存在</span>`;
+  } else if (status === 'failed') {
+    statusHtml = `<span class="pill status-failed" title="${esc(detail || 'Roxy 2FA 设置失败')}">失败</span>`;
+  } else if (status === 'disabled') {
+    statusHtml = `<span class="acc-v2-muted" title="未执行 2FA">未启用</span>`;
+  } else {
+    statusHtml = '<span class="acc-v2-muted">未设置</span>';
+  }
+  return `<div class="twofa-cell">${statusHtml}</div>`;
+}
 function _accountsV2MoreMenu(r) {
   const parts = [
-    `<button type="button" data-account-copy-secret="copy_line" data-account-id="${esc(r.id)}">复制整行</button>`,
+    `<button type="button" data-account-copy-format="true" data-account-id="${esc(r.id)}" title="按当前选择的格式复制该账号">复制整行</button>`,
     `<button type="button" data-account-note="${esc(r.id)}" title="设置/清空该账号备注">备注</button>`,
     `<button type="button" onclick="checkSelectedLive([Number('${esc(r.id)}')], this); return false;" title="重新登录该账号，成功则刷新最新 AT/accessToken">查活刷新AT</button>`,
     `<button type="button" data-account-live-log="${esc(r.email)}" title="查看该账号最近一次查活日志">查活日志</button>`,
@@ -3976,7 +4031,7 @@ function renderAccounts() {
       <td class="col-plan">${_planCell(r)}</td>
       <td class="col-checkout">${_checkoutSessionCell(r)}</td>
       <td class="col-extract-link" data-label="提链">${_extractLinkCell(r) || '<span class="acc-v2-muted">-</span>'}</td>
-      <td class="col-small">${r.totp_enabled ? '已启用' : '<span class="acc-v2-muted">未启用</span>'}</td>
+      <td class="col-small">${_twofaCell(r)}</td>
       <td class="col-status">${_codexCellV2(r)}</td>
       <td class="col-note" title="${esc(r.note || '')}">${r.note ? esc(short(r.note, 80)) : '<span class="acc-v2-muted">-</span>'}</td>
       <td class="col-time" title="${esc(r.created_at || '-')}">${esc(r.created_at || '-')}</td>
@@ -4093,6 +4148,38 @@ $('#btnCloseLiveLog').addEventListener('click', closeLiveLogModal);
 
 // 账号操作按钮（事件委托）
 async function onAccountsBodyClick(e) {
+  const totpButton = e.target.closest('[data-account-totp-code]');
+  if (totpButton) {
+    e.preventDefault();
+    e.stopPropagation();
+    const id = Number(totpButton.dataset.accountTotpCode);
+    const previousLabel = totpButton.textContent || '已启用';
+    const previousTitle = totpButton.title;
+    const wasCode = totpButton.classList.contains('is-code');
+    totpButton.disabled = true;
+    totpButton.setAttribute('aria-busy', 'true');
+    totpButton.textContent = '生成中';
+    totpButton.title = '正在获取当前验证码';
+    try {
+      const result = await api(`/api/accounts/${encodeURIComponent(id)}/totp-code`);
+      if (!/^\d{6}$/.test(String(result.code || ''))) {
+        throw new Error('服务端返回的验证码格式无效');
+      }
+      totpButton.textContent = result.code;
+      totpButton.title = `当前验证码，剩余约 ${result.remaining_seconds} 秒；点击重新生成`;
+      totpButton.classList.add('is-code');
+      showToast(`验证码已生成，剩余 ${result.remaining_seconds} 秒`);
+    } catch (err) {
+      totpButton.textContent = previousLabel;
+      totpButton.title = previousTitle;
+      totpButton.classList.toggle('is-code', wasCode);
+      showToast('生成验证码失败: ' + err.message);
+    } finally {
+      totpButton.disabled = false;
+      totpButton.setAttribute('aria-busy', 'false');
+    }
+    return;
+  }
   const moreToggle = e.target.closest('[data-acc-more-toggle]');
   if (moreToggle) {
     e.preventDefault();
@@ -4113,16 +4200,35 @@ async function onAccountsBodyClick(e) {
     closeAccountsV2MoreMenus();
   }
 
-  const copySecretBtn = e.target.closest('[data-account-copy-secret]');
+  const copySecretBtn = e.target.closest('[data-account-copy-secret], [data-account-copy-format]');
   if (copySecretBtn) {
     const id = Number(copySecretBtn.dataset.accountId);
-    const field = copySecretBtn.dataset.accountCopySecret;
+    const formatDriven = copySecretBtn.dataset.accountCopyFormat === 'true';
+    const format = formatDriven ? accountAtExportFormat() : null;
+    const field = format ? format.field : copySecretBtn.dataset.accountCopySecret;
     copySecretBtn.disabled = true;
     try {
-      const value = await fetchOneAccountSecret(id, field);
-      if (!value) { showToast('可复制内容为空'); return; }
-      copyText(value);
-      showToast(field === 'access_token' ? 'AT 已复制' : '账号整行已复制');
+      const result = await fetchOneAccountSecret(id, field);
+      if (result.skipped || !result.value) {
+        if (formatDriven) {
+          showToast(`账号未复制：${accountAtExportSkipReason(result.skip_reason)}`);
+        } else {
+          showToast('可复制内容为空');
+        }
+        return;
+      }
+      copyText(result.value);
+      if (formatDriven) {
+        showToast(accountAtExportResultMessage('已复制', {
+          format,
+          lines: [result.value],
+          fallbackCount: result.fallback ? 1 : 0,
+          skipped: 0,
+          skippedNoAt: 0,
+        }));
+      } else {
+        showToast(field === 'access_token' ? 'AT 已复制' : '账号整行已复制');
+      }
     } catch(err) {
       showToast('复制失败: ' + err.message);
     } finally {
@@ -4388,9 +4494,12 @@ async function fetchAccountSecrets(ids, field) {
 
 function accountAtExportFormat() {
   const selected = document.getElementById('accountAtExportFormatV2')?.value;
-  return selected === 'email_at'
-    ? {field: 'email_access_token', label: '邮箱----at'}
-    : {field: 'access_token', label: 'at'};
+  const formats = {
+    at: {field: 'access_token', label: 'AT'},
+    email_at: {field: 'email_access_token', label: '邮箱----AT'},
+    email_at_totp: {field: 'email_access_token_totp', label: '邮箱----AT----2FA'},
+  };
+  return formats[selected] || formats.at;
 }
 
 async function fetchAccountAtExport(ids) {
@@ -4400,21 +4509,41 @@ async function fetchAccountAtExport(ids) {
     headers:{'Content-Type':'application/json'},
     body: JSON.stringify({account_ids: ids, field: format.field}),
   });
+  const values = response.values || [];
+  const skippedItems = response.skipped || [];
+  const fallbackCount = Number.isFinite(Number(response.fallback_count))
+    ? Number(response.fallback_count)
+    : values.filter(item => item && item.fallback).length;
+  const skippedNoAt = skippedItems.filter(item => item && item.reason === 'missing_access_token').length;
   return {
     format,
-    lines: (response.values || []).map(item => item.value).filter(Boolean),
-    skipped: (response.skipped || []).length,
+    lines: values.map(item => item.value).filter(Boolean),
+    fallbackCount,
+    skipped: skippedItems.length,
+    skippedNoAt,
+    skippedItems,
   };
 }
 
+function accountAtExportSkipReason(reason) {
+  return ({
+    missing_access_token: '无 AT',
+    missing_email: '无邮箱',
+    empty: '值为空',
+  })[reason] || reason || '原因未知';
+}
+
 function accountAtExportResultMessage(action, result) {
-  const skipped = result.skipped ? `，跳过 ${result.skipped} 个` : '';
-  return `${action} ${result.lines.length} 行（${result.format.label}）${skipped}`;
+  const parts = [`${action} ${result.lines.length} 行（${result.format.label}）`];
+  if (result.fallbackCount) parts.push(`2FA退化 ${result.fallbackCount} 个`);
+  if (result.skippedNoAt) parts.push(`无AT跳过 ${result.skippedNoAt} 个`);
+  const otherSkipped = Math.max(0, (result.skipped || 0) - (result.skippedNoAt || 0));
+  if (otherSkipped) parts.push(`其他跳过 ${otherSkipped} 个`);
+  return parts.join('，');
 }
 
 async function fetchOneAccountSecret(id, field) {
-  const r = await api(`/api/accounts/${encodeURIComponent(id)}/secret?field=${encodeURIComponent(field)}`);
-  return r.value || '';
+  return api(`/api/accounts/${encodeURIComponent(id)}/secret?field=${encodeURIComponent(field)}`);
 }
 
 async function copySelectedAccountLines() {
@@ -4422,7 +4551,7 @@ async function copySelectedAccountLines() {
   if (!ids.length) { showToast('请先选择账号'); return; }
   try {
     const result = await fetchAccountAtExport(ids);
-    if (!result.lines.length) { showToast(`选中账号没有可导出的 ${result.format.label}`); return; }
+    if (!result.lines.length) { showToast(accountAtExportResultMessage('未复制', result)); return; }
     copyText(result.lines.join('\n'));
     showToast(accountAtExportResultMessage('已复制', result));
   } catch(err) { showToast('复制失败: ' + err.message); }
@@ -4583,7 +4712,7 @@ async function downloadSelectedAccountTxt() {
   try {
     result = await fetchAccountAtExport(ids);
   } catch(err) { showToast('生成 TXT 失败: ' + err.message); return; }
-  if (!result.lines.length) { showToast(`选中账号没有可导出的 ${result.format.label}`); return; }
+  if (!result.lines.length) { showToast(accountAtExportResultMessage('未下载', result)); return; }
   const now = new Date();
   const pad = n => String(n).padStart(2, '0');
   const filename = `accounts-selected-${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.txt`;
@@ -5054,7 +5183,7 @@ async function copyCurrentPageTokens() {
   if (!ids.length) { showToast('当前页没有账号'); return; }
   try {
     const result = await fetchAccountAtExport(ids);
-    if (!result.lines.length) { showToast(`当前页没有可导出的 ${result.format.label}`); return; }
+    if (!result.lines.length) { showToast(accountAtExportResultMessage('未复制', result)); return; }
     copyText(result.lines.join('\n'));
     showToast(accountAtExportResultMessage('已复制', result));
   } catch(e) { showToast('复制失败: ' + e.message); }
@@ -5356,6 +5485,7 @@ function getPoolStatus() {
 const POOL_STATUS_LABELS = {
   all: '全部状态',
   available: '可用',
+  registering: '注册中',
   used: '已用',
   failed: '失败',
   disabled: '已停用',
@@ -5386,23 +5516,43 @@ let MAILCOM_PARENTS = [];
 const MAILCOM_EXPANDED = new Set();
 const MAILCOM_ALIASES_BY_PARENT = new Map();
 const MAILCOM_ALIAS_SELECTED = new Set();
+const MAILCOM_SYNC_BUSY = new Set();
+const MAILCOM_REPLENISH_BUSY = new Set();
 let MAILCOM_ALIAS_DELETE_BUSY = false;
 let MAILCOM_DOMAINS = [];
 function _mailcomAliasLifecycleLabel(status) {
-  return ({available:'可用', leased:'注册中', registered:'已注册', registration_failed:'注册失败', deleted:'已删除'})[status] || status || '-';
+  return ({available:'可用', registering:'注册中', used:'已用', failed:'失败', disabled:'已停用'})[status] || status || '-';
 }
 function _mailcomAliasCleanupLabel(status) {
   return ({pending:'待套餐查询', not_eligible:'保留（有试用资格）', not_requested:'未执行清理', cleanup_running:'清理中', cleanup_pending:'待人工处理', deleted:'已删除'})[status] || status || '-';
 }
+function _mailcomCapacityLabel(status) {
+  return ({unknown:'未知',capacity_unknown:'查询失败/未知',normal:'正常',near_limit:'接近上限',active_full:'活动容量已满',lifetime_full:'生命周期已满'})[status] || status || '未知';
+}
+function _mailcomCapacityText(parent) {
+  const active = parent.remote_active_alias_count == null ? '?' : Number(parent.remote_active_alias_count);
+  const lifetime = parent.remote_lifetime_alias_count == null ? '?' : Number(parent.remote_lifetime_alias_count);
+  const limit = Number(parent.remote_lifetime_alias_limit || 99);
+  const remaining = parent.remote_lifetime_remaining == null ? '?' : Number(parent.remote_lifetime_remaining);
+  const status = _mailcomCapacityLabel(parent.remote_capacity_status);
+  const synced = parent.remote_history_synced_at || '暂无快照';
+  const error = parent.remote_history_error || '';
+  return `<div>活动 ${active}/9 · 生命周期 ${lifetime}/${limit} · 剩余 ${remaining}</div><div class="muted" title="${esc(error)}">${esc(status)} · ${esc(synced)}</div>`;
+}
+function _mailcomActionStatusText(parent) {
+  const action = parent.sync_action === 'replenish' ? '补齐' : parent.sync_action === 'sync' ? '同步' : '';
+  const status = parent.sync_status || 'pending';
+  return action ? `${action} · ${status}` : status;
+}
 function _mailcomParentDetail(parent) {
   const aliases = MAILCOM_ALIASES_BY_PARENT.get(Number(parent.id)) || [];
-  const selectableAliases = aliases.filter(r => r.status !== 'leased' && r.status !== 'deleted');
+  const selectableAliases = aliases.filter(r => r.status !== 'registering' && r.status !== 'disabled');
   const allSelected = selectableAliases.length > 0 && selectableAliases.every(r => MAILCOM_ALIAS_SELECTED.has(String(r.alias_email || '').toLowerCase()));
   const rows = aliases.map(r => {
     const accountLabel = r.registered_account_id ? `账号 #${r.registered_account_id}${r.account_archived ? '（已归档）' : ''}` : '-';
     const plan = r.plan_result_class === 'eligible_for_delete' ? 'free / 无试用' : r.plan_result_class === 'trial_eligible' ? '有试用资格' : r.plan_result_class === 'non_free' ? (r.account_plan_type || '非 free') : (r.account_plan_type || '不明确');
-    const leased = r.status === 'leased';
-    const deleted = r.status === 'deleted';
+    const leased = r.status === 'registering';
+    const deleted = r.status === 'disabled';
     const selected = MAILCOM_ALIAS_SELECTED.has(String(r.alias_email || '').toLowerCase());
     const checkbox = `<input type="checkbox" class="mailcom-alias-row-check" data-mailcom-alias-check="${esc(r.alias_email || '')}" ${selected ? 'checked' : ''} ${leased || deleted || MAILCOM_ALIAS_DELETE_BUSY ? 'disabled' : ''} aria-label="选择别名 ${esc(r.alias_email || '')}">`;
     const deleteAction = deleted
@@ -5418,7 +5568,7 @@ function _mailcomParentDetail(parent) {
       <td>${deleteAction}</td>
     </tr>`;
   }).join('') || '<tr><td colspan="7" style="text-align:center;color:#909399;padding:16px;">暂无别名记录</td></tr>';
-  return `<tr class="mailcom-parent-detail"><td colspan="6"><div class="outlook-table-v2-wrap"><table class="outlook-table-v2"><thead><tr><th class="col-check"><input type="checkbox" class="mailcom-alias-select-all" data-mailcom-alias-select-all="${Number(parent.id)}" ${allSelected ? 'checked' : ''} ${selectableAliases.length === 0 || MAILCOM_ALIAS_DELETE_BUSY ? 'disabled' : ''} title="全选/取消全选当前母号可删除别名"></th><th>别名邮箱</th><th>状态</th><th>账号</th><th>套餐 / 清理</th><th>更新时间</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table></div></td></tr>`;
+  return `<tr class="mailcom-parent-detail"><td colspan="7"><div class="outlook-table-v2-wrap"><table class="outlook-table-v2"><thead><tr><th class="col-check"><input type="checkbox" class="mailcom-alias-select-all" data-mailcom-alias-select-all="${Number(parent.id)}" ${allSelected ? 'checked' : ''} ${selectableAliases.length === 0 || MAILCOM_ALIAS_DELETE_BUSY ? 'disabled' : ''} title="全选/取消全选当前母号可删除别名"></th><th>别名邮箱</th><th>状态</th><th>账号</th><th>套餐 / 清理</th><th>更新时间</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table></div></td></tr>`;
 }
 function updateMailcomAliasBulkControls() {
   const button = $('#btnDeleteSelectedMailcomAliasesV2');
@@ -5432,22 +5582,28 @@ function renderMailcomAliases(summary = {}) {
   const summaryEl = $('#mailcomAliasSummaryV2');
   if (!body) return;
   if (summaryEl) {
-    summaryEl.textContent = `母号 ${MAILCOM_PARENTS.length}，可用别名 ${Number(summary.available || 0)}，已用 ${Number(summary.used || 0)}`;
+    summaryEl.textContent = `母号 ${MAILCOM_PARENTS.length}，可用 ${Number(summary.available || 0)}，注册中 ${Number(summary.registering || 0)}，已用 ${Number(summary.used || 0)}，失败 ${Number(summary.failed || 0)}，停用 ${Number(summary.disabled || 0)}`;
   }
   body.innerHTML = MAILCOM_PARENTS.map(parent => {
     const counts = parent.alias_summary || {};
-    const countText = `可用 ${Number(counts.available || 0)} / 注册中 ${Number(counts.leased || 0)} / 已注册 ${Number(counts.registered || 0)}`;
+    const countText = `可用 ${Number(counts.available || 0)} / 注册中 ${Number(counts.registering || 0)} / 已用 ${Number(counts.used || 0)} / 失败 ${Number(counts.failed || 0)} / 停用 ${Number(counts.disabled || 0)}`;
     const expanded = MAILCOM_EXPANDED.has(Number(parent.id));
+    const parentDisabled = parent.status === 'disabled';
+    const parentId = Number(parent.id);
+    const syncBusy = MAILCOM_SYNC_BUSY.has(parentId);
+    const replenishBusy = MAILCOM_REPLENISH_BUSY.has(parentId);
+    const actionBusy = syncBusy || replenishBusy || parent.registration_busy;
     const main = `<tr>
       <td><button type="button" class="jobs-tb-btn" data-mailcom-parent-toggle="${Number(parent.id)}" aria-expanded="${expanded}">${expanded ? '收起' : '展开'}</button> <span class="acc-v2-email">${esc(parent.email || parent.email_masked || '-')}</span></td>
       <td>${esc(countText)}</td>
-      <td title="${esc(parent.sync_error || '')}">${esc(parent.sync_status || 'pending')}</td>
+      <td title="${esc(parent.remote_history_error || '')}">${_mailcomCapacityText(parent)}</td>
+      <td title="${esc(parent.sync_error || '')}">${esc(_mailcomActionStatusText(parent))}</td>
        <td>${parent.registration_busy ? '注册中' : '空闲'}</td>
-      <td>${esc(parent.sync_completed_at || parent.sync_started_at || '-')}</td>
-      <td><button type="button" class="jobs-tb-btn" data-mailcom-parent-sync="${Number(parent.id)}" title="重新查询远端并补齐到 9 个">同步/补齐</button></td>
+       <td>${esc(parent.sync_completed_at || parent.sync_started_at || '-')}</td>
+       <td><button type="button" class="jobs-tb-btn" data-mailcom-parent-sync="${parentId}" ${parentDisabled || actionBusy ? 'disabled' : ''} title="只同步远端快照，不创建别名">${syncBusy ? '同步中...' : '同步'}</button> <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" data-mailcom-parent-replenish="${parentId}" ${parentDisabled || actionBusy ? 'disabled' : ''} title="同步远端并补齐缺口别名">${replenishBusy ? '补齐中...' : '补齐'}</button> <button type="button" class="jobs-tb-btn" data-mailcom-parent-history-refresh="${parentId}" ${parentDisabled || actionBusy ? 'disabled' : ''} title="只读取历史别名容量，不创建或删除">刷新历史</button> <button type="button" class="jobs-tb-btn" data-mailcom-parent-disable="${parentId}" ${parentDisabled || actionBusy ? 'disabled' : ''}>停用母号</button> <button type="button" class="jobs-tb-btn jobs-tb-btn--danger" data-mailcom-parent-delete="${parentId}" ${actionBusy ? 'disabled' : ''}>永久删除母号</button></td>
     </tr>`;
     return main + (expanded ? _mailcomParentDetail(parent) : '');
-  }).join('') || '<tr><td colspan="6" style="text-align:center;color:#909399;padding:20px;">暂无 mail.com 母号</td></tr>';
+  }).join('') || '<tr><td colspan="7" style="text-align:center;color:#909399;padding:20px;">暂无 mail.com 母号</td></tr>';
   updateMailcomAliasBulkControls();
 }
 async function loadMailcomAliases() {
@@ -5457,7 +5613,7 @@ async function loadMailcomAliases() {
     renderMailcomAliases(res.summary || {});
   } catch (err) {
     const body = $('#mailcomAliasBodyV2');
-    if (body) body.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#909399;padding:20px;">别名状态暂不可用</td></tr>';
+    if (body) body.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#909399;padding:20px;">别名状态暂不可用</td></tr>';
   }
 }
 function renderMailcomDomains() {
@@ -5518,13 +5674,69 @@ async function toggleMailcomParent(parentId) {
   MAILCOM_EXPANDED.add(id);
   renderMailcomAliases();
 }
+async function runMailcomParentAction(parentId, action) {
+  const id = Number(parentId);
+  const busySet = action === 'sync' ? MAILCOM_SYNC_BUSY : MAILCOM_REPLENISH_BUSY;
+  if (MAILCOM_SYNC_BUSY.has(id) || MAILCOM_REPLENISH_BUSY.has(id)) return;
+  busySet.add(id);
+  renderMailcomAliases();
+  try {
+    const result = await api(`/api/mailcom/parents/${encodeURIComponent(id)}/${action}`, {method:'POST'});
+    if (result.busy) {
+      showToast(action === 'sync' ? '该母号同步已在进行中' : '该母号补齐已在进行中');
+    } else if (action === 'sync') {
+      showToast('只同步任务已入队，不会创建别名');
+    } else {
+      showToast('补齐任务已入队，将同步并创建缺口别名');
+    }
+    await loadMailcomAliases();
+  } finally {
+    busySet.delete(id);
+    renderMailcomAliases();
+  }
+}
 async function syncMailcomParent(parentId) {
-  await api(`/api/mailcom/parents/${encodeURIComponent(parentId)}/sync`, {method:'POST'});
-  showToast('mail.com 别名同步已入队');
+  return runMailcomParentAction(parentId, 'sync');
+}
+async function replenishMailcomParent(parentId) {
+  return runMailcomParentAction(parentId, 'replenish');
+}
+async function refreshMailcomParentHistory(parentId, button) {
+  if (button) { button.disabled = true; button.setAttribute('aria-busy', 'true'); }
+  try {
+    const result = await api(`/api/mailcom/parents/${encodeURIComponent(parentId)}/history-refresh`, {method:'POST'});
+    showToast(result.busy ? '该母号历史刷新已在进行中' : 'mail.com 历史容量刷新已入队');
+    await loadMailcomAliases();
+  } finally {
+    if (button) { button.disabled = false; button.removeAttribute('aria-busy'); }
+  }
+}
+async function changeMailcomParentLifecycle(parentId, action) {
+  const parent = MAILCOM_PARENTS.find(item => Number(item.id) === Number(parentId));
+  if (!parent) return;
+  if (action === 'disable') {
+    if (!confirm(`确定停用母号 ${parent.email} 吗？可用别名会停用，但已用别名仍可接码。`)) return;
+  } else {
+    if (!confirm(`确定永久删除母号 ${parent.email} 吗？存在已用别名时会被拒绝。`)) return;
+  }
+  const reason = prompt(`${action === 'disable' ? '停用' : '删除'}原因（可选）：`, '') || '';
+  const result = await api(`/api/mailcom/parents/${encodeURIComponent(parentId)}/${action}`, {
+    method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({reason}),
+  });
+  showToast(action === 'disable'
+    ? `母号已停用，可用别名停用 ${result.disabled_alias_count || 0} 个，已用别名保留 ${result.preserved_used_alias_count || 0} 个`
+    : `母号已删除，本地移除别名 ${result.deleted_alias_count || 0} 个`);
+  MAILCOM_ALIAS_SELECTED.clear();
+  MAILCOM_ALIASES_BY_PARENT.clear();
+  MAILCOM_EXPANDED.clear();
   await loadMailcomAliases();
 }
 async function deleteMailcomAlias(aliasEmail, button) {
-  if (!confirm(`确定删除 mail.com 别名 ${aliasEmail}？`)) return;
+  const aliasRow = Array.from(MAILCOM_ALIASES_BY_PARENT.values()).flat().find(row => String(row.alias_email || '').toLowerCase() === String(aliasEmail || '').toLowerCase());
+  const protectedAlias = aliasRow && aliasRow.status === 'used' && aliasRow.registered_account_id;
+  if (!confirm(protectedAlias ? `别名 ${aliasEmail} 已关联账号，确定强制删除吗？账号记录不会删除。` : `确定删除 mail.com 别名 ${aliasEmail}？`)) return;
+  const reason = protectedAlias ? (prompt('请输入强制删除原因：', '母号管理人工确认') || '') : '';
+  if (protectedAlias && !reason.trim()) return;
   const originalText = button?.textContent || '删除';
   if (button) {
     button.disabled = true;
@@ -5533,7 +5745,7 @@ async function deleteMailcomAlias(aliasEmail, button) {
   }
   showToast('正在删除 mail.com 别名，请稍候');
   try {
-    await api('/api/mailcom/aliases/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({alias_email: aliasEmail})});
+    await api('/api/mailcom/aliases/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({alias_email: aliasEmail, force: Boolean(protectedAlias), reason})});
     showToast('mail.com 别名已删除');
     MAILCOM_ALIAS_SELECTED.clear();
     MAILCOM_ALIASES_BY_PARENT.clear();
@@ -5558,7 +5770,10 @@ async function deleteSelectedMailcomAliases() {
   const failed = [];
   for (const aliasEmail of aliases) {
     try {
-      await api('/api/mailcom/aliases/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({alias_email: aliasEmail})});
+      const aliasRow = Array.from(MAILCOM_ALIASES_BY_PARENT.values()).flat().find(row => String(row.alias_email || '').toLowerCase() === String(aliasEmail || '').toLowerCase());
+      const protectedAlias = aliasRow && aliasRow.status === 'used' && aliasRow.registered_account_id;
+      const reason = protectedAlias ? '母号管理批量人工确认' : '';
+      await api('/api/mailcom/aliases/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({alias_email: aliasEmail, force: Boolean(protectedAlias), reason})});
       MAILCOM_ALIAS_SELECTED.delete(aliasEmail);
     } catch (err) {
       failed.push(`${aliasEmail}: ${err.message || '删除失败'}`);
@@ -5622,9 +5837,9 @@ function _outlookMoreMenu(r) {
   const items = [
     cbtn('复制AT', r.access_token, 'good'),
     cbtn('复制整行', r.account_copy_line, 'good'),
-    r.status !== 'available' ? `<button type="button" data-pool-act="available" data-email="${email}" data-source="${src}">恢复可用</button>` : '',
     r.status !== 'disabled' ? `<button type="button" data-pool-act="disabled" data-email="${email}" data-source="${src}">停用</button>` : '',
     r.status !== 'failed' ? `<button type="button" data-pool-act="failed" data-email="${email}" data-source="${src}">标失败</button>` : '',
+    ['failed','disabled','used'].includes(r.status) ? `<button type="button" data-pool-act="available" data-email="${email}" data-source="${src}" data-current-status="${esc(r.status)}">恢复为可用</button>` : '',
   ].filter(Boolean).join('');
   return items;
 }
@@ -5651,7 +5866,7 @@ function renderOutlook() {
       <td class="col-actions">
         <div class="acc-v2-actions">
           ${cbtn('复制邮箱', r.source === 'mailcom' ? r.email : r.copy_line, 'primary')}
-          <button type="button" class="danger" data-pool-act="delete" data-email="${email}" data-source="${src}" title="删除邮箱素材">删除</button>
+          ${r.source === 'mailcom' ? '' : `<button type="button" class="danger" data-pool-act="delete" data-email="${email}" data-source="${src}" title="永久删除邮箱素材">删除</button>`}
           <div class="acc-v2-more">
             <button type="button" class="acc-v2-more-btn" data-outlook-more-toggle aria-haspopup="true">更多</button>
             <div class="acc-v2-more-menu" role="menu">${_outlookMoreMenu(r)}</div>
@@ -5665,14 +5880,15 @@ function renderOutlook() {
 }
 function updateOutlookSelectionUi(pageRows = null) {
   const none = OUTLOOK_SELECTED.size === 0;
+  const onlyMailcom = !none && Array.from(OUTLOOK_SELECTED).every(key => key.startsWith('mailcom|'));
   [
     'btnDeleteSelectedOutlookV2',
-    'btnMarkSelectedOutlookAvailableV2',
     'btnDisableSelectedOutlookV2',
     'btnFailSelectedOutlookV2',
+    'btnRestoreSelectedOutlookV2',
   ].forEach(id => {
     const el = document.getElementById(id);
-    if (el) el.disabled = none;
+    if (el) el.disabled = none || (id === 'btnDeleteSelectedOutlookV2' && onlyMailcom);
   });
 
   if (!pageRows) pageRows = OUTLOOK;
@@ -5743,9 +5959,15 @@ async function onOutlookBodyClick(e) {
       OUTLOOK_SELECTED.delete(`${source}|${email}`);
       showToast('已删除');
     } else {
-      const noteMap = {failed:'手动标记失败', available:'手动恢复可用', disabled:'手动停用'};
-      await api('/api/outlook/status', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email, status: poolAct, source, note: noteMap[poolAct] || '手动修改状态'}) });
-      showToast(poolAct === 'failed' ? '已标失败' : poolAct === 'disabled' ? '已停用' : '已恢复可用');
+      const noteMap = {failed:'手动标记失败', disabled:'手动停用'};
+      let reason = noteMap[poolAct] || '手动修改状态';
+      if (poolAct === 'available') {
+        reason = prompt(`请输入恢复 ${email} 的原因：`, '人工确认后恢复邮箱池条目');
+        if (!reason || !reason.trim()) return;
+        if (!confirm(`确定把 ${email} 恢复为可用吗？该邮箱会重新进入领取池。`)) return;
+      }
+      await api('/api/outlook/status', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email, status: poolAct, source, reason}) });
+      showToast(poolAct === 'failed' ? '已标失败' : poolAct === 'available' ? '已恢复为可用' : '已停用');
     }
     loadOutlook(); loadSummary();
   } catch(err) { showToast('操作失败: ' + err.message); }
@@ -5821,9 +6043,9 @@ async function onOutlookBodyClick(e) {
     bodyV2.addEventListener('click', onOutlookBodyClick);
   }
   const bind = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener('click', fn); };
-  bind('btnMarkSelectedOutlookAvailableV2', () => bulkMarkOutlookStatus('available'));
   bind('btnDisableSelectedOutlookV2', () => bulkMarkOutlookStatus('disabled'));
   bind('btnFailSelectedOutlookV2', () => bulkMarkOutlookStatus('failed'));
+  bind('btnRestoreSelectedOutlookV2', bulkRestoreOutlook);
   bind('btnDeleteSelectedOutlookV2', deleteSelectedOutlook);
   bind('btnDeleteSelectedMailcomAliasesV2', deleteSelectedMailcomAliases);
   bind('btnImportOutlookV2', openOutlookImportModal);
@@ -5856,7 +6078,7 @@ async function onOutlookBodyClick(e) {
       const parentId = Number(selectAll.dataset.mailcomAliasSelectAll);
       const aliases = MAILCOM_ALIASES_BY_PARENT.get(parentId) || [];
       aliases.forEach(row => {
-        if (row.status === 'leased' || row.status === 'deleted') return;
+        if (row.status === 'registering' || row.status === 'disabled') return;
         const email = String(row.alias_email || '').toLowerCase();
         if (selectAll.checked) MAILCOM_ALIAS_SELECTED.add(email);
         else MAILCOM_ALIAS_SELECTED.delete(email);
@@ -5867,10 +6089,18 @@ async function onOutlookBodyClick(e) {
   if (mailcomBody) mailcomBody.addEventListener('click', async (e) => {
     const toggle = e.target.closest('[data-mailcom-parent-toggle]');
     const sync = e.target.closest('[data-mailcom-parent-sync]');
+    const replenish = e.target.closest('[data-mailcom-parent-replenish]');
+    const historyRefresh = e.target.closest('[data-mailcom-parent-history-refresh]');
+    const parentDisable = e.target.closest('[data-mailcom-parent-disable]');
+    const parentDelete = e.target.closest('[data-mailcom-parent-delete]');
     const del = e.target.closest('[data-mailcom-alias-delete]');
     try {
       if (toggle) await toggleMailcomParent(toggle.dataset.mailcomParentToggle);
       else if (sync) await syncMailcomParent(sync.dataset.mailcomParentSync);
+      else if (replenish) await replenishMailcomParent(replenish.dataset.mailcomParentReplenish);
+      else if (historyRefresh) await refreshMailcomParentHistory(historyRefresh.dataset.mailcomParentHistoryRefresh, historyRefresh);
+      else if (parentDisable) await changeMailcomParentLifecycle(parentDisable.dataset.mailcomParentDisable, 'disable');
+      else if (parentDelete) await changeMailcomParentLifecycle(parentDelete.dataset.mailcomParentDelete, 'delete');
       else if (del) await deleteMailcomAlias(del.dataset.mailcomAliasDelete, del);
     } catch (err) {
       showToast(err.message || 'mail.com 操作失败');
@@ -5913,6 +6143,7 @@ function updateImportFormatV2() {
   if (hint) hint.textContent = selected[0];
   if (textarea) textarea.placeholder = selected[1];
   const registered = $('#importAsRegisteredV2');
+  const reactivate = $('#importReactivateExistingV2');
   if (registered) {
     registered.disabled = source === 'mailcom';
     if (source === 'mailcom') registered.checked = false;
@@ -6000,6 +6231,7 @@ async function doImportOutlook() {
   const textEl = $('#importTextV2');
   const sourceEl = $('#importSourceV2');
   const registeredEl = $('#importAsRegisteredV2');
+  const reactivateEl = $('#importReactivateExistingV2');
   const resultEl = $('#importResultV2');
   const submitBtn = $('#btnSubmitOutlookImport');
   const text = textEl ? textEl.value : '';
@@ -6008,12 +6240,15 @@ async function doImportOutlook() {
   try {
     const source = sourceEl ? sourceEl.value : 'outlook';
     const as_registered = registeredEl ? !!registeredEl.checked : false;
-    const r = await api('/api/outlook/import', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({text, source, as_registered}) });
+    const reactivate_existing = reactivateEl ? !!reactivateEl.checked : false;
+    const r = await api('/api/outlook/import', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({text, source, as_registered, reactivate_existing}) });
     const mode = r.as_registered ? '已注册账号' : '邮箱池素材';
     const errorSummary = (r.errors || []).map(item => `第 ${item.line} 行：${item.reason}`).join('；');
-    const msg = `按 ${mode} 导入：解析 ${r.parsed} 行，新增 ${r.inserted}，跳过 ${r.skipped}${r.as_registered ? '；可到“账号”页选择后批量补跑 Codex' : ''}${errorSummary ? `；${errorSummary}` : ''}`;
+    const actionHint = source === 'mailcom' && !r.as_registered ? '；已排队只同步，补齐请在母号管理中点击“补齐”' : '';
+    const msg = `按 ${mode} 导入：解析 ${r.parsed} 行，新增 ${r.inserted}，跳过 ${r.skipped}${r.as_registered ? '；可到“账号”页选择后批量补跑 Codex' : ''}${actionHint}${errorSummary ? `；${errorSummary}` : ''}`;
     if (resultEl) resultEl.innerHTML = `<div class="banner info">${esc(msg)}</div>`;
     if (textEl) textEl.value = '';
+    if (reactivateEl) reactivateEl.checked = false;
     setPoolSourceV2(source);
     setImportSourceV2(source);
     loadOutlook(); loadAccounts(); loadSummary();
@@ -6032,14 +6267,10 @@ async function bulkMarkOutlookStatus(status) {
     return {source, email: rest.join('|')};
   });
   if (items.length === 0) { showToast('请先选择邮箱'); return; }
-  const labelMap = {available:'未使用/可用', disabled:'停用', failed:'失败'};
+  const labelMap = {disabled:'停用', failed:'失败'};
   const label = labelMap[status] || status;
   if (!confirm(`确定把选中的 ${items.length} 个邮箱标记为${label}吗？`)) return;
-  const btnId = status === 'disabled'
-    ? 'btnDisableSelectedOutlookV2'
-    : status === 'failed'
-      ? 'btnFailSelectedOutlookV2'
-      : 'btnMarkSelectedOutlookAvailableV2';
+  const btnId = status === 'disabled' ? 'btnDisableSelectedOutlookV2' : 'btnFailSelectedOutlookV2';
   const btn = document.getElementById(btnId);
   if (btn) btn.disabled = true;
   try {
@@ -6056,6 +6287,28 @@ async function bulkMarkOutlookStatus(status) {
     showToast('批量标记失败: ' + err.message);
     updateOutlookSelectionUi();
   }
+}
+
+async function bulkRestoreOutlook() {
+  const items = Array.from(OUTLOOK_SELECTED).map(key => {
+    const [source, ...rest] = key.split('|');
+    return {source, email: rest.join('|')};
+  });
+  if (!items.length) { showToast('请先选择邮箱'); return; }
+  const reason = prompt('请输入恢复原因（会写入审计）：', '人工确认后恢复邮箱池条目');
+  if (!reason || !reason.trim()) return;
+  if (!confirm(`确定恢复选中的 ${items.length} 个邮箱为可用吗？失败/已用邮箱可能再次被领取。`)) return;
+  const btn = document.getElementById('btnRestoreSelectedOutlookV2');
+  if (btn) btn.disabled = true;
+  try {
+    const r = await api('/api/outlook/status-bulk', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({items, status:'available', note:reason.trim(), source:getPoolSource()}),
+    });
+    OUTLOOK_SELECTED.clear();
+    showToast(`已恢复 ${r.updated_count || 0} 个，跳过 ${(r.skipped || []).length} 个`);
+    loadOutlook(); loadSummary();
+  } catch (err) { showToast('恢复失败: ' + err.message); updateOutlookSelectionUi(); }
 }
 
 async function deleteSelectedOutlook() {

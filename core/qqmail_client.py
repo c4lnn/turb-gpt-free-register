@@ -231,12 +231,14 @@ def pick_domain_email() -> str:
     prefix = "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
     email = f"{prefix}@{domain}"
 
-    claim_next_domain_email(email)
+    claimed = claim_next_domain_email(email)
+    if claimed is None:
+        raise QQMailClientError("生成的域名邮箱已存在且不可领取，请重试")
     logger.info(f"[QQMail] 生成域名邮箱: {email}")
     return email
 
 
-def release_domain_email(email: str, status: str = "available", note: str | None = None) -> None:
+def release_domain_email(email: str, status: str = "failed", note: str | None = None) -> None:
     """更新域名邮箱状态。"""
     from core.db import release_domain_email as _release
     _release(email, status=status, note=note)
