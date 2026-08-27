@@ -2485,14 +2485,16 @@
             <input type="date" id="dateToAccountsV2">
           </div>
           <button type="button" class="jobs-tb-btn" id="btnRefreshAccountsV2" title="重新加载当前筛选条件和当前页账号列表">刷新账号</button>
-          <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCheckSelectedLiveTopV2" onclick="checkSelectedLive()" title="重新登录选中账号；成功且未封号则标记正常，并刷新最新 AT/accessToken">查活</button>
 
         </div>
       </div>
       <div class="jobs-toolbar-v2" id="accountsToolbarV2">
         <div class="acc-v2-btn-group">
+          <span class="acc-v2-btn-group-title">账号状态</span>
+          <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCheckSelectedLiveV2" onclick="checkSelectedLive(null, this)" title="重新登录选中账号；成功且未封号则标记正常，并刷新最新 AT/accessToken">查活</button>
+        </div>
+        <div class="acc-v2-btn-group">
           <span class="acc-v2-btn-group-title">套餐/提链</span>
-          <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCheckSelectedLiveV2" onclick="checkSelectedLive()" title="重新登录选中账号；成功且未封号则标记正常，并刷新最新 AT/accessToken">查活</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCheckSelectedPlansV2" disabled title="查询选中账号当前套餐；free 账号会检查 Plus 试用资格">查套餐</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnExtractSelectedLinksV2" disabled title="给选中的 free(可Plus试用) 账号批量提链，类型按配置 PIX/UPI/KAKAO_PAY/IDEAL">提链</button>
           <button type="button" class="jobs-tb-btn" id="btnManageMasiCdksV2" title="导入、刷新和维护 Masi CDK 可选池与已用完池">CDK池</button>
