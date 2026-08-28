@@ -3710,6 +3710,22 @@ function _discountLabel(r) {
   if (!Number.isNaN(n)) return `${n}折扣`;
   return `${amount}折扣`;
 }
+function _planErrorSummary(r) {
+  const kind = String(r.plan_check_error_kind || '').toLowerCase();
+  if (kind === 'http_4xx' || kind === 'http_5xx') {
+    const status = Number(r.plan_check_http_status);
+    const inRange = Number.isInteger(status)
+      && (kind === 'http_4xx' ? status >= 400 && status < 500 : status >= 500 && status < 600);
+    if (inRange) return `HTTP ${status}`;
+    // 仅兼容缺少具体状态码的历史记录；新失败结果都会携带 status。
+    return kind === 'http_4xx' ? 'HTTP 4xx' : 'HTTP 5xx';
+  }
+  return ({
+    network_timeout: '网络请求超时',
+    network_connection: '网络连接失败',
+    response_format: '响应异常',
+  })[kind] || '';
+}
 function _planStatusMeta(r) {
   const labels = {
     queued: '查询排队中',
@@ -3720,8 +3736,11 @@ function _planStatusMeta(r) {
   const label = labels[(r.plan_check_status || '').toString()];
   const updated = r.plan_check_updated_at || '';
   if (!label || !updated) return '';
-  const text = `${label}|${_fmtPlanTime(updated)}`;
-  return `<div class="acc-v2-sub" title="${esc(text)}">${esc(text)}</div>`;
+  const time = _fmtPlanTime(updated);
+  const detailText = `${label}|${time}`;
+  const summary = r.plan_check_status === 'failed' ? _planErrorSummary(r) : '';
+  const text = summary ? `查询失败：${summary}|${time}` : detailText;
+  return `<div class="acc-v2-sub" title="${esc(detailText)}">${esc(text)}</div>`;
 }
 function _checkoutStatusMeta(r) {
   const labels = {

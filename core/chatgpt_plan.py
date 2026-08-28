@@ -57,6 +57,44 @@ def is_full_discount_percentage(value: Any) -> bool:
     return discount_percentage_state(value) == "full"
 
 
+def _is_timeout_exception(exc: BaseException) -> bool:
+    """识别不同 HTTP 客户端可能使用的超时异常类型。"""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, TimeoutError):
+            return True
+        name = type(current).__name__.lower()
+        if "timeout" in name or "timedout" in name:
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def classify_plan_check_error(
+    *,
+    http_status: int | None = None,
+    exc: BaseException | None = None,
+    response_format: bool = False,
+) -> str | None:
+    """将套餐查询最终失败归一为供 WebUI 使用的非敏感分类。"""
+    if response_format:
+        return "response_format"
+    try:
+        status = int(http_status) if http_status is not None else None
+    except (TypeError, ValueError):
+        status = None
+    if status is not None:
+        if 400 <= status < 500:
+            return "http_4xx"
+        if 500 <= status < 600:
+            return "http_5xx"
+    if exc is not None:
+        return "network_timeout" if _is_timeout_exception(exc) else "network_connection"
+    return None
+
+
 def _mask_proxy(proxy: str) -> str:
     """返回可用于日志/API 结果的代理摘要，不泄露用户名和密码。"""
     value = str(proxy or "").strip()
@@ -462,6 +500,7 @@ def check_account_plan(
                     "ok": False,
                     "checked_at": now_iso(),
                     "http_status": http_status,
+                    "plan_check_error_kind": classify_plan_check_error(http_status=http_status),
                     "error": "AT已过期/失效，请手动查活刷新" if is_auth_expired else f"HTTP {http_status}",
                     "response_preview": response_text[:500],
                     "retryable": _retryable_plan_error(http_status),
@@ -478,25 +517,53 @@ def check_account_plan(
                         "ok": False,
                         "checked_at": now_iso(),
                         "http_status": http_status,
+                        "plan_check_error_kind": classify_plan_check_error(
+                            http_status=http_status,
+                            response_format=True,
+                        ),
                         "error": "响应不是 JSON 对象",
                         "response_preview": response_text[:500],
                         "retryable": True,
                     }
                 else:
-                    parsed = parse_accounts_check(data, token=token)
-                    parsed["http_status"] = http_status
-                    parsed["attempt_count"] = attempt
-                    parsed["max_attempts"] = attempts
-                    parsed["request_timeout"] = timeout_seconds
-                    parsed["retryable"] = False
-                    parsed.update(route_meta)
-                    return parsed
+                    try:
+                        parsed = parse_accounts_check(data, token=token)
+                    except Exception as exc:
+                        last_result = {
+                            "ok": False,
+                            "checked_at": now_iso(),
+                            "http_status": http_status,
+                            "plan_check_error_kind": classify_plan_check_error(
+                                http_status=http_status,
+                                response_format=True,
+                            ),
+                            "error": f"{type(exc).__name__}: {exc}",
+                            "response_preview": response_text[:500],
+                            "retryable": True,
+                        }
+                    else:
+                        parsed["http_status"] = http_status
+                        parsed["attempt_count"] = attempt
+                        parsed["max_attempts"] = attempts
+                        parsed["request_timeout"] = timeout_seconds
+                        parsed["retryable"] = False
+                        parsed.update(route_meta)
+                        return parsed
         except Exception as exc:
             logger.debug("套餐查询失败: %s: %s", type(exc).__name__, exc, exc_info=True)
+            http_status = (
+                int(resp.status_code)
+                if resp is not None and getattr(resp, "status_code", None)
+                else None
+            )
             last_result = {
                 "ok": False,
                 "checked_at": now_iso(),
-                "http_status": int(resp.status_code) if resp is not None and getattr(resp, "status_code", None) else None,
+                "http_status": http_status,
+                "plan_check_error_kind": classify_plan_check_error(
+                    http_status=http_status,
+                    exc=exc,
+                ),
                 "error": f"{type(exc).__name__}: {exc}",
                 "retryable": True,
             }

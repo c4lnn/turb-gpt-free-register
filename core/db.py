@@ -57,6 +57,13 @@ _LEGACY_DATA_DIR = _PROJECT_ROOT / "data"
 _LOG_DIR = _PROJECT_ROOT / "注册日志"
 _PLAN_CHECK_STALE_SECONDS = 120
 _PLAN_CHECK_QUEUE_STALE_SECONDS = 1800
+_PLAN_CHECK_ERROR_KINDS = frozenset({
+    "network_timeout",
+    "network_connection",
+    "http_4xx",
+    "http_5xx",
+    "response_format",
+})
 _CHECKOUT_SESSION_STALE_SECONDS = 120
 _CHECKOUT_SESSION_QUEUE_STALE_SECONDS = 1800
 _MAILCOM_REGISTRATION_LEASE_STALE_SECONDS = 3600
@@ -1423,6 +1430,49 @@ def _find_by_email(rows: list[dict], email: str) -> dict | None:
     return next((r for r in rows if (r.get("email") or "").lower() == target), None)
 
 
+def _plan_check_error_kind_for_row(row: dict) -> str | None:
+    """返回套餐失败分类，并兼容没有新字段的历史记录。"""
+    current = str(row.get("plan_check_error_kind") or "").strip()
+    if current in _PLAN_CHECK_ERROR_KINDS:
+        return current
+
+    try:
+        http_status = int(row.get("plan_check_http_status"))
+    except (TypeError, ValueError):
+        http_status = None
+    if http_status is not None:
+        if 400 <= http_status < 500:
+            return "http_4xx"
+        if 500 <= http_status < 600:
+            return "http_5xx"
+
+    error = str(row.get("plan_check_error") or "")
+    lowered = error.lower()
+    if re.search(r"\bhttp\s*4\d{2}\b", lowered):
+        return "http_4xx"
+    if re.search(r"\bhttp\s*5\d{2}\b", lowered):
+        return "http_5xx"
+    if "timeout" in lowered or "timed out" in lowered or "超时" in error:
+        return "network_timeout"
+    if any(marker in error for marker in ("响应不是 JSON", "响应缺少", "未找到可解析的账号条目")):
+        return "response_format"
+    if any(marker in lowered for marker in ("invalid json", "jsondecodeerror")):
+        return "response_format"
+    if any(
+        marker in lowered
+        for marker in (
+            "connectionerror",
+            "proxyerror",
+            "sslerror",
+            "connection refused",
+            "connection reset",
+            "connect failed",
+        )
+    ):
+        return "network_connection"
+    return None
+
+
 def _decorate_account(row: dict, *, include_checkout_session_id: bool = True) -> dict:
     out = dict(row)
     if not include_checkout_session_id:
@@ -1486,6 +1536,12 @@ def _decorate_account(row: dict, *, include_checkout_session_id: bool = True) ->
             out["checkout_check_error"] = out["checkout_check_error_message"]
             out["checkout_check_ok"] = False
             out["checkout_check_stale"] = True
+    if out.get("plan_check_status") == "failed":
+        error_kind = _plan_check_error_kind_for_row(out)
+        if error_kind:
+            out["plan_check_error_kind"] = error_kind
+        else:
+            out.pop("plan_check_error_kind", None)
     out["copy_line"] = _account_line(out)
     return out
 
@@ -1880,6 +1936,7 @@ def claim_account_plan_check(
         row["plan_check_started_at"] = None
         row["plan_check_completed_at"] = None
         row["plan_check_error"] = None
+        row["plan_check_error_kind"] = None
         row["updated_at"] = now
         _save_accounts(accounts)
         return True
@@ -1897,6 +1954,7 @@ def mark_account_plan_check_running(acc_id: int) -> bool:
         row["plan_check_started_at"] = now
         row["plan_check_updated_at"] = now
         row["plan_check_error"] = None
+        row["plan_check_error_kind"] = None
         row["updated_at"] = now
         _save_accounts(accounts)
         return True
@@ -1914,6 +1972,7 @@ def recover_interrupted_plan_checks() -> int:
             row["plan_check_status"] = "failed"
             row["plan_check_ok"] = False
             row["plan_check_error"] = "WebUI 重启导致套餐查询中断，请重新查询"
+            row["plan_check_error_kind"] = None
             row["plan_check_completed_at"] = now
             row["plan_check_updated_at"] = now
             row["updated_at"] = now
@@ -1947,6 +2006,8 @@ def update_account_plan_check(acc_id: int | None = None, email: str | None = Non
         row["plan_check_updated_at"] = now
         row["plan_check_http_status"] = result.get("http_status")
         row["plan_check_error"] = None if ok else result.get("error")
+        error_kind = str(result.get("plan_check_error_kind") or "").strip()
+        row["plan_check_error_kind"] = error_kind if error_kind in _PLAN_CHECK_ERROR_KINDS else None
         # 这个标志表达本次响应是否足够完整，不能由 plus_trial_eligible 的
         # 普通布尔值替代；失败查询或非布尔资格必须明确写为不可判定。
         plus_trial_eligible = result.get("plus_trial_eligible")
@@ -2485,7 +2546,7 @@ def list_account_plan_check_statuses(
     fields = (
         "id", "email", "archived",
         "plan_type", "current_plan_type", "plus_trial_eligible", "trial_eligibility_known",
-        "plan_check_status", "plan_check_ok", "plan_check_error",
+        "plan_check_status", "plan_check_ok", "plan_check_error", "plan_check_error_kind", "plan_check_http_status",
         "plan_check_trigger", "plan_check_queued_at", "plan_check_started_at",
         "plan_check_completed_at", "plan_check_updated_at", "plan_checked_at", "plan_last_success_at",
         "plan_check_network_route", "plan_check_proxy_used", "plan_check_proxy_fallback_reason",
@@ -2553,6 +2614,8 @@ def list_account_plan_check_statuses(
                     "plan_check_status": row.get("plan_check_status"),
                     "plan_check_ok": row.get("plan_check_ok"),
                     "plan_check_error": row.get("plan_check_error"),
+                    "plan_check_error_kind": _plan_check_error_kind_for_row(row),
+                    "plan_check_http_status": row.get("plan_check_http_status"),
                     "plan_check_updated_at": row.get("plan_check_updated_at"),
                     "checkout_check_status": row.get("checkout_check_status"),
                     "checkout_check_ok": row.get("checkout_check_ok"),
