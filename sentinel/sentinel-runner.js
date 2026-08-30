@@ -7,6 +7,18 @@ const vm = require("node:vm");
 const crypto = require("node:crypto");
 const { performance } = require("node:perf_hooks");
 
+const DEFAULT_CHROME_MAJOR = "146";
+const DEFAULT_CHROME_FULL_VERSION = `${DEFAULT_CHROME_MAJOR}.0.0.0`;
+const DEFAULT_USER_AGENT =
+  `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ` +
+  `(KHTML, like Gecko) Chrome/${DEFAULT_CHROME_FULL_VERSION} Safari/537.36`;
+const DEFAULT_SEC_CH_UA =
+  `"Google Chrome";v="${DEFAULT_CHROME_MAJOR}", ` +
+  `"Chromium";v="${DEFAULT_CHROME_MAJOR}", "Not)A;Brand";v="24"`;
+const DEFAULT_SEC_CH_UA_FULL_VERSION_LIST =
+  `"Google Chrome";v="${DEFAULT_CHROME_FULL_VERSION}", ` +
+  `"Chromium";v="${DEFAULT_CHROME_FULL_VERSION}", "Not)A;Brand";v="24.0.0.0"`;
+
 function readArgs(argv) {
   const args = {};
   for (let i = 0; i < argv.length; i++) {
@@ -1319,7 +1331,7 @@ async function main(argv = process.argv.slice(2), writeOutput = true) {
         args["user-agent"],
         cfg("userAgent", "user_agent"),
         process.env.SENTINEL_USER_AGENT,
-      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+        DEFAULT_USER_AGENT,
       ),
     contentType,
     browserFamily: pick(args["browser-family"], cfg("browserFamily", "browser_family"), process.env.SENTINEL_BROWSER_FAMILY, "chrome"),
@@ -1340,11 +1352,11 @@ async function main(argv = process.argv.slice(2), writeOutput = true) {
         : Number.NaN,
     deviceMemory: Number(pick(args["device-memory"], cfg("deviceMemory", "device_memory"), process.env.SENTINEL_DEVICE_MEMORY, 8)),
     devicePixelRatio: Number(pick(args["device-pixel-ratio"], cfg("devicePixelRatio", "device_pixel_ratio"), process.env.SENTINEL_DEVICE_PIXEL_RATIO, 2)),
-    chromeMajor: pick(args["chrome-major"], cfg("chromeMajor", "chrome_major"), process.env.SENTINEL_CHROME_MAJOR, "149"),
-    chromeFullVersion: pick(args["chrome-full-version"], cfg("chromeFullVersion", "chrome_full_version"), process.env.SENTINEL_CHROME_FULL_VERSION, "149.0.0.0"),
-    secChUa: pick(args["sec-ch-ua"], cfg("secChUa", "sec_ch_ua"), process.env.SENTINEL_SEC_CH_UA, '"Google Chrome";v="149", "Chromium";v="149", "Not)A;Brand";v="24"'),
+    chromeMajor: pick(args["chrome-major"], cfg("chromeMajor", "chrome_major"), process.env.SENTINEL_CHROME_MAJOR, DEFAULT_CHROME_MAJOR),
+    chromeFullVersion: pick(args["chrome-full-version"], cfg("chromeFullVersion", "chrome_full_version"), process.env.SENTINEL_CHROME_FULL_VERSION, DEFAULT_CHROME_FULL_VERSION),
+    secChUa: pick(args["sec-ch-ua"], cfg("secChUa", "sec_ch_ua"), process.env.SENTINEL_SEC_CH_UA, DEFAULT_SEC_CH_UA),
     secChUaPlatform: String(pick(args["sec-ch-ua-platform"], cfg("secChUaPlatform", "sec_ch_ua_platform"), process.env.SENTINEL_SEC_CH_UA_PLATFORM, "macOS")).replace(/^"|"$/g, ""),
-    secChUaFullVersionList: pick(args["sec-ch-ua-full-version-list"], cfg("secChUaFullVersionList", "sec_ch_ua_full_version_list"), process.env.SENTINEL_SEC_CH_UA_FULL_VERSION_LIST, ""),
+    secChUaFullVersionList: pick(args["sec-ch-ua-full-version-list"], cfg("secChUaFullVersionList", "sec_ch_ua_full_version_list"), process.env.SENTINEL_SEC_CH_UA_FULL_VERSION_LIST, DEFAULT_SEC_CH_UA_FULL_VERSION_LIST),
     secChUaPlatformVersion: String(pick(args["sec-ch-ua-platform-version"], cfg("secChUaPlatformVersion", "sec_ch_ua_platform_version"), process.env.SENTINEL_SEC_CH_UA_PLATFORM_VERSION, "15.7.0")).replace(/^"|"$/g, ""),
     secChUaArch: String(pick(args["sec-ch-ua-arch"], cfg("secChUaArch", "sec_ch_ua_arch"), process.env.SENTINEL_SEC_CH_UA_ARCH, "arm")).replace(/^"|"$/g, ""),
     secChUaBitness: String(pick(args["sec-ch-ua-bitness"], cfg("secChUaBitness", "sec_ch_ua_bitness"), process.env.SENTINEL_SEC_CH_UA_BITNESS, "64")).replace(/^"|"$/g, ""),
@@ -1435,4 +1447,9 @@ if (require.main === module) {
 module.exports = {
   main,
   normalizeChallenge,
+  DEFAULT_CHROME_MAJOR,
+  DEFAULT_CHROME_FULL_VERSION,
+  DEFAULT_USER_AGENT,
+  DEFAULT_SEC_CH_UA,
+  DEFAULT_SEC_CH_UA_FULL_VERSION_LIST,
 };

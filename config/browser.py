@@ -20,21 +20,21 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 
-def _latest_chrome_major(default: str = "149") -> str:
-    """兼容旧模块导入；默认按 2026-07-19 抓包里的 Chrome 149 画像。"""
+def _latest_chrome_major(default: str = "146") -> str:
+    """兼容旧模块导入；当前 native curl_cffi target 使用 Chrome 146。"""
     return default
 
 
-CHROME_MAJOR = "149"
-CHROME_FULL_VERSION = "149.0.0.0"
+CHROME_MAJOR = _latest_chrome_major()
+CHROME_FULL_VERSION = f"{CHROME_MAJOR}.0.0.0"
 
 SAFARI_VERSION = ""
 SAFARI_WEBKIT_VERSION = "537.36"
 MAC_OS_UA_VERSION = "10_15_7"
 
 # ---------- curl_cffi 模拟浏览器 ----------
-# curl_cffi 0.15 当前最高内置到 chrome146；HTTP/JS 画像按抓包补齐到 Chrome/149。
-IMPERSONATE = "chrome146"
+# curl_cffi 当前可用的 native target 与 HTTP/JS 画像统一为 Chrome 146。
+IMPERSONATE = f"chrome{CHROME_MAJOR}"
 
 # ---------- 桌面 Chrome 画像 ----------
 BROWSER_FAMILY = "chrome"
@@ -49,8 +49,8 @@ USER_AGENT = (
     f"Chrome/{CHROME_FULL_VERSION} Safari/{SAFARI_WEBKIT_VERSION}"
 )
 
-SEC_CH_UA = '"Google Chrome";v="149", "Chromium";v="149", "Not)A;Brand";v="24"'
-SEC_CH_UA_FULL_VERSION_LIST = '"Google Chrome";v="149.0.0.0", "Chromium";v="149.0.0.0", "Not)A;Brand";v="24.0.0.0"'
+SEC_CH_UA = f'"Google Chrome";v="{CHROME_MAJOR}", "Chromium";v="{CHROME_MAJOR}", "Not)A;Brand";v="24"'
+SEC_CH_UA_FULL_VERSION_LIST = f'"Google Chrome";v="{CHROME_FULL_VERSION}", "Chromium";v="{CHROME_FULL_VERSION}", "Not)A;Brand";v="24.0.0.0"'
 SEC_CH_UA_PLATFORM = '"macOS"'
 SEC_CH_UA_PLATFORM_VERSION = '"15.7.0"'
 SEC_CH_UA_MOBILE = "?0"
@@ -124,27 +124,59 @@ def _offset_minutes_for_timezone(tz_name: str, default: int) -> int:
     return int(default)
 
 
+def _default_locale_profile_key() -> str:
+    """返回有效的默认地区画像 key；配置无效时使用内置 jp 画像。"""
+    configured = str(BROWSER_LOCALE_PROFILE or "").strip().lower()
+    return configured if configured in BROWSER_LOCALE_PROFILES else "jp"
+
+
+def _geo_country(geo: dict | None) -> str:
+    if not isinstance(geo, dict):
+        return ""
+    return str(geo.get("country") or geo.get("country_code") or "").strip().upper()
+
+
+def _mapped_locale_profile_key(geo: dict | None) -> str | None:
+    """返回已命中的地区画像 key；未知国家不返回仅凭时区推断的结果。"""
+    if not isinstance(geo, dict) or not AUTO_BROWSER_LOCALE_FROM_IP:
+        return None
+    mapped = str(COUNTRY_LOCALE_PROFILE_MAP.get(_geo_country(geo)) or "").strip().lower()
+    return mapped if mapped in BROWSER_LOCALE_PROFILES else None
+
+
 def _locale_profile_key_from_geo(geo: dict | None) -> str:
-    if not geo or not AUTO_BROWSER_LOCALE_FROM_IP:
-        return BROWSER_LOCALE_PROFILE
-    country = str(geo.get("country") or geo.get("country_code") or "").upper()
-    return COUNTRY_LOCALE_PROFILE_MAP.get(country, BROWSER_LOCALE_PROFILE)
+    return _mapped_locale_profile_key(geo) or _default_locale_profile_key()
 
 
 def _build_locale_from_geo(geo: dict | None) -> dict:
     key = _locale_profile_key_from_geo(geo)
-    locale = dict(BROWSER_LOCALE_PROFILES.get(key, BROWSER_LOCALE_PROFILES[BROWSER_LOCALE_PROFILE]))
-    if geo and AUTO_BROWSER_LOCALE_FROM_IP:
+    locale = dict(BROWSER_LOCALE_PROFILES[key])
+
+    # GeoIP 时区只有在国家已命中、IANA 值有效且名称完整时才整体覆盖；
+    # 未知国家的时区不能脱离语言画像单独生效。
+    if _mapped_locale_profile_key(geo):
         tz = str(geo.get("timezone") or "").strip()
-        if tz:
-            locale["timezone_iana"] = tz
-            locale["timezone_offset_minutes"] = _offset_minutes_for_timezone(tz, int(locale["timezone_offset_minutes"]))
-            locale["timezone_name"] = TIMEZONE_NAME_BY_IANA.get(tz, locale.get("timezone_name", ""))
+        tz_name = TIMEZONE_NAME_BY_IANA.get(tz, "")
+        if tz and tz_name:
+            try:
+                ZoneInfo(tz)
+            except Exception:
+                pass
+            else:
+                locale.update({
+                    "timezone_iana": tz,
+                    "timezone_offset_minutes": _offset_minutes_for_timezone(tz, int(locale["timezone_offset_minutes"])),
+                    "timezone_name": tz_name,
+                })
     locale["locale_profile"] = key
     return locale
 
 
-_LOCALE = BROWSER_LOCALE_PROFILES.get(BROWSER_LOCALE_PROFILE, BROWSER_LOCALE_PROFILES["jp"])
+# Apply overrides before deriving module-level locale constants so direct imports
+# and BrowserSession fallback behavior observe the same configured profile.
+apply_env_overrides(globals(), {'BROWSER_LOCALE_PROFILE': 'str', 'AUTO_BROWSER_LOCALE_FROM_IP': 'bool', 'IP_GEO_TIMEOUT': 'float', 'REJECT_CLOUD_PROXY': 'bool'})
+
+_LOCALE = BROWSER_LOCALE_PROFILES[_default_locale_profile_key()]
 NAVIGATOR_LANGUAGE = _LOCALE["navigator_language"]
 NAVIGATOR_LANGUAGES = list(_LOCALE["navigator_languages"])
 ACCEPT_LANGUAGE = _LOCALE["accept_language"]
@@ -284,6 +316,17 @@ def validate_browser_profile(profile: dict) -> list[str]:
             issues.append("Safari 不应发送 Chromium Client Hints")
     elif f"Chrome/{profile.get('chrome_full_version')}" not in ua:
         issues.append("UA 与 chrome_full_version 不一致")
+    if family != "safari":
+        chrome_major = str(profile.get("chrome_major") or "")
+        chrome_full_version = str(profile.get("chrome_full_version") or "")
+        sec_ch_ua = str(profile.get("sec_ch_ua") or "")
+        sec_ch_ua_full = str(profile.get("sec_ch_ua_full_version_list") or "")
+        if chrome_major and f'v="{chrome_major}"' not in sec_ch_ua:
+            issues.append("sec-ch-ua 与 chrome_major 不一致")
+        if chrome_full_version and f'v="{chrome_full_version}"' not in sec_ch_ua_full:
+            issues.append("sec-ch-ua-full-version-list 与 chrome_full_version 不一致")
+        if chrome_major and IMPERSONATE != f"chrome{chrome_major}":
+            issues.append("curl_cffi impersonate 与 chrome_major 不一致")
     if profile.get("browser_os") == "macOS":
         if "Macintosh; Intel Mac OS X" not in ua:
             issues.append("macOS 画像但 UA 不是 Macintosh")
@@ -298,6 +341,3 @@ def validate_browser_profile(profile: dict) -> list[str]:
         issues.append("navigator.language 不在 navigator.languages 中")
     # requestIdleCallback 是否暴露由画像决定。
     return issues
-
-# ---- .env overrides for WebUI editable fields ----
-apply_env_overrides(globals(), {'BROWSER_LOCALE_PROFILE': 'str', 'AUTO_BROWSER_LOCALE_FROM_IP': 'bool', 'IP_GEO_TIMEOUT': 'float', 'REJECT_CLOUD_PROXY': 'bool'})

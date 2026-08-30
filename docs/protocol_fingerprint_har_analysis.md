@@ -2,12 +2,15 @@
 
 来源文件：`Default-all-domains-1784468371563.json`，Reqorder HAR，抓包时间窗口：2026-07-19 21:36:16 ~ 21:37:30（Asia/Shanghai）。
 
+> 说明：本文中的 Chrome 149、UA 和 p 数组值属于上述历史 HAR 样本的事实记录。当前项目运行时已按 native `curl_cffi` 能力统一使用 Chrome 146；历史样本字段不代表当前默认配置。
+
 ## 1. 总览
 
 - 总请求：236
 - 域名分布：`chatgpt.com` 125、`browser-intake-datadoghq.com` 107、`auth.openai.com` 2、`ab.chatgpt.com` 1、测试回调 1
 - 主要状态：200 共 112、202 共 111、0 共 13（Datadog/octet-stream 中断或被采集器标记）
-- 主浏览器画像：macOS + Chrome 149；语言/时区由代理出口 IP 自动决定，本 HAR 样本为 zh-CN + Asia/Shanghai
+- HAR 样本主浏览器画像：macOS + Chrome 149；语言/时区由代理出口 IP 自动决定，本 HAR 样本为 zh-CN + Asia/Shanghai
+- 当前 OpenAI 协议运行时画像：macOS + Chrome 146；语言/时区仍由同一 BrowserSession 的出口地区画像决定
 - ChatGPT 前端版本：`prod-fb4a8a2a751dfec391053cfd7b01c52699ccf78c`
 - OAI build number：`8370486`
 - Sentinel SDK：`20260219f9f6`
@@ -105,7 +108,8 @@ HAR 没有直接保存 `.js` 响应正文，但从 Sentinel `p[5]` 还原出被�
   - 新增 `OAI_CLIENT_BUILD_NUMBER=8370486`、`OAI_CLIENT_VERSION`
   - 补齐 Statsig/AB SDK key/version 常量。
 - `config/browser.py`
-  - 切到 Chrome 149 HTTP/JS 画像：UA、Client Hints、动态语言/时区；窗口/屏幕尺寸从画像池随机选择，HAR 的 `1680x1050` / `hardwareConcurrency=6` / `jsHeapSizeLimit=4395630592` 只作为候选之一。
+  - 当前运行时统一使用 Chrome 146 HTTP/JS 画像：native `curl_cffi` target、UA、Client Hints 和 Sentinel 参数来自同一版本来源；窗口/屏幕尺寸从画像池随机选择，HAR 的 `1680x1050` / `hardwareConcurrency=6` / `jsHeapSizeLimit=4395630592` 只作为候选之一。
+  - HAR 中的 Chrome 149 UA/Client Hints 仅作为历史样本保留，不作为当前运行时配置。
   - 补齐 `createAuctionNonce`、`clearOriginJoinedAdInterestGroups`、`login`、`locationbar`、`scrollX`、`ondevicemotion` 等 HAR 出现的采样键。
 - `core/session.py`
   - 所有前端 API 请求统一补 `oai-client-build-number`、`oai-client-version`、`oai-session-id`。
@@ -114,6 +118,7 @@ HAR 没有直接保存 `.js` 响应正文，但从 Sentinel `p[5]` 还原出被�
   - p[11] 候选补齐 `__reactContainer$...`。
 - `sentinel/sentinel-runner.js`
   - Chrome Navigator/DOM/Window 样本补齐。
+  - Node Runner 的版本默认值与 Python 画像统一为 Chrome 146。
   - Auth Sentinel token 支持 `data-build=null` 形态。
   - 默认 SDK src 对齐 `https://sentinel.openai.com/sentinel/20260219f9f6/sdk.js`。
 
@@ -131,7 +136,7 @@ HAR 没有直接保存 `.js` 响应正文，但从 Sentinel `p[5]` 还原出被�
 AUTO_BROWSER_LOCALE_FROM_IP="True"
 ```
 
-`BROWSER_LOCALE_PROFILE="jp"` 仅作为 GeoIP 检测失败时的兜底画像；正常情况下会根据出口国家/时区生成 `Accept-Language`、`navigator.language`、`navigator.languages`、`Date`/`Intl` 时区。
+`BROWSER_LOCALE_PROFILE="jp"` 仅作为 GeoIP 检测失败、国家未命中映射或地区配置无效时的整体兜底画像；正常情况下会先按出口国家选择完整语言画像，再在国家已命中且 IANA 时区有效时整体更新时区字段。未知国家不会只覆盖时区而保留另一套语言画像。
 
 ## 8. runner 继续补齐项
 
@@ -175,7 +180,8 @@ AUTO_BROWSER_LOCALE_FROM_IP="True"
 
 5. **兜底地区**
    - 代理 GeoIP 检测失败时兜底日本：`BROWSER_LOCALE_PROFILE="jp"`。
-   - GeoIP 成功时仍按出口 IP 自动设置语言/时区。
+   - 国家未命中地区映射时，语言、`Accept-Language`、IANA 时区、偏移和名称整体回退到默认画像。
+   - 国家命中且 GeoIP 时区有效时，仍按出口 IP 自动设置语言和完整时区字段；无效时区保留映射画像默认值。
 
 ### 当前仍未强制补的链路
 
