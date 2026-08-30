@@ -1474,7 +1474,14 @@ def _plan_check_error_kind_for_row(row: dict) -> str | None:
 
 
 def _decorate_account(row: dict, *, include_checkout_session_id: bool = True) -> dict:
-    out = dict(row)
+    out = {
+        key: value
+        for key, value in dict(row).items()
+        if not (
+            str(key).lower().startswith("codex_agent_")
+            or str(key).lower() in {"agent_identity", "agent_runtime_id", "agent_private_key"}
+        )
+    }
     if not include_checkout_session_id:
         # 完整 Checkout Session ID 只允许留在服务端账号 JSON 和内部任务边界。
         out.pop("checkout_session_id", None)
@@ -1784,120 +1791,6 @@ def update_account_codex_status(email: str, codex_status: str, codex_error: str 
         row["updated_at"] = _now()
         _save_accounts(accounts)
         return True
-
-
-def claim_account_codex_agent(acc_id: int, trigger: str = "manual") -> bool:
-    """原子占用账号 Codex Agent Token 生成任务；已有未超时任务时返回 False。"""
-    with _LOCK:
-        accounts = _load_accounts()
-        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
-        if row is None:
-            return False
-        current_status = row.get("codex_agent_status")
-        if current_status in {"queued", "running"}:
-            try:
-                stamp_key = "codex_agent_queued_at" if current_status == "queued" else "codex_agent_started_at"
-                stale_after = _PLAN_CHECK_QUEUE_STALE_SECONDS if current_status == "queued" else _PLAN_CHECK_STALE_SECONDS
-                started_at = datetime.fromisoformat(str(row.get(stamp_key) or ""))
-                if (datetime.now() - started_at).total_seconds() < stale_after:
-                    return False
-            except (TypeError, ValueError):
-                pass
-        now = _now()
-        row["codex_agent_status"] = "queued"
-        row["codex_agent_ok"] = False
-        row["codex_agent_trigger"] = str(trigger or "manual")
-        row["codex_agent_queued_at"] = now
-        row["codex_agent_started_at"] = None
-        row["codex_agent_completed_at"] = None
-        row["codex_agent_error"] = None
-        row["codex_agent_message"] = "已入队"
-        row["updated_at"] = now
-        _save_accounts(accounts)
-        return True
-
-
-def mark_account_codex_agent_running(acc_id: int) -> bool:
-    """把 Codex Agent Token 生成任务标记为运行中。"""
-    with _LOCK:
-        accounts = _load_accounts()
-        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
-        if row is None or row.get("codex_agent_status") not in {"queued", "running"}:
-            return False
-        row["codex_agent_status"] = "running"
-        row["codex_agent_started_at"] = _now()
-        row["codex_agent_error"] = None
-        row["codex_agent_message"] = "正在生成 Codex Agent Token"
-        row["updated_at"] = _now()
-        _save_accounts(accounts)
-        return True
-
-
-def update_account_codex_agent(acc_id: int, result: dict | None = None) -> bool:
-    """更新账号 Codex Agent Token 生成结果/进度。"""
-    result = result or {}
-    with _LOCK:
-        accounts = _load_accounts()
-        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
-        if row is None:
-            return False
-        status = str(result.get("status") or ("success" if result.get("ok") else "failed"))
-        ok = bool(result.get("ok")) and status == "success"
-        row["codex_agent_status"] = status
-        row["codex_agent_ok"] = ok
-        row["codex_agent_checked_at"] = result.get("checked_at") or _now()
-        if status in {"success", "failed", "stopped"}:
-            row["codex_agent_completed_at"] = _now()
-        row["codex_agent_error"] = None if ok or status == "running" else result.get("error")
-        if result.get("message") is not None:
-            row["codex_agent_message"] = result.get("message")
-        if result.get("agent_runtime_id") is not None:
-            row["codex_agent_runtime_id"] = result.get("agent_runtime_id")
-        if result.get("auth_path") is not None:
-            row["codex_agent_auth_path"] = result.get("auth_path")
-        if isinstance(result.get("auth_json"), dict):
-            row["codex_agent_token"] = json.dumps(result.get("auth_json"), ensure_ascii=False)
-        for _k in (
-            "codex_agent_network_route",
-            "codex_agent_proxy_mode",
-            "codex_agent_proxy_used",
-            "codex_agent_proxy_fallback_reason",
-            "codex_agent_device_id",
-            "codex_agent_oai_session_id",
-            "codex_agent_attempt_count",
-            "codex_agent_max_attempts",
-            "codex_agent_request_timeout",
-            "codex_agent_sub2api_path",
-            "codex_agent_sub2api_url",
-            "codex_agent_sub2api_mode",
-            "codex_agent_sub2api_total",
-        ):
-            src_key = _k.replace("codex_agent_", "", 1)
-            if result.get(src_key) is not None:
-                row[_k] = result.get(src_key)
-        row["updated_at"] = _now()
-        _save_accounts(accounts)
-        return True
-
-
-def recover_interrupted_codex_agents() -> int:
-    """服务启动时恢复上次进程中断的 Codex Agent 任务状态。"""
-    with _LOCK:
-        accounts = _load_accounts()
-        recovered = 0
-        now = _now()
-        for row in accounts:
-            if row.get("codex_agent_status") not in {"queued", "running"}:
-                continue
-            row["codex_agent_status"] = "failed"
-            row["codex_agent_ok"] = False
-            row["codex_agent_error"] = "WebUI 重启导致 Codex Agent Token 任务中断，请重新生成"
-            row["codex_agent_completed_at"] = now
-            row["updated_at"] = now
-            recovered += 1
-        if recovered:
-            _save_accounts(accounts)
-        return recovered
 
 
 def claim_account_plan_check(
@@ -2570,9 +2463,6 @@ def list_account_plan_check_statuses(
         "extract_link_image_url_png", "extract_link_image_url_svg",
         "extract_link_expires_at",
         "codex_status", "codex_error",
-        "codex_agent_status", "codex_agent_message",
-        "codex_agent_runtime_id", "codex_agent_sub2api_url",
-        "codex_agent_sub2api_mode", "codex_agent_sub2api_total",
     )
     with _LOCK:
         all_rows = _filtered_decorated_accounts(
@@ -2599,7 +2489,6 @@ def list_account_plan_check_statuses(
             if not any(x in plan for x in ("plus", "pro", "team", "go")):
                 for expire_key in ("expires_at", "plan_expires_at", "plan_renews_at", "renews_at"):
                     item.pop(expire_key, None)
-            item["codex_agent_has_token"] = bool(str(row.get("codex_agent_token") or "").strip())
             item["has_access_token"] = bool(str(row.get("access_token") or "").strip())
             items.append(item)
         latest = max((str(row.get("updated_at") or "") for row in all_rows), default="")
@@ -2634,7 +2523,6 @@ def list_account_plan_check_statuses(
                     "trial_eligibility_known": row.get("trial_eligibility_known"),
                     "extract_link_status": row.get("extract_link_status"),
                     "codex_status": row.get("codex_status"),
-                    "codex_agent_status": row.get("codex_agent_status"),
                 }
                 for row in all_rows
             ],

@@ -2,20 +2,8 @@
 """sub2api 对接配置。"""
 from config.env_loader import apply_env_overrides
 
-# 生成 Codex Agent Token 成功后，是否自动同步到 sub2api。
-SUB2API_AUTO_EXPORT: bool = True
-
-# 同步模式：
-# api  = 直接调用 sub2api 接口上传
-# file = 只追加/更新本地 sub2api.json
-# both = 接口上传成功/失败不影响本地文件同步
-SUB2API_SYNC_MODE: str = "api"
-
-# sub2api API 基址；Agent Token 上传和 Codex OAuth 都复用这个地址。
+# sub2api API 基址；Codex OAuth 使用这个地址。
 SUB2API_API_BASE: str = ""
-
-# 兼容旧配置：Agent Token 直接上传完整 URL。
-SUB2API_API_URL: str = ""
 
 # sub2api 管理接口 API Key；为空则不带鉴权头。
 SUB2API_API_KEY: str = ""
@@ -31,13 +19,6 @@ SUB2API_API_AUTH_PREFIX: str = ""
 
 # 上传超时秒数。
 SUB2API_API_TIMEOUT: int = 20
-
-# 本地 sub2api 配置文件输出路径；相对路径按项目根目录解析。
-SUB2API_OUTPUT_PATH: str = "sub2api.json"
-
-# 可选代理键；写入 account.proxy_key，并在 sub2api.json proxies 为空时初始化 proxies[0].proxy_key。
-SUB2API_PROXY_KEY: str = ""
-
 
 # ============================================================
 # Codex OAuth 授权对接 sub2
@@ -70,17 +51,12 @@ SUB2_CODEX_AUTH_PREFIX: str = ""
 SUB2_CODEX_CALLBACK_PAYLOAD_MODE: str = "create_from_oauth"
 
 apply_env_overrides(globals(), {
-    'SUB2API_AUTO_EXPORT': 'bool',
-    'SUB2API_SYNC_MODE': 'str',
     'SUB2API_API_BASE': 'str',
-    'SUB2API_API_URL': 'str',
     'SUB2API_API_KEY': 'str',
     'SUB2API_API_TOKEN': 'str',
     'SUB2API_API_AUTH_HEADER': 'str',
     'SUB2API_API_AUTH_PREFIX': 'str',
     'SUB2API_API_TIMEOUT': 'int',
-    'SUB2API_OUTPUT_PATH': 'str',
-    'SUB2API_PROXY_KEY': 'str',
     'SUB2_CODEX_API_BASE': 'str',
     'SUB2_CODEX_AUTH_URL_PATH': 'str',
     'SUB2_CODEX_CALLBACK_PATH': 'str',

@@ -19,7 +19,6 @@ class MailComWebUITests(unittest.TestCase):
             "recover_interrupted_checkout_sessions",
             "recover_interrupted_extract_links",
             "recover_interrupted_live_checks",
-            "recover_interrupted_codex_agents",
         ):
             self.stack.enter_context(patch.object(web_app.db, name, return_value=0))
         self.temp = tempfile.TemporaryDirectory()

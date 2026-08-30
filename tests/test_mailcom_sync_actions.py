@@ -88,7 +88,6 @@ class MailComSyncActionTests(unittest.TestCase):
             "recover_interrupted_checkout_sessions",
             "recover_interrupted_extract_links",
             "recover_interrupted_live_checks",
-            "recover_interrupted_codex_agents",
         ):
             patcher = patch.object(web_app.db, name, return_value=0)
             patcher.start()

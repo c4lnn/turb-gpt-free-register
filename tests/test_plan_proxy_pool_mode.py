@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 import json
-import tempfile
 import unittest
 from contextlib import ExitStack
 from pathlib import Path
@@ -8,7 +7,7 @@ from unittest.mock import Mock, patch
 
 from config import env_loader
 from config import proxy as proxy_cfg
-from core import chatgpt_plan, codex_agent_service, live_check_service
+from core import chatgpt_plan, live_check_service
 from webui import app as web_app
 from webui import config_editor
 
@@ -160,66 +159,6 @@ class PlanProxyPoolConsumerTests(unittest.TestCase):
         self.assertEqual(result["network_route"], "proxy")
         self.assertNotIn("allow_direct_fallback", result)
 
-    def test_agent_retry_reuses_selected_pool_proxy_and_public_metadata(self):
-        created_with = []
-
-        class FakeSession:
-            def close(self):
-                return None
-
-        class FakeBrowserSession:
-            def __init__(self, proxy=None, detect_exit_geo=True):
-                created_with.append(proxy)
-                self.device_id = "device-test"
-                self.oai_session_id = "session-test"
-                self.browser_profile = {"user_agent": "test-agent"}
-                self.session = FakeSession()
-
-        identity = {
-            "agent_identity": {"agent_runtime_id": "runtime-test"},
-        }
-        with tempfile.TemporaryDirectory() as tempdir:
-            with (
-                patch.object(codex_agent_service.db, "mark_account_codex_agent_running", return_value=True),
-                patch.object(codex_agent_service.db, "update_account_codex_agent", return_value=True),
-                patch.object(codex_agent_service, "_OUTPUT_DIR", Path(tempdir)),
-                patch.object(codex_agent_service, "_agent_request_settings", return_value=(10.0, 2, 0.0)),
-                patch.object(codex_agent_service, "_wait_for_rate_slot"),
-                patch.object(codex_agent_service, "_retryable_agent_error", return_value=True),
-                patch.object(codex_agent_service, "_QUEUE_SLOTS", Mock()),
-                patch.object(
-                    chatgpt_plan,
-                    "resolve_plan_check_route",
-                    return_value={
-                        "proxy": "http://pool.example:8080",
-                        "proxy_mode": "pool",
-                        "network_route": "proxy",
-                        "proxy_used": "http://pool.example:8080",
-                        "proxy_fallback_reason": None,
-                        "allow_direct_fallback": False,
-                    },
-                ),
-                patch("core.session.BrowserSession", FakeBrowserSession),
-                patch(
-                    "core.codex_agent.create_codex_agent_identity",
-                    side_effect=[TimeoutError("temporary"), identity],
-                ),
-                patch("config.sub2api.SUB2API_AUTO_EXPORT", False),
-            ):
-                result = codex_agent_service._run_generate(
-                    account_id=1,
-                    email="user@example.com",
-                    access_token="at-test",
-                    trigger="manual",
-                    verify_task=False,
-                )
-
-        self.assertTrue(result["ok"])
-        self.assertEqual(created_with, ["http://pool.example:8080", "http://pool.example:8080"])
-        self.assertEqual(result["proxy_mode"], "pool")
-        self.assertEqual(result["network_route"], "proxy")
-        self.assertNotIn("allow_direct_fallback", result)
-
     def test_live_check_pool_403_does_not_fallback_direct(self):
         first = {"ok": False, "status": "failed", "error": "HTTP 403"}
         checker = Mock(return_value=first)
@@ -300,7 +239,6 @@ class PlanProxyPoolConfigTests(unittest.TestCase):
             "recover_interrupted_checkout_sessions",
             "recover_interrupted_extract_links",
             "recover_interrupted_live_checks",
-            "recover_interrupted_codex_agents",
         ):
             self.recovery_patches.enter_context(patch.object(web_app.db, name, return_value=0))
         self.client = web_app.create_app(auth_code="test-auth").test_client()

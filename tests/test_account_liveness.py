@@ -132,7 +132,6 @@ class AccountLivenessWebUiTests(unittest.TestCase):
             "recover_interrupted_plan_checks",
             "recover_interrupted_extract_links",
             "recover_interrupted_live_checks",
-            "recover_interrupted_codex_agents",
         ):
             self.recovery_patches.enter_context(patch.object(web_app.db, name, return_value=0))
         self.client = web_app.create_app(auth_code="test-auth").test_client()
