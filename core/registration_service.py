@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from core import codex_retry_service, db
+from core.account_status_contracts import codex_auth_status
 
 logger = logging.getLogger(__name__)
 
@@ -562,14 +563,14 @@ def get_retry_info(job: dict, *, account_snapshot: dict | None = None) -> dict:
 
     account = _account_for_job(job, account_snapshot=account_snapshot)
     if account and job.get("account_id") is not None and status in ("failed", "stopped"):
-        info["display_status"] = "success" if (account.get("codex_status") or "") == "success" else "partial_success"
+        info["display_status"] = "success" if codex_auth_status(account) == "success" else "partial_success"
 
     if account:
-        codex_status = str(account.get("codex_status") or "")
-        if codex_status == "deactivated":
+        auth_status = codex_auth_status(account)
+        if str(account.get("live_check_status") or "").lower() == "deactivated":
             info["retry_reason"] = "账号已废号，不能补跑 Codex"
             return info
-        if codex_status == "success":
+        if auth_status == "success":
             info["retry_reason"] = "账号和 Codex 授权均已完成"
             return info
         info.update({

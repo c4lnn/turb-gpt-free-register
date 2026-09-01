@@ -25,6 +25,10 @@ from core import codex_retry_service, db, plan_check_service, checkout_session_s
 from webui.auth import init_auth, register_auth_routes
 from core import registration_service as svc
 from core.email_pool_status import EMAIL_POOL_STATUSES, validate_status, EmailPoolStatusError
+from core.account_status_contracts import build_account_status_contract, mailcom_cleanup_capabilities
+from core.account_status_contracts import (
+    CODEX_AUTH_STATUSES, CODEX_OPERATION_STATUSES, LIVE_CHECK_STATUSES, PLAN_CATEGORY_CODES,
+)
 from webui import config_editor
 
 logger = logging.getLogger(__name__)
@@ -46,6 +50,33 @@ def _pool_status_arg(raw: str | None) -> tuple[str | None, str | None]:
         return validate_status(value), None
     except EmailPoolStatusError as exc:
         return None, str(exc)
+
+
+def _account_status_filter_args() -> tuple[dict[str, str], str | None]:
+    plan = str(request.args.get("plan_category") or request.args.get("plan") or "").strip().lower()
+    auth = str(request.args.get("codex_auth_status") or "").strip().lower()
+    operation = str(request.args.get("codex_operation_status") or "").strip().lower()
+    live = str(request.args.get("live_check_status") or "").strip().lower()
+    legacy = str(request.args.get("codex_status") or "").strip().lower()
+    if plan and plan not in set(PLAN_CATEGORY_CODES) | {"all", "any", "free", "plus"}:
+        return {}, "plan_category 非法"
+    if auth and auth not in CODEX_AUTH_STATUSES:
+        return {}, "codex_auth_status 非法"
+    if operation and operation not in CODEX_OPERATION_STATUSES:
+        return {}, "codex_operation_status 非法"
+    if live and live not in LIVE_CHECK_STATUSES:
+        return {}, "live_check_status 非法"
+    if legacy and legacy not in set(CODEX_AUTH_STATUSES) | {"retrying", "stopped", "cancelled", "canceled", "deactivated"}:
+        return {}, "codex_status 非法"
+    if legacy and any((auth, operation, live)):
+        return {}, "codex_status 不能与新状态筛选参数同时提交"
+    return {
+        "plan_filter": plan,
+        "codex_auth_status_filter": auth,
+        "codex_operation_status_filter": operation,
+        "live_check_status_filter": live,
+        "codex_status_filter": legacy,
+    }, None
 
 
 def _lifecycle_error_response(exc: db.EmailPoolLifecycleError):
@@ -199,7 +230,12 @@ def _compact_account_for_list(row: dict) -> dict:
         value = row.get(key)
         if value is not None and value != "":
             out[key] = value
-    out["extract_link_resumable"] = db.account_extract_resumable(row)
+    contract_row = dict(row)
+    contract_row["extract_link_resumable"] = db.account_extract_resumable(row)
+    # 兼容现有 WebUI；规范能力同时通过 extract_link_capabilities 返回。
+    out["extract_link_resumable"] = contract_row["extract_link_resumable"]
+    out.update(build_account_status_contract(contract_row))
+    out["extract_link_capabilities"] = db.account_extract_capabilities(row)
     plan = str(row.get("current_plan_type") or row.get("plan_type") or "").lower()
     if any(x in plan for x in ("plus", "pro", "team", "go")):
         expire = row.get("expires_at")
@@ -408,6 +444,12 @@ def create_app(auth_code: str | None = None) -> Flask:
     migrated_email_pool = db.migrate_email_pool_statuses()
     if migrated_email_pool.get("rows_normalized"):
         logger.warning("已迁移邮箱池状态: %s", migrated_email_pool)
+    migrated_account_statuses = db.migrate_account_status_contracts()
+    if migrated_account_statuses.get("changed"):
+        logger.warning("已迁移账号状态契约: %s", migrated_account_statuses)
+    recovered_codex_operations = db.recover_interrupted_codex_operations()
+    if recovered_codex_operations:
+        logger.warning("已恢复 %s 个因 WebUI 重启中断的 Codex 补跑状态", recovered_codex_operations)
     recovered_plan_checks = db.recover_interrupted_plan_checks()
     if recovered_plan_checks:
         logger.warning("已恢复 %s 个因 WebUI 重启中断的套餐查询状态", recovered_plan_checks)
@@ -476,8 +518,9 @@ def create_app(auth_code: str | None = None) -> Flask:
     def api_accounts():
         limit = request.args.get("limit", default=500, type=int)
         archived = str(request.args.get("archived", default="0") or "0").lower()
-        plan_filter = str(request.args.get("plan", default="") or "").lower()
-        codex_status_filter = str(request.args.get("codex_status", default="") or "").lower()
+        status_filters, filter_error = _account_status_filter_args()
+        if filter_error:
+            return jsonify({"ok": False, "error": filter_error}), 400
         checkout_type_filter = str(request.args.get("checkout_type", default="") or "").lower()
         q = str(request.args.get("q", default="") or "").strip()
         date_from = str(request.args.get("date_from", default="") or "").strip() or None
@@ -494,9 +537,8 @@ def create_app(auth_code: str | None = None) -> Flask:
                 limit=page_size,
                 offset=offset,
                 archived=archived,
-                plan_filter=plan_filter,
+                **status_filters,
                 q=q,
-                codex_status_filter=codex_status_filter,
                 date_from=date_from,
                 date_to=date_to,
                 checkout_type_filter=checkout_type_filter,
@@ -507,9 +549,8 @@ def create_app(auth_code: str | None = None) -> Flask:
         rows = db.list_accounts(
             limit=limit,
             archived=archived,
-            plan_filter=plan_filter,
+            **status_filters,
             q=q,
-            codex_status_filter=codex_status_filter,
             date_from=date_from,
             date_to=date_to,
             checkout_type_filter=checkout_type_filter,
@@ -521,8 +562,9 @@ def create_app(auth_code: str | None = None) -> Flask:
         """套餐查询轻量状态，不返回 Token、邮箱密码等敏感字段。"""
         limit = request.args.get("limit", default=5000, type=int)
         archived = str(request.args.get("archived", default="0") or "0").lower()
-        plan_filter = str(request.args.get("plan", default="") or "").lower()
-        codex_status_filter = str(request.args.get("codex_status", default="") or "").lower()
+        status_filters, filter_error = _account_status_filter_args()
+        if filter_error:
+            return jsonify({"ok": False, "error": filter_error}), 400
         checkout_type_filter = str(request.args.get("checkout_type", default="") or "").lower()
         q = str(request.args.get("q", default="") or "").strip()
         page_arg = request.args.get("page", default=None, type=int)
@@ -535,9 +577,8 @@ def create_app(auth_code: str | None = None) -> Flask:
                 limit=page_size,
                 offset=offset,
                 archived=archived,
-                plan_filter=plan_filter,
+                **status_filters,
                 q=q,
-                codex_status_filter=codex_status_filter,
                 checkout_type_filter=checkout_type_filter,
             )
             snapshot.update({"page": page, "page_size": page_size})
@@ -545,9 +586,8 @@ def create_app(auth_code: str | None = None) -> Flask:
             snapshot = db.list_account_plan_check_statuses(
                 limit=max(1, min(5000, limit)),
                 archived=archived,
-                plan_filter=plan_filter,
+                **status_filters,
                 q=q,
-                codex_status_filter=codex_status_filter,
                 checkout_type_filter=checkout_type_filter,
             )
         snapshot["queue"] = plan_check_service.queue_settings()
@@ -1189,8 +1229,7 @@ def create_app(auth_code: str | None = None) -> Flask:
             return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 400
 
     def _is_extract_eligible(acc: dict) -> bool:
-        plan = str(acc.get("current_plan_type") or acc.get("plan_type") or "").lower()
-        return plan == "free" and bool(acc.get("plus_trial_eligible"))
+        return bool(build_account_status_contract(acc)["plan_capabilities"]["is_eligible"])
 
     @app.post("/api/accounts/extract-link")
     def api_account_extract_link():
@@ -1700,9 +1739,22 @@ def create_app(auth_code: str | None = None) -> Flask:
         summary = db.mailcom_alias_summary(parent_email)
         # 本地记录仅用于展示和审计，创建时仍以 settings 地址列表的远端计数为准。
         summary["remote_active_alias_limit"] = MAX_ACTIVE_ALIASES
+        items = db.list_mailcom_aliases(parent_email=parent_email, status=status, limit=limit)
+        legacy_plan_categories = {
+            "eligible_for_delete": "free_no_trial",
+            "trial_eligible": "free_trial_eligible",
+            "non_free": "paid",
+        }
+        for item in items:
+            raw_category = str(item.get("plan_result_class") or "unknown").strip().lower()
+            category = raw_category if raw_category in PLAN_CATEGORY_CODES else legacy_plan_categories.get(raw_category, "unknown")
+            item["plan_category_code"] = category
+            item["cleanup_capabilities"] = mailcom_cleanup_capabilities(
+                item.get("cleanup_status"), plan_category=category,
+            )
         return jsonify({
             "ok": True,
-            "items": db.list_mailcom_aliases(parent_email=parent_email, status=status, limit=limit),
+            "items": items,
             "summary": summary,
         })
 
@@ -2397,6 +2449,9 @@ def create_app(auth_code: str | None = None) -> Flask:
         acc = db.get_account_by_email(email)
         if acc is None:
             return jsonify({"ok": False, "error": f"账号不存在: {email}"}), 404
+        codex_caps = build_account_status_contract(acc)["codex_capabilities"]
+        if not codex_caps["can_stop"] and not codex_retry_service.is_retrying(email):
+            return jsonify({"ok": False, "error": "该账号当前没有可停止的 Codex 补跑"}), 409
         result = codex_retry_service.request_stop(email)
         status = int(result.pop("status", 200) or 200)
         return jsonify(result), status
@@ -2434,7 +2489,8 @@ def create_app(auth_code: str | None = None) -> Flask:
             if acc is None:
                 skipped.append({"email": email, "reason": "账号不存在"})
                 continue
-            if (acc.get("codex_status") or "") != "retrying" and not codex_retry_service.is_retrying(email):
+            codex_caps = build_account_status_contract(acc)["codex_capabilities"]
+            if not codex_caps["can_stop"] and not codex_retry_service.is_retrying(email):
                 skipped.append({"email": email, "reason": "未处于补跑中"})
                 continue
             r = codex_retry_service.request_stop(email)
@@ -2493,8 +2549,14 @@ def create_app(auth_code: str | None = None) -> Flask:
         acc = db.get_account_by_email(email)
         if acc is None:
             return jsonify({"ok": False, "error": f"账号不存在: {email}"}), 404
-        if (acc.get("codex_status") or "") == "deactivated":
-            return jsonify({"ok": False, "error": "账号已废号，不能补跑 Codex"}), 409
+        codex_caps = build_account_status_contract(acc)["codex_capabilities"]
+        if not codex_caps["can_retry"]:
+            reason = (
+                "账号已废号，不能补跑 Codex"
+                if str(acc.get("live_check_status") or "").lower() == "deactivated"
+                else "当前 Codex 状态不允许补跑"
+            )
+            return jsonify({"ok": False, "error": reason}), 409
         if not _reserve_codex_retry(email):
             return jsonify({"ok": False, "error": "该账号已有消费邮箱验证码的任务，请稍候"}), 409
 
@@ -2545,8 +2607,14 @@ def create_app(auth_code: str | None = None) -> Flask:
             if not email:
                 skipped.append({"id": acc_id, "reason": "邮箱为空"})
                 continue
-            if (acc.get("codex_status") or "") == "deactivated":
-                skipped.append({"id": acc_id, "email": email, "reason": "账号已废号"})
+            codex_caps = build_account_status_contract(acc)["codex_capabilities"]
+            if not codex_caps["can_retry"]:
+                reason = (
+                    "账号已废号"
+                    if str(acc.get("live_check_status") or "").lower() == "deactivated"
+                    else "当前 Codex 状态不允许补跑"
+                )
+                skipped.append({"id": acc_id, "email": email, "reason": reason})
                 continue
             if not _reserve_codex_retry(email):
                 skipped.append({"id": acc_id, "email": email, "reason": "已有消费邮箱验证码的任务"})

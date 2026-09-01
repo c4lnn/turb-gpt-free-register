@@ -41,8 +41,13 @@ class CheckoutSessionTemplateTests(unittest.TestCase):
         renderer = self.template[start:end]
         for value in ("queued", "running", "success", "failed"):
             self.assertIn(value, renderer)
+        labels_start = self.template.index("const ACCOUNT_STATUS_LABELS")
+        labels_end = self.template.index("function _statusLabel", labels_start)
+        labels = self.template[labels_start:labels_end]
         for value in ("oaics", "cs_live", "other_cs", "unknown"):
-            self.assertIn(value, renderer)
+            self.assertIn(value, labels)
+        self.assertIn("_statusLabel('checkoutType', type)", renderer)
+        self.assertNotIn("['oaics', 'cs_live', 'other_cs', 'unknown'].includes", renderer)
         self.assertIn("HTTP ${r.checkout_check_http_status}", renderer)
         self.assertIn("传输错误: ${message}", renderer)
         status_start = self.template.index("function _checkoutStatusMeta")

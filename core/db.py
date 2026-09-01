@@ -50,6 +50,16 @@ from core.email_pool_status import (
     validate_status,
     LEGACY_EMAIL_POOL_STATUS_MAP,
 )
+from core.account_status_contracts import (
+    build_account_status_contract,
+    classify_plan_category,
+    codex_auth_status,
+    codex_operation_status,
+    normalize_codex_auth_status,
+    normalize_codex_operation_status,
+    normalize_extract_link_status,
+    extract_link_capabilities as contract_extract_link_capabilities,
+)
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _DATA_DIR = _PROJECT_ROOT
@@ -1549,23 +1559,40 @@ def _decorate_account(row: dict, *, include_checkout_session_id: bool = True) ->
             out["plan_check_error_kind"] = error_kind
         else:
             out.pop("plan_check_error_kind", None)
+    out["extract_link_resumable"] = account_extract_resumable(out)
+    out.update(build_account_status_contract(out))
     out["copy_line"] = _account_line(out)
     return out
 
 
 def _account_matches_plan_filter(row: dict, plan_filter: str | None = None) -> bool:
-    """账号套餐过滤。plus 表示已开通 Plus（兼容 plus/chatgpt_plus/plus_trial 等标记）。"""
+    """按规范套餐类别过滤；旧值仅在兼容期映射到规范类别。"""
     f = str(plan_filter or "").strip().lower()
     if not f or f in {"all", "any"}:
         return True
-    plan = str(row.get("current_plan_type") or row.get("plan_type") or "").strip().lower()
-    if f == "plus":
-        # “free(可Plus试用)”/plus_trial_eligible 只是可试用，不算已开通 Plus。
-        # 只有套餐字段本身是 Plus/ChatGPT Plus/plus_* 且不含 free 时才命中。
-        return "plus" in plan and "free" not in plan
+    category = classify_plan_category(row)
+    if f in {"free_trial_eligible", "free_no_trial", "paid", "unknown"}:
+        return category == f
+    # 兼容旧前端参数：free 仍表示所有已确认的 Free 分类，plus 表示 paid。
     if f == "free":
-        return plan == "free"
-    return plan == f
+        return category in {"free_trial_eligible", "free_no_trial"}
+    if f == "plus":
+        return category == "paid"
+    return False
+
+
+def _account_matches_codex_filter(row: dict, status_filter: str | None = None) -> bool:
+    """按 Codex 授权/操作/查活维度兼容旧筛选参数。"""
+    value = str(status_filter or "").strip().lower()
+    if not value or value in {"all", "any"}:
+        return True
+    if value in {"retrying", "running"}:
+        return codex_operation_status(row) == "running"
+    if value in {"stopped", "cancelled", "canceled"}:
+        return codex_operation_status(row) == "canceled"
+    if value == "deactivated":
+        return str(row.get("live_check_status") or "").strip().lower() == "deactivated"
+    return codex_auth_status(row) == normalize_codex_auth_status(value)
 
 
 def _account_matches_checkout_type_filter(row: dict, checkout_type_filter: str | None = None) -> bool:
@@ -1575,7 +1602,7 @@ def _account_matches_checkout_type_filter(row: dict, checkout_type_filter: str |
         return True
     current = str(row.get("checkout_session_type") or "").strip().lower()
     if f in {"none", "empty", "未检测"}:
-        return not current
+        return not current or current == "unknown"
     return current == f
 
 
@@ -1786,11 +1813,86 @@ def update_account_codex_status(email: str, codex_status: str, codex_error: str 
         row = _find_by_email(accounts, email)
         if row is None:
             return False
-        row["codex_status"] = codex_status
-        row["codex_error"] = codex_error
+        raw_status = str(codex_status or "").strip().lower()
+        if raw_status in {"retrying", "stopped", "cancelled", "canceled"}:
+            row["codex_operation_status"] = normalize_codex_operation_status(raw_status)
+            row["codex_operation_error"] = codex_error
+            if row["codex_operation_status"] == "running":
+                row["codex_operation_started_at"] = _now()
+            else:
+                row["codex_operation_completed_at"] = _now()
+        elif raw_status == "deactivated":
+            row["live_check_status"] = "deactivated"
+            row["live_check_error"] = codex_error or "账号已删除/停用/封禁"
+            row["codex_auth_status"] = normalize_codex_auth_status(row.get("codex_auth_status"))
+        else:
+            # legacy 字段仅投影授权事实，不能再承载补跑过程。
+            row["codex_status"] = codex_status
+            row["codex_auth_status"] = normalize_codex_auth_status(raw_status)
+            row["codex_operation_status"] = "success" if raw_status == "success" else "idle"
+            row["codex_error"] = codex_error
+            row["codex_operation_error"] = codex_error if raw_status == "failed" else None
+            row["codex_operation_completed_at"] = _now()
         row["updated_at"] = _now()
         _save_accounts(accounts)
         return True
+
+
+def recover_interrupted_codex_operations() -> int:
+    """将重启前遗留的 Codex 补跑活动状态安全收敛为失败。
+
+    补跑线程状态只存在于进程内，重启后不能把 queued/running 误报为仍在执行；
+    该恢复只改变操作维度，不改变授权事实或 legacy 原始字段。
+    """
+    with _LOCK:
+        accounts = _load_accounts()
+        now = _now()
+        recovered = 0
+        for row in accounts:
+            raw = str(row.get("codex_status") or "").strip().lower()
+            operation = str(row.get("codex_operation_status") or "").strip().lower()
+            if not operation and raw in {"retrying", "queued", "running"}:
+                operation = "running" if raw in {"retrying", "running"} else "queued"
+            if operation not in {"queued", "running"}:
+                continue
+            row["codex_operation_status"] = "failed"
+            row["codex_operation_error"] = "WebUI 重启导致 Codex 补跑中断，请重新补跑"
+            row["codex_operation_completed_at"] = now
+            row["updated_at"] = now
+            recovered += 1
+        if recovered:
+            _save_accounts(accounts)
+        return recovered
+
+
+def migrate_account_status_contracts() -> dict[str, int]:
+    """幂等迁移账号规范状态字段；适用于当前 JSON 或 SQLite 后端。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        changed = unknown = 0
+        for row in accounts:
+            before = dict(row)
+            legacy = str(row.get("codex_status") or "").strip().lower()
+            if legacy and not row.get("codex_status_legacy_raw"):
+                row["codex_status_legacy_raw"] = legacy
+            if not str(row.get("codex_auth_status") or "").strip():
+                row["codex_auth_status"] = normalize_codex_auth_status(legacy)
+            if not str(row.get("codex_operation_status") or "").strip():
+                row["codex_operation_status"] = (
+                    normalize_codex_operation_status(legacy)
+                    if legacy in {"retrying", "stopped", "cancelled", "canceled"}
+                    else "idle"
+                )
+            if legacy == "deactivated" and not str(row.get("live_check_status") or "").strip():
+                row["live_check_status"] = "deactivated"
+            if row.get("codex_auth_status") == "unknown":
+                unknown += 1
+            if row != before:
+                row["status_contract_migrated_at"] = _now()
+                changed += 1
+        if changed:
+            _save_accounts(accounts)
+        return {"changed": changed, "unknown": unknown, "total": len(accounts)}
 
 
 def claim_account_plan_check(
@@ -2226,16 +2328,28 @@ _EXTRACT_RESUME_ERROR_MARKERS = (
 )
 
 
-def account_extract_resumable(row: dict | None) -> bool:
+def _account_extract_resumable_legacy(row: dict | None) -> bool:
     row = row or {}
     error = str(row.get("extract_link_error") or "")
     return bool(
-        row.get("extract_link_status") == "failed"
+        normalize_extract_link_status(row.get("extract_link_status")) == "failed"
         and str(row.get("extract_link_provider") or "").lower() == "masi"
         and str(row.get("extract_link_job_id") or "").strip()
         and str(row.get("extract_link_cdk_id") or "").strip()
         and any(marker in error for marker in _EXTRACT_RESUME_ERROR_MARKERS)
     )
+
+
+def account_extract_capabilities(row: dict | None) -> dict[str, bool]:
+    row = row or {}
+    return contract_extract_link_capabilities(
+        row.get("extract_link_status"),
+        resumable=_account_extract_resumable_legacy(row),
+    )
+
+
+def account_extract_resumable(row: dict | None) -> bool:
+    return account_extract_capabilities(row)["resumable"]
 
 
 def claim_account_extract_resume(acc_id: int, trigger: str = "manual_resume") -> bool:
@@ -2283,12 +2397,14 @@ def update_account_extract(acc_id: int, result: dict | None = None) -> bool:
         row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
         if row is None:
             return False
-        status = str(result.get("status") or ("success" if result.get("ok") else "failed"))
+        status = normalize_extract_link_status(
+            result.get("status") or ("success" if result.get("ok") else "failed")
+        )
         ok = bool(result.get("ok")) and status == "success"
         row["extract_link_status"] = status
         row["extract_link_ok"] = ok
         row["extract_link_checked_at"] = result.get("checked_at") or _now()
-        if status in {"success", "failed", "canceled", "stopped"}:
+        if status in {"success", "failed", "canceled"}:
             row["extract_link_completed_at"] = _now()
         row["extract_link_error"] = None if ok or status == "running" else result.get("error")
         if result.get("message") is not None:
@@ -2389,6 +2505,9 @@ def _filtered_decorated_accounts(
     plan_filter: str | None = None,
     q: str | None = None,
     codex_status_filter: str | None = None,
+    codex_auth_status_filter: str | None = None,
+    codex_operation_status_filter: str | None = None,
+    live_check_status_filter: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
     checkout_type_filter: str | None = None,
@@ -2404,7 +2523,16 @@ def _filtered_decorated_accounts(
     decorated = [r for r in decorated if _account_matches_plan_filter(r, plan_filter)]
     codex_status_filter = str(codex_status_filter or "").strip().lower()
     if codex_status_filter:
-        decorated = [r for r in decorated if str(r.get("codex_status") or "").strip().lower() == codex_status_filter]
+        decorated = [r for r in decorated if _account_matches_codex_filter(r, codex_status_filter)]
+    auth_filter = str(codex_auth_status_filter or "").strip().lower()
+    if auth_filter:
+        decorated = [r for r in decorated if r.get("codex_auth_status") == normalize_codex_auth_status(auth_filter)]
+    operation_filter = str(codex_operation_status_filter or "").strip().lower()
+    if operation_filter:
+        decorated = [r for r in decorated if r.get("codex_operation_status") == normalize_codex_operation_status(operation_filter)]
+    live_filter = str(live_check_status_filter or "").strip().lower()
+    if live_filter:
+        decorated = [r for r in decorated if r.get("live_check_status") == live_filter]
     decorated = [r for r in decorated if _account_matches_checkout_type_filter(r, checkout_type_filter)]
     decorated = [r for r in decorated if _account_matches_query(r, q)]
     # 按创建时间筛选（date_from/date_to 为 ISO 字符串或 YYYY-MM-DD）
@@ -2433,6 +2561,9 @@ def list_account_plan_check_statuses(
     plan_filter: str | None = None,
     q: str | None = None,
     codex_status_filter: str | None = None,
+    codex_auth_status_filter: str | None = None,
+    codex_operation_status_filter: str | None = None,
+    live_check_status_filter: str | None = None,
     checkout_type_filter: str | None = None,
 ) -> dict:
     """返回不含 Token/邮箱密码的套餐查询轻量状态快照。"""
@@ -2463,6 +2594,10 @@ def list_account_plan_check_statuses(
         "extract_link_image_url_png", "extract_link_image_url_svg",
         "extract_link_expires_at",
         "codex_status", "codex_error",
+        "codex_auth_status", "codex_operation_status", "codex_capabilities",
+        "plan_category_code", "plan_query_status", "plan_capabilities",
+        "extract_link_capabilities", "live_check_status",
+        "live_check_capabilities", "checkout_query_status", "checkout_capabilities",
     )
     with _LOCK:
         all_rows = _filtered_decorated_accounts(
@@ -2470,6 +2605,9 @@ def list_account_plan_check_statuses(
             plan_filter=plan_filter,
             q=q,
             codex_status_filter=codex_status_filter,
+            codex_auth_status_filter=codex_auth_status_filter,
+            codex_operation_status_filter=codex_operation_status_filter,
+            live_check_status_filter=live_check_status_filter,
             checkout_type_filter=checkout_type_filter,
         )
         total = len(all_rows)
@@ -2541,6 +2679,9 @@ def list_accounts(
     plan_filter: str | None = None,
     q: str | None = None,
     codex_status_filter: str | None = None,
+    codex_auth_status_filter: str | None = None,
+    codex_operation_status_filter: str | None = None,
+    live_check_status_filter: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
     checkout_type_filter: str | None = None,
@@ -2551,6 +2692,9 @@ def list_accounts(
             plan_filter=plan_filter,
             q=q,
             codex_status_filter=codex_status_filter,
+            codex_auth_status_filter=codex_auth_status_filter,
+            codex_operation_status_filter=codex_operation_status_filter,
+            live_check_status_filter=live_check_status_filter,
             date_from=date_from,
             date_to=date_to,
             checkout_type_filter=checkout_type_filter,
@@ -2565,6 +2709,9 @@ def list_accounts_page(
     plan_filter: str | None = None,
     q: str | None = None,
     codex_status_filter: str | None = None,
+    codex_auth_status_filter: str | None = None,
+    codex_operation_status_filter: str | None = None,
+    live_check_status_filter: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
     checkout_type_filter: str | None = None,
@@ -2575,6 +2722,9 @@ def list_accounts_page(
             plan_filter=plan_filter,
             q=q,
             codex_status_filter=codex_status_filter,
+            codex_auth_status_filter=codex_auth_status_filter,
+            codex_operation_status_filter=codex_operation_status_filter,
+            live_check_status_filter=live_check_status_filter,
             date_from=date_from,
             date_to=date_to,
             checkout_type_filter=checkout_type_filter,
@@ -2603,6 +2753,8 @@ def get_retry_account_snapshot() -> dict[str, dict[int | str, dict]]:
                 "id": row.get("id"),
                 "email": row.get("email"),
                 "codex_status": row.get("codex_status"),
+                "codex_auth_status": row.get("codex_auth_status"),
+                "live_check_status": row.get("live_check_status"),
             }
             try:
                 account_id = int(row.get("id") or 0)
@@ -2649,15 +2801,13 @@ def update_account_liveness(acc_id: int, result: dict | None = None) -> bool:
         now = _now()
         ok = bool(result.get("ok"))
         status = str(result.get("status") or ("live" if ok else "failed"))
+        if not str(row.get("codex_auth_status") or "").strip():
+            row["codex_auth_status"] = normalize_codex_auth_status(row.get("codex_status"))
         row["live_check_status"] = status
         row["live_check_ok"] = ok
         row["live_checked_at"] = result.get("checked_at") or now
         row["live_check_error"] = None if ok else result.get("error")
         row["updated_at"] = now
-
-        if status == "deactivated":
-            row["codex_status"] = "deactivated"
-            row["codex_error"] = result.get("error") or "账号已删除/停用/封禁"
 
         if ok:
             token = str(result.get("access_token") or "").strip()

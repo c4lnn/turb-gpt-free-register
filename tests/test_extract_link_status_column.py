@@ -40,12 +40,15 @@ class ExtractLinkStatusColumnTests(unittest.TestCase):
             "extract_link_message",
         ):
             self.assertIn(field, helper)
-        for status in ("queued", "running", "success", "failed", "canceled", "stopped"):
+        for status in ("queued", "running", "success", "failed", "canceled"):
             self.assertIn(status, helper)
-        self.assertIn("(value || '-')", helper)
+        self.assertNotIn("s === 'stopped'", helper)
+        self.assertNotIn("s === 'cancelled'", helper)
+        self.assertIn("_statusLabel('extract', value)", helper)
+        self.assertIn("unknown: '未知'", template)
         self.assertIn("function _extractLinkSummary", helper)
         self.assertIn(" · ", helper)
-        self.assertIn("提炼失败", helper)
+        self.assertIn("failed: '提炼失败'", template)
         self.assertIn("extract-link-actions", helper)
         self.assertIn("extract_link_provider || '-'", helper)
         self.assertNotIn("extract-link-route", helper)

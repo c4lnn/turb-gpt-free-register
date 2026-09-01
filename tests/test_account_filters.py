@@ -43,6 +43,46 @@ class AccountFilterTests(unittest.TestCase):
         self.assertEqual(snapshot["total"], 2)
         self.assertEqual([item["id"] for item in snapshot["items"]], [3, 1])
 
+    def test_explicit_codex_dimensions_do_not_collide_on_same_code(self):
+        self.accounts_path.write_text(json.dumps([
+            {
+                "id": 1, "email": "auth-success@example.invalid",
+                "codex_auth_status": "success", "codex_operation_status": "failed",
+            },
+            {
+                "id": 2, "email": "operation-success@example.invalid",
+                "codex_auth_status": "failed", "codex_operation_status": "success",
+            },
+        ]), encoding="utf-8")
+
+        auth_page = db.list_accounts_page(codex_auth_status_filter="success")
+        operation_page = db.list_accounts_page(codex_operation_status_filter="success")
+
+        self.assertEqual([item["id"] for item in auth_page["items"]], [1])
+        self.assertEqual([item["id"] for item in operation_page["items"]], [2])
+
+    def test_explicit_status_dimensions_can_be_combined(self):
+        self.accounts_path.write_text(json.dumps([
+            {
+                "id": 1, "email": "match@example.invalid",
+                "codex_auth_status": "failed", "codex_operation_status": "running",
+                "live_check_status": "live",
+            },
+            {
+                "id": 2, "email": "wrong-live@example.invalid",
+                "codex_auth_status": "failed", "codex_operation_status": "running",
+                "live_check_status": "deactivated",
+            },
+        ]), encoding="utf-8")
+
+        page = db.list_accounts_page(
+            codex_auth_status_filter="failed",
+            codex_operation_status_filter="running",
+            live_check_status_filter="live",
+        )
+
+        self.assertEqual([item["id"] for item in page["items"]], [1])
+
     def test_checkout_type_filter_runs_before_pagination(self):
         self.accounts_path.write_text(json.dumps([
             {"id": 1, "email": "oaics@example.invalid", "checkout_session_type": "oaics"},
@@ -73,6 +113,24 @@ class AccountFilterTests(unittest.TestCase):
 
         self.assertEqual(snapshot["total"], 1)
         self.assertEqual([item["id"] for item in snapshot["items"]], [2])
+
+    def test_plan_category_filter_matches_returned_category_code(self):
+        self.accounts_path.write_text(json.dumps([
+            {
+                "id": 1, "email": "eligible@example.invalid",
+                "current_plan_type": "free", "trial_eligibility_known": True,
+                "plus_trial_eligible": True,
+            },
+            {
+                "id": 2, "email": "no-trial@example.invalid",
+                "current_plan_type": "free", "trial_eligibility_known": True,
+                "plus_trial_eligible": False,
+            },
+            {"id": 3, "email": "paid@example.invalid", "current_plan_type": "plus"},
+        ]), encoding="utf-8")
+        page = db.list_accounts_page(plan_filter="free_trial_eligible")
+        self.assertEqual(page["total"], 1)
+        self.assertEqual(page["items"][0]["plan_category_code"], "free_trial_eligible")
 
 
 if __name__ == "__main__":

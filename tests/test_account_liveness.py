@@ -111,7 +111,7 @@ class AccountLivenessDbTests(unittest.TestCase):
         self.assertEqual(row["access_token"], "old-at")
         self.assertEqual(row["codex_status"], "success")
 
-    def test_deactivated_result_preserves_token_and_marks_codex(self):
+    def test_deactivated_result_preserves_token_and_codex_authorization_history(self):
         self.assertTrue(db.update_account_liveness(1, {
             "ok": False,
             "status": "deactivated",
@@ -121,8 +121,9 @@ class AccountLivenessDbTests(unittest.TestCase):
         row = self._account()
         self.assertEqual(row["live_check_status"], "deactivated")
         self.assertEqual(row["access_token"], "old-at")
-        self.assertEqual(row["codex_status"], "deactivated")
-        self.assertEqual(row["codex_error"], "account_deactivated")
+        self.assertEqual(row["codex_status"], "success")
+        self.assertEqual(row["codex_auth_status"], "success")
+        self.assertEqual(row["live_check_error"], "account_deactivated")
 
 
 class AccountLivenessWebUiTests(unittest.TestCase):

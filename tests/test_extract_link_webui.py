@@ -270,7 +270,8 @@ class ExtractLinkWebUiTests(unittest.TestCase):
         template_dir = Path(__file__).parents[1] / "webui" / "templates"
         template = (template_dir / "index.html").read_text(encoding="utf-8")
         self.assertIn("SHOW_CODEX_SUCCESS_ONLY", template)
-        self.assertIn("codex_status=${encodeURIComponent(codexStatus)}", template)
+        self.assertIn("codex_auth_status=${encodeURIComponent(codexAuthStatus)}", template)
+        self.assertNotIn("codex_status=${encodeURIComponent(codexStatus)}", template)
         self.assertIn("Codex已通过", template)
 
     def test_capabilities_endpoint(self):

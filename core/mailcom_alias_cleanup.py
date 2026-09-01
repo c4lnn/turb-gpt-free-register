@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from config import email as email_cfg
 from core import db
+from core.account_status_contracts import classify_plan_category
 from core.mailcom_alias_service import MailComAliasError
 
 
@@ -80,29 +81,34 @@ def process_plan_result(
         )
         return {"handled": True, "deleted": False, "reason": "trial_eligibility_unknown"}
 
-    plan_type = str(account.get("current_plan_type") or account.get("plan_type") or "").strip().casefold()
-    if plan_type != "free":
+    plan_facts = dict(account)
+    plan_facts.update({
+        "trial_eligibility_known": result.get("trial_eligibility_known"),
+        "plus_trial_eligible": result.get("plus_trial_eligible"),
+    })
+    plan_category = classify_plan_category(plan_facts)
+    if plan_category == "paid":
         db.update_mailcom_alias(
             alias_email,
             plan_check_status="success",
             cleanup_status="not_eligible",
-            plan_result_class="non_free" if plan_type else "unknown",
-            last_error="" if plan_type else "套餐类型不明确，未执行别名清理",
+            plan_result_class="paid",
+            last_error="",
         )
-        return {"handled": True, "deleted": False, "reason": "non_free" if plan_type else "plan_unknown"}
+        return {"handled": True, "deleted": False, "reason": "non_free"}
 
-    if result.get("plus_trial_eligible") is True:
+    if plan_category == "free_trial_eligible":
         db.update_mailcom_alias(
             alias_email,
             plan_check_status="success",
             cleanup_status="not_eligible",
-            plan_result_class="trial_eligible",
+            plan_result_class="free_trial_eligible",
             last_error="",
         )
         return {"handled": True, "deleted": False, "reason": "trial_eligible"}
 
     # 只接受 JSON 布尔 false；0、空字符串、None 等不具备“明确无资格”的含义。
-    if result.get("plus_trial_eligible") is not False:
+    if plan_category != "free_no_trial":
         db.update_mailcom_alias(
             alias_email,
             plan_check_status="incomplete",
@@ -117,7 +123,7 @@ def process_plan_result(
             alias_email,
             plan_check_status="success",
             cleanup_status="not_requested",
-            plan_result_class="eligible_for_delete",
+            plan_result_class="free_no_trial",
             last_error="",
         )
         return {"handled": True, "deleted": False, "reason": "cleanup_disabled"}

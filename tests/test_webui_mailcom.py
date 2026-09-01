@@ -192,6 +192,8 @@ class MailComWebUITests(unittest.TestCase):
         self.assertEqual(row["alias_email"], "alias@example.com")
         self.assertEqual(payload["summary"]["remote_active_alias_limit"], 9)
         self.assertEqual(row["parent_email"], "mother@mail.com")
+        self.assertEqual(row["plan_category_code"], "unknown")
+        self.assertIn("can_cleanup", row["cleanup_capabilities"])
         self.assertNotIn("password", aliases.get_data(as_text=True).lower())
 
         bad = self.client.post(

@@ -3599,14 +3599,14 @@ async function loadAccounts() {
   accountsLoading = true;
   try {
     const archived = SHOW_ARCHIVED_ACCOUNTS ? 'only' : '0';
-    const plan = SHOW_PLUS_ACCOUNTS_ONLY ? 'plus' : '';
-    const codexStatus = SHOW_CODEX_SUCCESS_ONLY ? 'success' : '';
+    const planCategory = SHOW_PLUS_ACCOUNTS_ONLY ? 'paid' : '';
+    const codexAuthStatus = SHOW_CODEX_SUCCESS_ONLY ? 'success' : '';
     const checkoutType = CHECKOUT_TYPE_FILTER;
     const q = getAccountsQuery();
     const dateFrom = document.getElementById('dateFromAccountsV2')?.value || '';
     const dateTo = document.getElementById('dateToAccountsV2')?.value || '';
     const p = PAGERS.accounts;
-    const res = await api(`/api/accounts?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&codex_status=${encodeURIComponent(codexStatus)}&checkout_type=${encodeURIComponent(checkoutType)}&q=${encodeURIComponent(q)}&date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}`);
+    const res = await api(`/api/accounts?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan_category=${encodeURIComponent(planCategory)}&codex_auth_status=${encodeURIComponent(codexAuthStatus)}&checkout_type=${encodeURIComponent(checkoutType)}&q=${encodeURIComponent(q)}&date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}`);
     ACCOUNTS = res.items || [];
     ACCOUNTS_TOTAL = Number(res.total || ACCOUNTS.length || 0);
     const totalPages = Math.max(1, Math.ceil(ACCOUNTS_TOTAL / p.size));
@@ -3620,12 +3620,12 @@ async function pollAccountPlanStatuses() {
   planStatusLoading = true;
   try {
     const archived = SHOW_ARCHIVED_ACCOUNTS ? 'only' : '0';
-    const plan = SHOW_PLUS_ACCOUNTS_ONLY ? 'plus' : '';
-    const codexStatus = SHOW_CODEX_SUCCESS_ONLY ? 'success' : '';
+    const planCategory = SHOW_PLUS_ACCOUNTS_ONLY ? 'paid' : '';
+    const codexAuthStatus = SHOW_CODEX_SUCCESS_ONLY ? 'success' : '';
     const checkoutType = CHECKOUT_TYPE_FILTER;
     const q = getAccountsQuery();
     const p = PAGERS.accounts;
-    const snapshot = await api(`/api/accounts/plan-check-status?page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&codex_status=${encodeURIComponent(codexStatus)}&checkout_type=${encodeURIComponent(checkoutType)}&q=${encodeURIComponent(q)}`);
+    const snapshot = await api(`/api/accounts/plan-check-status?page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan_category=${encodeURIComponent(planCategory)}&codex_auth_status=${encodeURIComponent(codexAuthStatus)}&checkout_type=${encodeURIComponent(checkoutType)}&q=${encodeURIComponent(q)}`);
     const items = snapshot.items || [];
     const accountById = new Map(ACCOUNTS.map(r => [Number(r.id), r]));
     const hasUnknown = items.some(item => !accountById.has(Number(item.id)));
@@ -3638,12 +3638,12 @@ async function pollAccountPlanStatuses() {
       let needsFullReload = false;
       items.forEach(item => {
         const account = accountById.get(Number(item.id));
-        const wasChecking = ['queued', 'running'].includes(account?.plan_check_status);
-        const isChecking = ['queued', 'running'].includes(item.plan_check_status);
-        const wasExtracting = ['queued', 'running'].includes(account?.extract_link_status);
-        const isExtracting = ['queued', 'running'].includes(item.extract_link_status);
-        const wasCheckouting = ['queued', 'running'].includes(account?.checkout_check_status);
-        const isCheckouting = ['queued', 'running'].includes(item.checkout_check_status);
+        const wasChecking = Boolean(account?.plan_capabilities?.is_checking);
+        const isChecking = Boolean(item.plan_capabilities?.is_checking);
+        const wasExtracting = Boolean(account?.extract_link_capabilities?.is_running);
+        const isExtracting = Boolean(item.extract_link_capabilities?.is_running);
+        const wasCheckouting = Boolean(account?.checkout_capabilities?.is_checking);
+        const isCheckouting = Boolean(item.checkout_capabilities?.is_checking);
         if (wasChecking && !isChecking) needsFullReload = true;
         if (wasExtracting && !isExtracting) needsFullReload = true;
         if (wasCheckouting && !isCheckouting) needsFullReload = true;
@@ -3656,29 +3656,43 @@ async function pollAccountPlanStatuses() {
   } catch(e) {}
   finally { planStatusLoading = false; }
 }
+const ACCOUNT_STATUS_LABELS = Object.freeze({
+  codexAuth: Object.freeze({not_started: '-', success: '成功', failed: '失败', skipped: '已跳过', unknown: '未知'}),
+  codexOperation: Object.freeze({idle: '', queued: '补跑排队中', running: '补跑中', success: '补跑成功', failed: '补跑失败', canceled: '已停止', unknown: '未知'}),
+  query: Object.freeze({pending: '待查询', queued: '查询排队中', running: '查询中', success: '查询成功', failed: '查询失败', unknown: '未知'}),
+  extract: Object.freeze({pending: '待提链', queued: '排队', running: '提炼中', success: '提炼成功', failed: '提炼失败', canceled: '已取消', unknown: '未知'}),
+  planCategory: Object.freeze({free_trial_eligible: 'Free｜Plus 试用资格可用', free_no_trial: 'Free｜无 Plus 试用资格', paid: '付费套餐', unknown: '未知'}),
+  checkoutType: Object.freeze({oaics: 'OAICS', cs_live: 'Stripe Live', other_cs: '其它 Stripe', unknown: '未知'}),
+  live: Object.freeze({pending: '待查活', queued: '排队', running: '运行中', live: '正常', deactivated: '已废', failed: '失败', unknown: '未知'}),
+  mailcomCleanup: Object.freeze({pending: '待套餐查询', not_eligible: '保留（有试用资格）', not_requested: '未执行清理', cleanup_running: '清理中', cleanup_pending: '待人工处理', deleted: '已删除'}),
+});
+function _statusLabel(domain, code) {
+  return ACCOUNT_STATUS_LABELS[domain]?.[String(code || '').toLowerCase()] || '未知';
+}
 function _codexCell(r) {
-  const s = r.codex_status || '';
+  const operation = r.codex_operation_status || '';
+  const s = r.codex_auth_status || 'unknown';
   const err = r.codex_error || '';
   const titleAttr = err ? ` title="${esc(err)}"` : '';
-  if (s === 'success') return `<span class="pill status-success">成功</span>`;
-  if (s === 'retrying') return `<span class="pill status-running">补跑中</span>`;
-  if (s === 'stopped') return `<span class="pill status-used"${titleAttr}>已停止</span>`;
-  if (s === 'failed') return `<span class="pill status-failed"${titleAttr}>失败</span>`;
-  if (s === 'skipped') return `<span class="pill status-used">已跳过</span>`;
-  if (s === 'deactivated') return `<span class="pill status-failed" title="账号已被 OpenAI 删除/停用/封禁，无法授权">已废号</span>`;
-  return `<span class="muted">-</span>`;
+  if (['queued','running'].includes(operation)) return `<span class="pill status-running">${esc(_statusLabel('codexOperation', operation))}</span>`;
+  if (operation === 'canceled') return `<span class="pill status-used"${titleAttr}>${esc(_statusLabel('codexOperation', operation))}</span>`;
+  if (s === 'success') return `<span class="pill status-success">${esc(_statusLabel('codexAuth', s))}</span>`;
+  if (s === 'failed') return `<span class="pill status-failed"${titleAttr}>${esc(_statusLabel('codexAuth', s))}</span>`;
+  if (s === 'skipped' || s === 'not_started') return `<span class="pill status-used">${esc(_statusLabel('codexAuth', s))}</span>`;
+  return `<span class="pill status-used"${titleAttr}>${esc(_statusLabel('codexAuth', s))}</span>`;
 }
 function _codexCellV2(r) {
-  const s = r.codex_status || '';
+  const operation = r.codex_operation_status || '';
+  const s = r.codex_auth_status || 'unknown';
   const err = r.codex_error || '';
   const titleAttr = err ? ` title="${esc(err)}"` : '';
+  if (['queued','running'].includes(operation)) return `<span class="acc-v2-codex is-run"${titleAttr}>${esc(_statusLabel('codexOperation', operation))}</span>`;
+  if (operation === 'canceled') return `<span class="acc-v2-codex is-mute"${titleAttr}>${esc(_statusLabel('codexOperation', operation))}</span>`;
   if (s === 'success') return `<span class="acc-v2-codex is-ok"${titleAttr}>已通过</span>`;
-  if (s === 'retrying') return `<span class="acc-v2-codex is-run"${titleAttr}>补跑中</span>`;
-  if (s === 'stopped') return `<span class="acc-v2-codex is-mute"${titleAttr}>已停止</span>`;
-  if (s === 'failed') return `<span class="acc-v2-codex is-fail"${titleAttr}>失败</span>`;
-  if (s === 'skipped') return `<span class="acc-v2-codex is-skip"${titleAttr}>已跳过</span>`;
-  if (s === 'deactivated') return `<span class="acc-v2-codex is-fail" title="账号已被 OpenAI 删除/停用/封禁，无法授权">已废号</span>`;
-  return `<span class="acc-v2-muted">-</span>`;
+  if (s === 'failed') return `<span class="acc-v2-codex is-fail"${titleAttr}>${esc(_statusLabel('codexAuth', s))}</span>`;
+  if (s === 'skipped') return `<span class="acc-v2-codex is-skip"${titleAttr}>${esc(_statusLabel('codexAuth', s))}</span>`;
+  if (s === 'not_started') return `<span class="acc-v2-muted">${esc(_statusLabel('codexAuth', s))}</span>`;
+  return `<span class="acc-v2-codex is-mute"${titleAttr}>${esc(_statusLabel('codexAuth', s))}</span>`;
 }
 function _fmtPlanTime(v, dateOnly = false) {
   if (!v) return '';
@@ -3727,32 +3741,21 @@ function _planErrorSummary(r) {
   })[kind] || '';
 }
 function _planStatusMeta(r) {
-  const labels = {
-    queued: '查询排队中',
-    running: '查询中',
-    success: '查询成功',
-    failed: '查询失败',
-  };
-  const label = labels[(r.plan_check_status || '').toString()];
+  const code = (r.plan_query_status || 'unknown').toString();
+  const label = _statusLabel('query', code);
   const updated = r.plan_check_updated_at || '';
-  if (!label || !updated) return '';
+  if (!updated) return '';
   const time = _fmtPlanTime(updated);
   const detailText = `${label}|${time}`;
-  const summary = r.plan_check_status === 'failed' ? _planErrorSummary(r) : '';
+  const summary = code === 'failed' ? _planErrorSummary(r) : '';
   const text = summary ? `查询失败：${summary}|${time}` : detailText;
   return `<div class="acc-v2-sub" title="${esc(detailText)}">${esc(text)}</div>`;
 }
 function _checkoutStatusMeta(r) {
-  const labels = {
-    queued: '查询排队中',
-    running: '查询中',
-    success: '查询成功',
-    failed: '查询失败',
-  };
-  const status = String(r.checkout_check_status || '').toLowerCase();
-  const label = labels[status];
+  const status = String(r.checkout_query_status || 'unknown').toLowerCase();
+  const label = _statusLabel('query', status);
   const updated = r.checkout_check_updated_at || r.checkout_session_last_success_at || '';
-  if (!label || !updated) return '';
+  if (!updated) return '';
   const text = `${label}|${_fmtPlanTime(updated)}`;
   return `<div class="acc-v2-sub" title="${esc(text)}">${esc(text)}</div>`;
 }
@@ -3765,8 +3768,8 @@ function _checkoutSessionErrorTitle(r) {
   return [status, code, transport].filter(Boolean).join('；') || '暂无 Checkout 检测详情';
 }
 function _checkoutSessionAction(r) {
-  const status = String(r.checkout_check_status || '').toLowerCase();
-  if (['queued', 'running'].includes(status)) {
+  const status = String(r.checkout_query_status || 'unknown').toLowerCase();
+  if (r.checkout_capabilities?.is_checking) {
     const automatic = r.checkout_check_trigger === 'registration_auto';
     const label = automatic ? (status === 'queued' ? '自动排队中…' : '自动检测中…') : (status === 'queued' ? '排队中…' : '检测中…');
     return `<button type="button" data-checkout-session="${esc(r.id)}" disabled title="Checkout 检测正在执行，完成后可再次检测">${label}</button>`;
@@ -3778,9 +3781,8 @@ function _checkoutSessionAction(r) {
   return `<button type="button" data-checkout-session="${esc(r.id)}" title="只创建初始 Checkout Session 并识别类型">${label}</button>`;
 }
 function _checkoutSessionCell(r) {
-  const status = String(r.checkout_check_status || '').toLowerCase();
-  const type = ['oaics', 'cs_live', 'other_cs', 'unknown'].includes(String(r.checkout_session_type || '').toLowerCase())
-    ? String(r.checkout_session_type).toLowerCase() : '';
+  const status = String(r.checkout_query_status || 'unknown').toLowerCase();
+  const type = String(r.checkout_session_type || 'unknown').toLowerCase();
   const wrap = main => `<div class="checkout-session-cell">${main}${_checkoutStatusMeta(r)}</div>`;
   let main;
   if (status === 'queued' || status === 'running') {
@@ -3789,9 +3791,11 @@ function _checkoutSessionCell(r) {
     const stamp = status === 'queued' ? r.checkout_check_queued_at : r.checkout_check_started_at;
     const detail = stamp ? `${label}；${status === 'queued' ? '入队' : '开始'}: ${stamp}` : label;
     main = `<span class="pill status-running" title="${esc(detail)}">${esc(label)}</span>`;
-  } else if (status === 'success' && type) {
+  } else if (status === 'success' && type !== 'unknown') {
     const detail = r.checkout_session_last_success_at ? `成功时间: ${r.checkout_session_last_success_at}` : 'Checkout Session 类型检测成功';
-    main = `<span class="pill status-success" title="${esc(detail)}">${esc(type)}</span>`;
+    main = `<span class="pill status-success" title="${esc(detail)}">${esc(_statusLabel('checkoutType', type))}</span>`;
+  } else if (status === 'success') {
+    main = `<span class="pill status-used" title="查询成功，但 Checkout Session 类型未知">${esc(_statusLabel('checkoutType', type))}</span>`;
   } else if (status === 'failed') {
     main = `<span class="pill status-failed" title="${esc(_checkoutSessionErrorTitle(r))}">检测失败</span>`;
   } else {
@@ -3803,6 +3807,10 @@ function _planCell(r) {
   const ok = r.plan_check_ok;
   const err = r.plan_check_error || '';
   const plan = (r.current_plan_type || r.plan_type || '-').toString();
+  const category = String(r.plan_category_code || '').toLowerCase();
+  const queryStatus = String(r.plan_query_status || 'unknown').toLowerCase();
+  const isFreeTrialEligible = category === 'free_trial_eligible';
+  const isFreeNoTrial = category === 'free_no_trial';
   const checked = r.plan_checked_at ? `查询: ${esc(r.plan_checked_at)}` : '未查询实时套餐';
   const route = (r.plan_check_network_route || '').toString();
   const routeLabel = route === 'proxy' ? `网络: 代理${r.plan_check_proxy_used ? ` (${r.plan_check_proxy_used})` : ''}` :
@@ -3810,40 +3818,29 @@ function _planCell(r) {
     route === 'direct' ? '网络: 直连' : '';
   const title = [err ? esc(err) : checked, routeLabel].filter(Boolean).join('；');
   const wrap = main => `<div class="plan-cell">${main}${_planStatusMeta(r)}</div>`;
-  if (['queued','running'].includes(r.plan_check_status)) {
+  if (['queued','running'].includes(queryStatus)) {
     const automatic = r.plan_check_trigger === 'registration_auto';
-    const queued = r.plan_check_status === 'queued';
+    const queued = queryStatus === 'queued';
     const label = automatic ? (queued ? '自动查询排队中' : '自动查询中') : (queued ? '查询排队中' : '查询中');
     const stamp = queued ? r.plan_check_queued_at : r.plan_check_started_at;
     const detail = stamp ? `${queued ? '入队' : '开始'}: ${esc(stamp)}` : '';
     return wrap(`<span class="pill status-running" title="${detail}">${label}</span>`);
   }
-  if (err || r.plan_check_status === 'failed') {
+  if (err || queryStatus === 'failed') {
     const reason = err || '套餐查询失败，未返回具体原因';
     const hasLastSuccess = Boolean(r.plan_last_success_at);
-    const lastPlan = hasLastSuccess ? `${plan}${r.plus_trial_eligible ? '/可Plus试用' : ''}` : '';
+    const lastPlan = hasLastSuccess ? `${plan}/${_statusLabel('planCategory', category)}` : '';
     const lastText = lastPlan ? `（上次: ${lastPlan}）` : '';
     const lastTitle = hasLastSuccess ? `上次成功: ${esc(r.plan_last_success_at)}` : '';
     return wrap(`<span class="pill status-failed" title="${[esc(reason), lastTitle].filter(Boolean).join('；')}">查询失败${esc(lastText)}</span><div class="extract-link-error" title="${esc(reason)}">${esc(reason)}</div>`);
   }
-  const lower = plan.toLowerCase();
-  const trialEligibilityKnown = r.trial_eligibility_known === true;
-
-  if (lower === 'free') {
-    const checkedOk = ok === true || r.plan_check_status === 'success';
-    if (!checkedOk) {
-      return wrap(`<span class="pill status-running" title="${title}">${esc(plan)}（待查 Plus 试用资格）</span>`);
-    }
-    if (!trialEligibilityKnown) {
-      return wrap(`<span class="pill status-running" title="${title}">${esc(plan)}（Plus 试用资格未明确）</span>`);
-    }
-  }
-
-  const cls = lower === 'free' && r.plus_trial_eligible === false ? 'status-used' : 'status-success';
+  const cls = isFreeTrialEligible || category === 'paid' ? 'status-success' : 'status-used';
   const expireRaw = r.plan_expires_at || r.expires_at || r.plan_renews_at || r.renews_at || '';
-  const planSuffix = lower === 'free'
-    ? (r.plus_trial_eligible === true ? 'Plus 试用资格可用' : '无 Plus 试用资格')
-    : r.billing_currency;
+  const planSuffix = isFreeTrialEligible
+    ? 'Plus 试用资格可用'
+    : isFreeNoTrial ? '无 Plus 试用资格'
+    : category === 'paid' ? r.billing_currency
+    : _statusLabel('planCategory', category);
   const text = [plan, planSuffix].filter(Boolean).join('|') || '-';
   const detail = [title];
   const billing = _billingLabel(r.billing_period);
@@ -3855,13 +3852,13 @@ function _planCell(r) {
   if (discount) detail.push(`折扣: ${discount}`);
   if (r.discount_expires_at) detail.push(`折扣结束: ${r.discount_expires_at}`);
   if (r.discount_promo_campaign_id) detail.push(`优惠: ${r.discount_promo_campaign_id}`);
-  if (r.plus_trial_eligible) detail.push('Plus 试用资格可用');
+  if (isFreeTrialEligible) detail.push('Plus 试用资格可用');
   return wrap(`<span class="pill ${cls}" title="${esc(detail.filter(Boolean).join('；'))}">${esc(text)}</span>`);
 }
 function _planAction(r) {
-  if (['queued','running'].includes(r.plan_check_status)) {
+  if (r.plan_capabilities?.is_checking) {
     const automatic = r.plan_check_trigger === 'registration_auto';
-    const queued = r.plan_check_status === 'queued';
+    const queued = r.plan_query_status === 'queued';
     const label = automatic ? (queued ? '自动查询排队中…' : '自动查询中…') : (queued ? '查询排队中…' : '查询中…');
     return `<button data-plan-check="${esc(r.id)}" disabled title="套餐查询正在执行，完成后可再次查询">${label}</button>`;
   }
@@ -3885,12 +3882,8 @@ function _extractLinkProgressLabel(message) {
   return `${/(失败|重试|重新提交)/.test(text) ? '重试' : '提炼'} ${attempt[1]}/${attempt[2]}`;
 }
 function _extractLinkStatusLabel(status) {
-  const labels = {
-    queued: '排队', running: '提炼中', success: '提炼成功', failed: '提炼失败',
-    canceled: '已取消', cancelled: '已取消', stopped: '已停止',
-  };
   const value = String(status || '').trim().toLowerCase();
-  return labels[value] || (value || '-');
+  return _statusLabel('extract', value);
 }
 function _extractLinkHasRecord(r) {
   return Boolean(
@@ -3937,7 +3930,7 @@ function _extractLinkCell(r) {
     const qrBtn = qr ? `<button class="extract-link-btn extract-qr" data-qr-url="${esc(qr)}" title="打开支付二维码图片">查看二维码</button>` : '';
     return wrap(`${success}${qrBtn}`);
   }
-  if (s === 'failed' || s === 'canceled' || s === 'cancelled' || s === 'stopped') {
+  if (s === 'failed' || s === 'canceled') {
     const reason = err || msg || '未知原因';
     return wrap(`<span class="pill status-failed extract-status-label" title="${esc(reason)}">${esc(summary(_extractLinkStatusLabel(s)))}</span>`);
   }
@@ -3945,21 +3938,21 @@ function _extractLinkCell(r) {
 }
 function _extractLinkAction(r) {
   const s = r.extract_link_status || '';
-  if (['queued','running'].includes(s)) return `<button disabled title="${esc(r.extract_link_message || '提链任务执行中')}">提链中…</button>`;
-  if (r.extract_link_resumable) return `<button class="good" data-extract-link-resume="${esc(r.id)}" title="只轮询已保存的 Masi Job，不创建新 Job、不再次消耗 CDK">恢复轮询</button>`;
-  const plan = (r.current_plan_type || r.plan_type || '').toString().toLowerCase();
-  const eligible = plan === 'free' && !!r.plus_trial_eligible;
+  const capabilities = r.extract_link_capabilities || {};
+  if (capabilities.is_running) return `<button disabled title="${esc(r.extract_link_message || '提链任务执行中')}">提链中…</button>`;
+  if (capabilities.resumable) return `<button class="good" data-extract-link-resume="${esc(r.id)}" title="只轮询已保存的 Masi Job，不创建新 Job、不再次消耗 CDK">恢复轮询</button>`;
+  const eligible = Boolean(r.plan_capabilities?.is_eligible);
   if (!eligible) return '';
   const failedReason = s === 'failed' ? (r.extract_link_error || r.extract_link_message || '') : '';
   return `<button class="good" data-extract-link="${esc(r.id)}" title="${esc(failedReason ? '重新提链；上次失败原因：' + failedReason : '为该 free(可Plus试用) 账号创建 PIX/UPI/KAKAO_PAY/IDEAL 提链任务')}">提链</button>`;
 }
 function _codexAction(r) {
-  const s = r.codex_status || '';
-  if (s === 'retrying') {
+  const capabilities = r.codex_capabilities || {};
+  if (capabilities.can_stop) {
     return `<button class="danger" data-codex-stop="${esc(r.email)}" title="停止该账号正在进行的 Codex 补跑">停止补跑</button> <button data-codex-reset-retrying="${esc(r.email)}" title="只重置状态；不会向运行线程发送停止信号">重置状态</button>`;
   }
-  if (s === 'deactivated') return '';
-  const label = s === 'success' ? '重新补跑 Codex' : '补跑 Codex';
+  if (!capabilities.can_retry) return '';
+  const label = r.codex_auth_status === 'success' ? '重新补跑 Codex' : '补跑 Codex';
   return `<button data-codex-retry="${esc(r.email)}" title="重新跑一次 Codex 授权（会消耗 1 封邮箱 OTP + 1 个接码短信）">${label}</button>`;
 }
 function _tokenCellV2(r) {
@@ -3968,11 +3961,11 @@ function _tokenCellV2(r) {
   const liveAt = r.live_checked_at || '';
   let liveHtml = '';
   const liveFp = r.live_check_fingerprint_text || '';
-  if (live === 'live') liveHtml = `<div class="acc-v2-sub" title="${esc([liveAt, liveFp].filter(Boolean).join('\n'))}">查活: 正常${liveFp ? ` · ${esc(liveFp)}` : ''}</div>`;
-  else if (live === 'queued') liveHtml = `<div class="acc-v2-sub" title="${esc(liveAt)}" style="color:#e6a23c">查活: 排队</div>`;
-  else if (live === 'running') liveHtml = `<div class="acc-v2-sub" title="${esc(liveAt)}" style="color:#e6a23c">查活: 运行中</div>`;
-  else if (live === 'deactivated') liveHtml = `<div class="acc-v2-sub" title="${esc(liveErr || liveAt)}" style="color:#f56c6c">查活: 已废</div>`;
-  else if (live === 'failed') liveHtml = `<div class="acc-v2-sub" title="${esc(liveErr || liveAt)}" style="color:#e6a23c">查活: 失败</div>`;
+  if (live) {
+    const color = live === 'deactivated' ? '#f56c6c' : ['queued','running','failed'].includes(live) ? '#e6a23c' : '';
+    const style = color ? ` style="color:${color}"` : '';
+    liveHtml = `<div class="acc-v2-sub" title="${esc([liveErr || liveAt, liveFp].filter(Boolean).join('\n'))}"${style}>查活: ${esc(_statusLabel('live', live))}${liveFp && live === 'live' ? ` · ${esc(liveFp)}` : ''}</div>`;
+  }
   if (r.has_access_token) {
     return `<button type="button" class="acc-v2-token-copy" data-account-copy-secret="access_token" data-account-id="${esc(r.id)}" title="复制完整 AT">复制</button>${liveHtml}`;
   }
@@ -4096,6 +4089,19 @@ function updateAccountSelectionUi(pageRows = null) {
       el.textContent = archiveLabel;
       el.title = archiveTitle;
     }
+  });
+
+  const selectedAccounts = ACCOUNTS.filter(row => ACCOUNT_SELECTED.has(Number(row.id)));
+  const capabilityButtons = {
+    btnCheckSelectedPlansV2: selectedAccounts.some(row => row.plan_capabilities?.can_start),
+    btnCheckSelectedCheckoutV2: selectedAccounts.some(row => row.checkout_capabilities?.can_retry),
+    btnExtractSelectedLinksV2: selectedAccounts.some(row => row.plan_capabilities?.is_eligible),
+    btnRetrySelectedCodexV2: selectedAccounts.some(row => row.codex_capabilities?.can_retry),
+    btnStopSelectedCodexV2: selectedAccounts.some(row => row.codex_capabilities?.can_stop),
+  };
+  Object.entries(capabilityButtons).forEach(([id, allowed]) => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = !allowed;
   });
 
   if (!pageRows) pageRows = ACCOUNTS;
@@ -4373,11 +4379,6 @@ async function onAccountsBodyClick(e) {
     showToast(r.message || '已开始补跑');
     loadAccounts();
     openRetryLog(email);
-    const poll = setInterval(async () => {
-      const acc = ACCOUNTS.find(a => a.email === email);
-      if (!acc || acc.codex_status !== 'retrying') clearInterval(poll);
-    }, 5000);
-    setTimeout(() => clearInterval(poll), 5 * 60 * 1000);
   } catch(err) {
     showToast('触发补跑失败: ' + err.message);
     btn.disabled = false;
@@ -4752,7 +4753,7 @@ async function downloadSelectedCpa() {
   const ids = Array.from(ACCOUNT_SELECTED);
   if (ids.length === 0) { showToast('请先选择账号'); return; }
   const selectedAccounts = ids.map(id => ACCOUNTS.find(a => Number(a.id) === Number(id))).filter(Boolean);
-  const missingCodex = selectedAccounts.filter(a => (a.codex_status || '') !== 'success').length;
+  const missingCodex = selectedAccounts.filter(a => a.codex_auth_status !== 'success').length;
   let msg = `确定从 CPA 下载选中的 ${ids.length} 个账号的 CPA/Codex JSON 吗？\n\n会按账号邮箱匹配 CPA auth-files，成功的文件会打包成 ZIP。`;
   if (missingCodex) msg += `\n\n其中 ${missingCodex} 个账号本地 Codex 状态不是 success，若 CPA 端没有文件会写入 manifest 错误清单。`;
   if (!confirm(msg)) return;
@@ -4831,8 +4832,7 @@ async function checkOneCheckoutSession(id, btn) {
 async function extractOneLink(id, btn) {
   const acc = ACCOUNTS.find(a => Number(a.id) === Number(id));
   if (!acc) { showToast('账号不存在'); return; }
-  const plan = (acc.current_plan_type || acc.plan_type || '').toString().toLowerCase();
-  if (plan !== 'free' || !acc.plus_trial_eligible) {
+  if (!acc.plan_capabilities?.is_eligible) {
     showToast('仅支持 free(可Plus试用) 账号提链');
     return;
   }
@@ -4859,7 +4859,7 @@ async function extractSelectedLinks() {
   const ids = Array.from(ACCOUNT_SELECTED);
   if (ids.length === 0) { showToast('请先选择账号'); return; }
   const selected = ids.map(id => ACCOUNTS.find(a => Number(a.id) === Number(id))).filter(Boolean);
-  const eligible = selected.filter(a => (a.current_plan_type || a.plan_type || '').toString().toLowerCase() === 'free' && !!a.plus_trial_eligible);
+  const eligible = selected.filter(a => Boolean(a.plan_capabilities?.is_eligible));
   if (!eligible.length) { showToast('选中账号里没有 free(可Plus试用)'); return; }
   if (!confirm(`确定批量提链 ${eligible.length} 个 free(可Plus试用) 账号吗？\n\n非可试用账号会自动跳过。成功会按账号消耗 CDK 次数。`)) return;
   const btn = $('#btnExtractSelectedLinksV2');
@@ -5137,7 +5137,7 @@ async function stopSelectedCodex() {
   const ids = Array.from(ACCOUNT_SELECTED);
   if (ids.length === 0) { showToast('请先选择账号'); return; }
   const selectedAccounts = ids.map(id => ACCOUNTS.find(a => Number(a.id) === Number(id))).filter(Boolean);
-  const retrying = selectedAccounts.filter(a => (a.codex_status || '') === 'retrying');
+  const retrying = selectedAccounts.filter(a => Boolean(a.codex_capabilities?.can_stop));
   if (retrying.length === 0) { showToast('选中账号里没有正在补跑的 Codex'); return; }
   if (!confirm(`确定停止选中的 ${retrying.length} 个 Codex 补跑吗？\n\n会发送停止信号，并将状态标记为“已停止”。`)) return;
   const btn = $('#btnStopSelectedCodexV2');
@@ -5166,16 +5166,16 @@ async function retrySelectedCodex() {
   const workersElV2 = $('#codexBulkWorkersV2');
   if (workersElV2) workersElV2.value = workers;
   const selectedAccounts = ids.map(id => ACCOUNTS.find(a => Number(a.id) === Number(id))).filter(Boolean);
-  const retryingCount = selectedAccounts.filter(a => (a.codex_status || '') === 'retrying').length;
-  const deactivatedCount = selectedAccounts.filter(a => (a.codex_status || '') === 'deactivated').length;
+  const retryingCount = selectedAccounts.filter(a => Boolean(a.codex_capabilities?.is_running)).length;
+  const unavailableCount = selectedAccounts.filter(a => !a.codex_capabilities?.can_retry).length;
   let msg = `批量补跑选中的 ${ids.length} 个账号 Codex 授权？
 
 并发线程数：${workers}
 
 将按账号消耗邮箱 OTP 和接码短信。`;
-  if (retryingCount || deactivatedCount) msg += `
+  if (retryingCount || unavailableCount) msg += `
 
-其中：补跑中 ${retryingCount} 个、已废号 ${deactivatedCount} 个会自动跳过。`;
+其中：补跑中 ${retryingCount} 个、当前不可补跑 ${unavailableCount} 个会自动跳过。`;
   if (!confirm(msg)) return;
   const btn = $('#btnRetrySelectedCodexV2');
   if (!btn) return;
@@ -5545,7 +5545,7 @@ function _mailcomAliasLifecycleLabel(status) {
   return ({available:'可用', registering:'注册中', used:'已用', failed:'失败', disabled:'已停用'})[status] || status || '-';
 }
 function _mailcomAliasCleanupLabel(status) {
-  return ({pending:'待套餐查询', not_eligible:'保留（有试用资格）', not_requested:'未执行清理', cleanup_running:'清理中', cleanup_pending:'待人工处理', deleted:'已删除'})[status] || status || '-';
+  return _statusLabel('mailcomCleanup', status);
 }
 function _mailcomCapacityLabel(status) {
   return ({unknown:'未知',capacity_unknown:'查询失败/未知',normal:'正常',near_limit:'接近上限',active_full:'活动容量已满',lifetime_full:'生命周期已满'})[status] || status || '未知';
@@ -5571,7 +5571,7 @@ function _mailcomParentDetail(parent) {
   const allSelected = selectableAliases.length > 0 && selectableAliases.every(r => MAILCOM_ALIAS_SELECTED.has(String(r.alias_email || '').toLowerCase()));
   const rows = aliases.map(r => {
     const accountLabel = r.registered_account_id ? `账号 #${r.registered_account_id}${r.account_archived ? '（已归档）' : ''}` : '-';
-    const plan = r.plan_result_class === 'eligible_for_delete' ? 'free / 无试用' : r.plan_result_class === 'trial_eligible' ? '有试用资格' : r.plan_result_class === 'non_free' ? (r.account_plan_type || '非 free') : (r.account_plan_type || '不明确');
+    const plan = _statusLabel('planCategory', r.plan_category_code);
     const leased = r.status === 'registering';
     const deleted = r.status === 'disabled';
     const selected = MAILCOM_ALIAS_SELECTED.has(String(r.alias_email || '').toLowerCase());

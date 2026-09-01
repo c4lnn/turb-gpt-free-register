@@ -163,7 +163,7 @@ class AccountPlanCellTemplateTests(unittest.TestCase):
         cls.template = (
             Path(__file__).parents[1] / "webui" / "templates" / "index.html"
         ).read_text(encoding="utf-8")
-        start = cls.template.index("function _planErrorSummary")
+        start = cls.template.index("const ACCOUNT_STATUS_LABELS")
         end = cls.template.index("function _planAction", start)
         cls.renderer = cls.template[start:end]
         cls.node = shutil.which("node")
@@ -179,6 +179,7 @@ function esc(value) {
 }
 function _fmtPlanTime(value) { return String(value ?? ''); }
 __RENDERER__
+function _fmtPlanTime(value) { return String(value ?? ''); }
 const rows = __ROWS__;
 process.stdout.write(JSON.stringify(rows.map(_planCell)));
 """.replace("__RENDERER__", self.renderer).replace(
@@ -195,12 +196,8 @@ process.stdout.write(JSON.stringify(rows.map(_planCell)));
         return json.loads(result.stdout)
 
     def test_success_label_uses_trial_eligibility_for_free_and_currency_for_paid(self):
-        self.assertIn(
-            "const trialEligibilityKnown = r.trial_eligibility_known === true;",
-            self.renderer,
-        )
-        self.assertIn("Plus 试用资格未明确", self.renderer)
-        self.assertIn("r.plus_trial_eligible === false", self.renderer)
+        self.assertIn("const category = String(r.plan_category_code || '').toLowerCase();", self.renderer)
+        self.assertNotIn("r.plus_trial_eligible === false", self.renderer)
         self.assertIn("无 Plus 试用资格", self.renderer)
         self.assertIn("[plan, planSuffix].filter(Boolean).join('|')", self.renderer)
         self.assertNotIn("parts.join('/')", self.renderer)
@@ -217,7 +214,7 @@ process.stdout.write(JSON.stringify(rows.map(_planCell)));
             self.assertIn(f"{status}: '{label}'", self.renderer)
         self.assertIn('r.plan_check_updated_at', self.renderer)
         self.assertIn('class="acc-v2-sub"', self.renderer)
-        self.assertIn("if (!label || !updated) return '';", self.renderer)
+        self.assertIn("if (!updated) return '';", self.renderer)
 
     def test_failed_status_uses_short_visible_summary_and_keeps_tooltip_detail(self):
         for label in (
@@ -228,7 +225,7 @@ process.stdout.write(JSON.stringify(rows.map(_planCell)));
             "响应异常",
         ):
             self.assertIn(label, self.template)
-        self.assertIn("const summary = r.plan_check_status === 'failed' ? _planErrorSummary(r) : '';", self.renderer)
+        self.assertIn("const summary = code === 'failed' ? _planErrorSummary(r) : '';", self.renderer)
         self.assertIn("const text = summary ? `查询失败：${summary}|${time}` : detailText;", self.renderer)
         self.assertIn("const status = Number(r.plan_check_http_status);", self.renderer)
         self.assertIn("if (inRange) return `HTTP ${status}`;", self.renderer)
@@ -241,6 +238,7 @@ process.stdout.write(JSON.stringify(rows.map(_planCell)));
     def test_failed_summary_renders_specific_http_status_and_updates_without_reload(self):
         base = {
             "plan_check_status": "failed",
+            "plan_query_status": "failed",
             "plan_check_error_kind": "http_4xx",
             "plan_check_updated_at": "2026-08-28T12:34:00",
             "plan_check_error": "HTTP response body with sensitive details",
