@@ -29,6 +29,7 @@ from core.account_status_contracts import build_account_status_contract, mailcom
 from core.account_status_contracts import (
     CODEX_AUTH_STATUSES, CODEX_OPERATION_STATUSES, LIVE_CHECK_STATUSES, PLAN_CATEGORY_CODES,
 )
+from core.email_provider import VALID_EMAIL_SOURCES
 from webui import config_editor
 
 logger = logging.getLogger(__name__)
@@ -54,12 +55,15 @@ def _pool_status_arg(raw: str | None) -> tuple[str | None, str | None]:
 
 def _account_status_filter_args() -> tuple[dict[str, str], str | None]:
     plan = str(request.args.get("plan_category") or request.args.get("plan") or "").strip().lower()
+    email_source = str(request.args.get("email_source") or "").strip().lower()
     auth = str(request.args.get("codex_auth_status") or "").strip().lower()
     operation = str(request.args.get("codex_operation_status") or "").strip().lower()
     live = str(request.args.get("live_check_status") or "").strip().lower()
     legacy = str(request.args.get("codex_status") or "").strip().lower()
     if plan and plan not in set(PLAN_CATEGORY_CODES) | {"all", "any", "free", "plus"}:
         return {}, "plan_category 非法"
+    if email_source and email_source not in set(VALID_EMAIL_SOURCES) | {"all", "any", "unknown"}:
+        return {}, "email_source 非法"
     if auth and auth not in CODEX_AUTH_STATUSES:
         return {}, "codex_auth_status 非法"
     if operation and operation not in CODEX_OPERATION_STATUSES:
@@ -72,6 +76,7 @@ def _account_status_filter_args() -> tuple[dict[str, str], str | None]:
         return {}, "codex_status 不能与新状态筛选参数同时提交"
     return {
         "plan_filter": plan,
+        "email_source_filter": email_source,
         "codex_auth_status_filter": auth,
         "codex_operation_status_filter": operation,
         "live_check_status_filter": live,
@@ -567,6 +572,8 @@ def create_app(auth_code: str | None = None) -> Flask:
             return jsonify({"ok": False, "error": filter_error}), 400
         checkout_type_filter = str(request.args.get("checkout_type", default="") or "").lower()
         q = str(request.args.get("q", default="") or "").strip()
+        date_from = str(request.args.get("date_from", default="") or "").strip() or None
+        date_to = str(request.args.get("date_to", default="") or "").strip() or None
         page_arg = request.args.get("page", default=None, type=int)
         page_size_arg = request.args.get("page_size", default=None, type=int)
         if page_arg is not None or page_size_arg is not None:
@@ -579,6 +586,8 @@ def create_app(auth_code: str | None = None) -> Flask:
                 archived=archived,
                 **status_filters,
                 q=q,
+                date_from=date_from,
+                date_to=date_to,
                 checkout_type_filter=checkout_type_filter,
             )
             snapshot.update({"page": page, "page_size": page_size})
@@ -588,6 +597,8 @@ def create_app(auth_code: str | None = None) -> Flask:
                 archived=archived,
                 **status_filters,
                 q=q,
+                date_from=date_from,
+                date_to=date_to,
                 checkout_type_filter=checkout_type_filter,
             )
         snapshot["queue"] = plan_check_service.queue_settings()

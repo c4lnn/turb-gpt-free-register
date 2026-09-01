@@ -28,12 +28,32 @@ class CheckoutSessionTemplateTests(unittest.TestCase):
         self.assertIn("btnCheckSelectedCheckoutV2", selection_block)
 
     def test_checkout_type_filter_is_selectable_and_applies_to_list_and_poll(self):
-        for value in ("", "none", "oaics", "cs_live", "other_cs", "unknown"):
-            self.assertIn(f'<option value="{value}">', self.template)
+        for element_id in (
+            "accountArchiveFilterV2",
+            "accountEmailSourceFilterV2",
+            "accountPlanCategoryFilterV2",
+            "accountCodexAuthFilterV2",
+            "accountCodexOperationFilterV2",
+            "accountLiveCheckFilterV2",
+            "checkoutTypeFilterV2",
+        ):
+            self.assertIn(f'id="{element_id}"', self.template)
+        for value in (
+            "free_trial_eligible", "free_no_trial", "paid", "unknown",
+            "not_started", "success", "failed", "skipped",
+            "idle", "queued", "running", "canceled",
+            "pending", "live", "deactivated", "none",
+            "oaics", "cs_live", "other_cs",
+            "outlook", "generic_api", "cloudflare_domain", "icloud", "cloudflare",
+            "gptmail", "mailnest", "cloudmail", "mailcom",
+        ):
+            self.assertIn(value, self.template)
         self.assertIn('id="checkoutTypeFilterV2"', self.template)
-        self.assertIn("function applyAccountsCheckoutTypeFilter(value)", self.template)
-        self.assertIn("checkout_type=${encodeURIComponent(checkoutType)}", self.template)
-        self.assertIn("applyAccountsCheckoutTypeFilter(checkoutTypeV2.value)", self.template)
+        self.assertIn("function applyAccountsFilterChange(stateKey, value)", self.template)
+        self.assertIn("function buildAccountsQueryParams()", self.template)
+        self.assertIn("params.set(meta.param, value)", self.template)
+        self.assertIn("data-account-filter=\"checkout_type\"", self.template)
+        self.assertNotIn("function applyAccountsCheckoutTypeFilter(value)", self.template)
 
     def test_cell_covers_all_states_types_and_failure_tooltip(self):
         start = self.template.index("function _checkoutSessionErrorTitle")

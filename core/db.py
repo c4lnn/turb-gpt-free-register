@@ -60,6 +60,7 @@ from core.account_status_contracts import (
     normalize_extract_link_status,
     extract_link_capabilities as contract_extract_link_capabilities,
 )
+from core.email_provider import VALID_EMAIL_SOURCES
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _DATA_DIR = _PROJECT_ROOT
@@ -1602,8 +1603,22 @@ def _account_matches_checkout_type_filter(row: dict, checkout_type_filter: str |
         return True
     current = str(row.get("checkout_session_type") or "").strip().lower()
     if f in {"none", "empty", "未检测"}:
-        return not current or current == "unknown"
+        return not current
     return current == f
+
+
+def _account_email_source_code(row: dict | None) -> str:
+    """返回账号来源的规范 code；缺失或历史未知值归入 unknown。"""
+    raw = str((row or {}).get("email_source") or "").strip().lower()
+    return raw if raw in set(VALID_EMAIL_SOURCES) else "unknown"
+
+
+def _account_matches_email_source_filter(row: dict, email_source_filter: str | None = None) -> bool:
+    """按邮箱来源 code 过滤，unknown 覆盖缺失和未识别的原始值。"""
+    value = str(email_source_filter or "").strip().lower()
+    if not value or value in {"all", "any"}:
+        return True
+    return _account_email_source_code(row) == value
 
 
 def _decorate_outlook(row: dict, account_by_email: dict[str, dict] | None = None) -> dict:
@@ -2345,6 +2360,7 @@ def account_extract_capabilities(row: dict | None) -> dict[str, bool]:
     return contract_extract_link_capabilities(
         row.get("extract_link_status"),
         resumable=_account_extract_resumable_legacy(row),
+        has_access_token=bool(str(row.get("access_token") or "").strip()),
     )
 
 
@@ -2502,6 +2518,7 @@ def _parse_iso_dt(value: str | None, end_of_day: bool = False) -> datetime | Non
 
 def _filtered_decorated_accounts(
     archived: str | bool | None = False,
+    email_source_filter: str | None = None,
     plan_filter: str | None = None,
     q: str | None = None,
     codex_status_filter: str | None = None,
@@ -2519,6 +2536,9 @@ def _filtered_decorated_accounts(
         pass
     else:
         rows = [r for r in rows if not bool(r.get("archived"))]
+    rows = [r for r in rows if _account_matches_email_source_filter(r, email_source_filter)]
+    # Checkout 的 none 需要区分“原始字段缺失”和显式 unknown，必须在装饰器补默认值前筛选。
+    rows = [r for r in rows if _account_matches_checkout_type_filter(r, checkout_type_filter)]
     decorated = [_decorate_account(r, include_checkout_session_id=False) for r in rows]
     decorated = [r for r in decorated if _account_matches_plan_filter(r, plan_filter)]
     codex_status_filter = str(codex_status_filter or "").strip().lower()
@@ -2533,7 +2553,6 @@ def _filtered_decorated_accounts(
     live_filter = str(live_check_status_filter or "").strip().lower()
     if live_filter:
         decorated = [r for r in decorated if r.get("live_check_status") == live_filter]
-    decorated = [r for r in decorated if _account_matches_checkout_type_filter(r, checkout_type_filter)]
     decorated = [r for r in decorated if _account_matches_query(r, q)]
     # 按创建时间筛选（date_from/date_to 为 ISO 字符串或 YYYY-MM-DD）
     if date_from or date_to:
@@ -2558,17 +2577,21 @@ def list_account_plan_check_statuses(
     limit: int = 5000,
     offset: int = 0,
     archived: str | bool | None = False,
+    email_source_filter: str | None = None,
     plan_filter: str | None = None,
     q: str | None = None,
     codex_status_filter: str | None = None,
     codex_auth_status_filter: str | None = None,
     codex_operation_status_filter: str | None = None,
     live_check_status_filter: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
     checkout_type_filter: str | None = None,
 ) -> dict:
     """返回不含 Token/邮箱密码的套餐查询轻量状态快照。"""
     fields = (
         "id", "email", "archived",
+        "email_source",
         "plan_type", "current_plan_type", "plus_trial_eligible", "trial_eligibility_known",
         "plan_check_status", "plan_check_ok", "plan_check_error", "plan_check_error_kind", "plan_check_http_status",
         "plan_check_trigger", "plan_check_queued_at", "plan_check_started_at",
@@ -2602,12 +2625,15 @@ def list_account_plan_check_statuses(
     with _LOCK:
         all_rows = _filtered_decorated_accounts(
             archived=archived,
+            email_source_filter=email_source_filter,
             plan_filter=plan_filter,
             q=q,
             codex_status_filter=codex_status_filter,
             codex_auth_status_filter=codex_auth_status_filter,
             codex_operation_status_filter=codex_operation_status_filter,
             live_check_status_filter=live_check_status_filter,
+            date_from=date_from,
+            date_to=date_to,
             checkout_type_filter=checkout_type_filter,
         )
         total = len(all_rows)
@@ -2637,6 +2663,7 @@ def list_account_plan_check_statuses(
             [
                 {
                     "id": row.get("id"),
+                    "email_source": row.get("email_source"),
                     "updated_at": row.get("updated_at"),
                     "plan_check_status": row.get("plan_check_status"),
                     "plan_check_ok": row.get("plan_check_ok"),
@@ -2676,6 +2703,7 @@ def list_accounts(
     limit: int = 500,
     offset: int = 0,
     archived: str | bool | None = False,
+    email_source_filter: str | None = None,
     plan_filter: str | None = None,
     q: str | None = None,
     codex_status_filter: str | None = None,
@@ -2689,6 +2717,7 @@ def list_accounts(
     with _LOCK:
         rows = _filtered_decorated_accounts(
             archived=archived,
+            email_source_filter=email_source_filter,
             plan_filter=plan_filter,
             q=q,
             codex_status_filter=codex_status_filter,
@@ -2706,6 +2735,7 @@ def list_accounts_page(
     limit: int = 50,
     offset: int = 0,
     archived: str | bool | None = False,
+    email_source_filter: str | None = None,
     plan_filter: str | None = None,
     q: str | None = None,
     codex_status_filter: str | None = None,
@@ -2719,6 +2749,7 @@ def list_accounts_page(
     with _LOCK:
         rows = _filtered_decorated_accounts(
             archived=archived,
+            email_source_filter=email_source_filter,
             plan_filter=plan_filter,
             q=q,
             codex_status_filter=codex_status_filter,

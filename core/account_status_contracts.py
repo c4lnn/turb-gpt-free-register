@@ -110,7 +110,7 @@ def codex_capabilities(
         "is_terminal": operation in {"success", "failed", "canceled"},
         "can_retry": not blocked and not running and auth in {"not_started", "failed", "skipped"},
         "can_stop": running,
-        "can_start": not blocked and not running,
+        "can_start": not blocked and not running and auth != "unknown",
     }
 
 
@@ -142,7 +142,12 @@ def normalize_plan_query_status(raw: Any) -> str:
     return value if value in _PLAN_QUERY_SET else ("pending" if not value else "unknown")
 
 
-def plan_capabilities(category: str, query_status: str) -> dict[str, bool]:
+def plan_capabilities(
+    category: str,
+    query_status: str,
+    *,
+    has_access_token: bool = True,
+) -> dict[str, bool]:
     category = category if category in PLAN_CATEGORY_CODES else "unknown"
     query = normalize_plan_query_status(query_status)
     checking = query in {"pending", "queued", "running"}
@@ -150,7 +155,8 @@ def plan_capabilities(category: str, query_status: str) -> dict[str, bool]:
         "is_checking": checking,
         "is_terminal": query in {"success", "failed"},
         "is_eligible": category == "free_trial_eligible" and query != "failed",
-        "can_start": not checking,
+        "can_start": bool(has_access_token) and not checking and query != "unknown",
+        "has_access_token": bool(has_access_token),
     }
 
 
@@ -159,14 +165,17 @@ def normalize_checkout_query_status(raw: Any) -> str:
     return value if value in _CHECKOUT_QUERY_SET else ("pending" if not value else "unknown")
 
 
-def checkout_capabilities(status: Any) -> dict[str, bool]:
+def checkout_capabilities(status: Any, *, has_access_token: bool = True) -> dict[str, bool]:
     value = normalize_checkout_query_status(status)
     running = value in {"queued", "running"}
+    actionable = value in {"pending", "success", "failed"} and bool(has_access_token)
     return {
         "is_checking": running,
         "is_terminal": value in {"success", "failed"},
-        "can_retry": not running,
+        "can_retry": actionable and not running,
+        "can_start": actionable and not running,
         "can_stop": False,
+        "has_access_token": bool(has_access_token),
     }
 
 
@@ -187,21 +196,28 @@ def normalize_extract_link_status(raw: Any) -> str:
     return aliases.get(value, value if value in _EXTRACT_SET else "unknown")
 
 
-def extract_link_capabilities(status: Any, *, resumable: bool = False) -> dict[str, bool]:
+def extract_link_capabilities(
+    status: Any,
+    *,
+    resumable: bool = False,
+    has_access_token: bool = True,
+) -> dict[str, bool]:
     value = normalize_extract_link_status(status)
     running = value in {"queued", "running"}
     return {
         "is_running": running,
         "is_terminal": value in {"success", "failed", "canceled"},
         "can_retry": value in {"failed", "canceled"} and (resumable or value == "canceled"),
+        "can_start": bool(has_access_token) and value in {"pending", "failed", "canceled"} and not running,
         "can_stop": running,
         "resumable": bool(resumable),
+        "has_access_token": bool(has_access_token),
     }
 
 
 def normalize_live_check_status(raw: Any) -> str:
     value = _text(raw)
-    aliases = {"live": "live", "success": "live", "": "unknown"}
+    aliases = {"live": "live", "success": "live", "": "pending"}
     return aliases.get(value, value if value in _LIVE_SET else "unknown")
 
 
@@ -211,8 +227,8 @@ def live_check_capabilities(status: Any) -> dict[str, bool]:
     return {
         "is_running": running,
         "is_terminal": value in {"live", "deactivated", "failed"},
-        "can_retry": not running,
-        "can_start": not running,
+        "can_retry": value in {"pending", "live", "deactivated", "failed"} and not running,
+        "can_start": value in {"pending", "live", "deactivated", "failed"} and not running,
         "account_available": value == "live",
     }
 
@@ -236,12 +252,21 @@ def build_account_status_contract(row: Mapping[str, Any] | None) -> dict[str, An
         "codex_capabilities": codex_capabilities(auth, operation, live_status=live),
         "plan_category_code": plan,
         "plan_query_status": plan_query,
-        "plan_capabilities": plan_capabilities(plan, plan_query),
+        "plan_capabilities": plan_capabilities(
+            plan,
+            plan_query,
+            has_access_token=bool(str(row.get("access_token") or "").strip()),
+        ),
         "checkout_query_status": normalize_checkout_query_status(row.get("checkout_check_status")),
-        "checkout_capabilities": checkout_capabilities(row.get("checkout_check_status")),
+        "checkout_capabilities": checkout_capabilities(
+            row.get("checkout_check_status"),
+            has_access_token=bool(str(row.get("access_token") or "").strip()),
+        ),
         "extract_link_status": extract,
         "extract_link_capabilities": extract_link_capabilities(
-            extract, resumable=bool(row.get("extract_link_resumable"))
+            extract,
+            resumable=bool(row.get("extract_link_resumable")),
+            has_access_token=bool(str(row.get("access_token") or "").strip()),
         ),
         "live_check_status": live,
         "live_check_capabilities": live_check_capabilities(live),

@@ -266,13 +266,15 @@ class ExtractLinkWebUiTests(unittest.TestCase):
         self.assertNotIn('<div class="extract-link-error"', renderer)
         self.assertNotIn("${esc(reason)}</div>", renderer)
 
-    def test_account_template_includes_codex_success_filter(self):
+    def test_account_template_includes_codex_status_dropdown_filter(self):
         template_dir = Path(__file__).parents[1] / "webui" / "templates"
         template = (template_dir / "index.html").read_text(encoding="utf-8")
-        self.assertIn("SHOW_CODEX_SUCCESS_ONLY", template)
-        self.assertIn("codex_auth_status=${encodeURIComponent(codexAuthStatus)}", template)
+        self.assertIn('id="accountCodexAuthFilterV2"', template)
+        self.assertIn('data-account-filter="codex_auth_status"', template)
+        self.assertIn("codex_auth_status", template)
         self.assertNotIn("codex_status=${encodeURIComponent(codexStatus)}", template)
-        self.assertIn("Codex已通过", template)
+        self.assertNotIn("SHOW_CODEX_SUCCESS_ONLY", template)
+        self.assertNotIn("Codex已通过", template)
 
     def test_capabilities_endpoint(self):
         response = self.client.get("/api/extract-link/capabilities", headers=self.headers)
