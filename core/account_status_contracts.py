@@ -217,18 +217,22 @@ def extract_link_capabilities(
 
 def normalize_live_check_status(raw: Any) -> str:
     value = _text(raw)
-    aliases = {"live": "live", "success": "live", "": "pending"}
+    # 查活是可选操作；空值表示尚未主动查活，不伪装成待处理任务。
+    if not value:
+        return ""
+    aliases = {"live": "live", "success": "live"}
     return aliases.get(value, value if value in _LIVE_SET else "unknown")
 
 
 def live_check_capabilities(status: Any) -> dict[str, bool]:
     value = normalize_live_check_status(status)
     running = value in {"queued", "running"}
+    can_check = value in {"", "pending", "live", "deactivated", "failed"}
     return {
         "is_running": running,
         "is_terminal": value in {"live", "deactivated", "failed"},
-        "can_retry": value in {"pending", "live", "deactivated", "failed"} and not running,
-        "can_start": value in {"pending", "live", "deactivated", "failed"} and not running,
+        "can_retry": can_check and not running,
+        "can_start": can_check and not running,
         "account_available": value == "live",
     }
 

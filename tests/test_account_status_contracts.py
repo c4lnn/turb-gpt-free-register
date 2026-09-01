@@ -66,9 +66,12 @@ class AccountStatusContractTests(unittest.TestCase):
         self.assertFalse(extract_link_capabilities("future_state")["can_start"])
         self.assertFalse(live_check_capabilities("future_state")["can_start"])
 
-    def test_initial_liveness_is_pending_and_can_be_checked(self):
-        self.assertEqual(normalize_live_check_status(""), "pending")
+    def test_initial_liveness_is_unset_and_can_be_checked(self):
+        self.assertEqual(normalize_live_check_status(""), "")
         self.assertTrue(live_check_capabilities("")["can_start"])
+        contract = build_account_status_contract({"access_token": "token-fixture"})
+        self.assertEqual(contract["live_check_status"], "")
+        self.assertTrue(contract["live_check_capabilities"]["can_start"])
 
     def test_checkout_capability_requires_an_access_token(self):
         capabilities = checkout_capabilities("pending", has_access_token=False)
