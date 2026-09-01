@@ -77,10 +77,9 @@ def classify_plan_check_error(
     http_status: int | None = None,
     exc: BaseException | None = None,
     response_format: bool = False,
+    local_token_expired: bool = False,
 ) -> str | None:
     """将套餐查询最终失败归一为供 WebUI 使用的非敏感分类。"""
-    if response_format:
-        return "response_format"
     try:
         status = int(http_status) if http_status is not None else None
     except (TypeError, ValueError):
@@ -90,6 +89,10 @@ def classify_plan_check_error(
             return "http_4xx"
         if 500 <= status < 600:
             return "http_5xx"
+    if response_format:
+        return "response_format"
+    if local_token_expired:
+        return "local_token_expired"
     if exc is not None:
         return "network_timeout" if _is_timeout_exception(exc) else "network_connection"
     return None
@@ -235,9 +238,14 @@ def token_claims(token: str) -> dict:
     exp = payload.get("exp")
     exp_iso = None
     expired = None
-    if isinstance(exp, (int, float)):
-        exp_iso = datetime.fromtimestamp(exp, tz=timezone.utc).isoformat().replace("+00:00", "Z")
-        expired = datetime.now(tz=timezone.utc).timestamp() >= float(exp)
+    if isinstance(exp, (int, float)) and not isinstance(exp, bool):
+        try:
+            exp_value = float(exp)
+            if isfinite(exp_value):
+                exp_iso = datetime.fromtimestamp(exp_value, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+                expired = datetime.now(tz=timezone.utc).timestamp() >= exp_value
+        except (OverflowError, OSError, TypeError, ValueError):
+            pass
     return {
         "payload": payload,
         "email": profile.get("email"),
@@ -449,7 +457,8 @@ def check_account_plan(
             "ok": False,
             "checked_at": now_iso(),
             "http_status": None,
-            "error": "AT已过期/失效，请手动查活刷新",
+            "plan_check_error_kind": classify_plan_check_error(local_token_expired=True),
+            "error": "本地AT已失效，请手动查活刷新",
             "needs_live_check": True,
             **{k: v for k, v in claims.items() if k != "payload"},
         }
@@ -501,7 +510,7 @@ def check_account_plan(
                     "checked_at": now_iso(),
                     "http_status": http_status,
                     "plan_check_error_kind": classify_plan_check_error(http_status=http_status),
-                    "error": "AT已过期/失效，请手动查活刷新" if is_auth_expired else f"HTTP {http_status}",
+                    "error": "AT已失效，请手动查活刷新" if is_auth_expired else f"HTTP {http_status}",
                     "response_preview": response_text[:500],
                     "retryable": _retryable_plan_error(http_status),
                     "token_expired": True if is_auth_expired else claims.get("token_expired"),

@@ -209,7 +209,7 @@ def _compact_account_for_list(row: dict) -> dict:
         "plan_expires_at", "plan_renews_at", "renews_at",
         "billing_period", "billing_currency", "discount_amount", "discount_type",
         "discount_expires_at", "discount_promo_campaign_id",
-        "token_expired", "token_expires_at",
+        "token_expired", "token_expires_at", "needs_live_check",
         # Checkout 类型检测仅返回状态/脱敏诊断，不返回完整 Session ID。
         "checkout_check_ok", "checkout_check_trigger", "checkout_check_queued_at",
         "checkout_check_started_at", "checkout_check_completed_at", "checkout_check_updated_at",

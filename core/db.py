@@ -74,6 +74,7 @@ _PLAN_CHECK_ERROR_KINDS = frozenset({
     "http_4xx",
     "http_5xx",
     "response_format",
+    "local_token_expired",
 })
 _CHECKOUT_SESSION_STALE_SECONDS = 120
 _CHECKOUT_SESSION_QUEUE_STALE_SECONDS = 1800
@@ -1443,10 +1444,6 @@ def _find_by_email(rows: list[dict], email: str) -> dict | None:
 
 def _plan_check_error_kind_for_row(row: dict) -> str | None:
     """返回套餐失败分类，并兼容没有新字段的历史记录。"""
-    current = str(row.get("plan_check_error_kind") or "").strip()
-    if current in _PLAN_CHECK_ERROR_KINDS:
-        return current
-
     try:
         http_status = int(row.get("plan_check_http_status"))
     except (TypeError, ValueError):
@@ -1457,8 +1454,20 @@ def _plan_check_error_kind_for_row(row: dict) -> str | None:
         if 500 <= http_status < 600:
             return "http_5xx"
 
+    current = str(row.get("plan_check_error_kind") or "").strip()
+    if current in _PLAN_CHECK_ERROR_KINDS:
+        return current
+
     error = str(row.get("plan_check_error") or "")
     lowered = error.lower()
+    if error.strip() in {
+        # 兼容历史版本生成的旧文案，以及当前简化后的新文案。
+        "AT已过期/失效，请手动查活刷新",
+        "本地判断：AT已过期/失效，请手动查活刷新",
+        "AT已失效，请手动查活刷新",
+        "本地AT已失效，请手动查活刷新",
+    }:
+        return "local_token_expired"
     if re.search(r"\bhttp\s*4\d{2}\b", lowered):
         return "http_4xx"
     if re.search(r"\bhttp\s*5\d{2}\b", lowered):
@@ -2082,6 +2091,7 @@ def update_account_plan_check(acc_id: int | None = None, email: str | None = Non
         row["plan_check_proxy_fallback_reason"] = result.get("proxy_fallback_reason")
         row["token_expired"] = result.get("token_expired")
         row["token_expires_at"] = result.get("token_expires_at")
+        row["needs_live_check"] = result.get("needs_live_check")
         row["plan_check_result_json"] = json.dumps(result, ensure_ascii=False)
         row["updated_at"] = now
         alias = next(
@@ -2610,6 +2620,7 @@ def list_account_plan_check_statuses(
         "expires_at", "plan_expires_at", "plan_renews_at", "renews_at",
         "billing_period", "billing_currency", "discount_amount", "discount_type",
         "discount_expires_at", "discount_promo_campaign_id",
+        "token_expired", "token_expires_at", "needs_live_check",
         "extract_link_status", "extract_link_ok", "extract_link_type",
         "extract_link_provider", "extract_link_update_mode", "extract_link_cdk_fingerprint",
         "extract_link_message", "extract_link_error",

@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
+import base64
 import json
+import time
 import unittest
 from unittest.mock import patch
 
@@ -53,8 +55,15 @@ def valid_plan_response():
     })
 
 
+def jwt_with_payload(payload):
+    encoded = base64.urlsafe_b64encode(
+        json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    ).rstrip(b"=").decode("ascii")
+    return f"header.{encoded}.signature"
+
+
 class PlanCheckErrorClassificationTests(unittest.TestCase):
-    def run_check(self, responses, *, max_attempts=1):
+    def run_check(self, responses, *, max_attempts=1, token="not-a-jwt"):
         holder = {}
         fake_session = FakeBrowserSession(responses)
 
@@ -77,10 +86,45 @@ class PlanCheckErrorClassificationTests(unittest.TestCase):
             patch.object(chatgpt_plan, "BrowserSession", side_effect=session_factory),
         ):
             return chatgpt_plan.check_account_plan(
-                "not-a-jwt",
+                token,
                 max_attempts=max_attempts,
                 retry_delay=0,
             )
+
+    def test_local_expired_token_is_classified_without_http_request(self):
+        expired_token = jwt_with_payload({"exp": int(time.time()) - 60})
+        with patch.object(chatgpt_plan, "BrowserSession") as browser_session:
+            result = chatgpt_plan.check_account_plan(expired_token, max_attempts=1)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["plan_check_error_kind"], "local_token_expired")
+        self.assertIsNone(result["http_status"])
+        self.assertTrue(result["token_expired"])
+        self.assertTrue(result["needs_live_check"])
+        self.assertIn("本地AT已失效", result["error"])
+        self.assertTrue(result["token_expires_at"])
+        browser_session.assert_not_called()
+
+    def test_future_or_missing_exp_does_not_use_local_expired_classification(self):
+        future = self.run_check(
+            [valid_plan_response()],
+            token=jwt_with_payload({"exp": int(time.time()) + 3600}),
+        )
+        without_exp = self.run_check(
+            [valid_plan_response()],
+            token=jwt_with_payload({"sub": "fixture"}),
+        )
+        boolean_exp = self.run_check(
+            [valid_plan_response()],
+            token=jwt_with_payload({"exp": True}),
+        )
+
+        self.assertTrue(future["ok"])
+        self.assertNotIn("plan_check_error_kind", future)
+        self.assertTrue(without_exp["ok"])
+        self.assertNotIn("plan_check_error_kind", without_exp)
+        self.assertTrue(boolean_exp["ok"])
+        self.assertNotIn("plan_check_error_kind", boolean_exp)
 
     def test_timeout_is_network_timeout(self):
         result = self.run_check([TimeoutError("request timed out")])
@@ -93,8 +137,12 @@ class PlanCheckErrorClassificationTests(unittest.TestCase):
         self.assertEqual(result["plan_check_error_kind"], "network_connection")
 
     def test_http_4xx_and_5xx_keep_specific_status_for_display(self):
+        result_401 = self.run_check([FakeResponse(401, {"error": "AT已失效"})])
         result_4xx = self.run_check([FakeResponse(403, {"error": "forbidden"})])
         result_5xx = self.run_check([FakeResponse(503, {"error": "temporary"})])
+        self.assertEqual(result_401["plan_check_error_kind"], "http_4xx")
+        self.assertEqual(result_401["http_status"], 401)
+        self.assertNotEqual(result_401["plan_check_error_kind"], "local_token_expired")
         self.assertEqual(result_4xx["plan_check_error_kind"], "http_4xx")
         self.assertEqual(result_5xx["plan_check_error_kind"], "http_5xx")
         self.assertEqual(result_4xx["http_status"], 403)
@@ -116,6 +164,19 @@ class PlanCheckErrorClassificationTests(unittest.TestCase):
 
 
 class PlanCheckErrorClassifierUnitTests(unittest.TestCase):
+    def test_local_expired_classifier_is_distinct_and_http_status_wins(self):
+        self.assertEqual(
+            chatgpt_plan.classify_plan_check_error(local_token_expired=True),
+            "local_token_expired",
+        )
+        self.assertEqual(
+            chatgpt_plan.classify_plan_check_error(
+                http_status=401,
+                local_token_expired=True,
+            ),
+            "http_4xx",
+        )
+
     def test_http_status_takes_precedence_over_transport_exception(self):
         self.assertEqual(
             chatgpt_plan.classify_plan_check_error(

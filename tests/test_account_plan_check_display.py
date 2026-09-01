@@ -1,14 +1,18 @@
 # -*- coding: utf-8 -*-
 import json
+import os
 import shutil
 import subprocess
 import tempfile
 import unittest
+from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import patch
 
 from core import db
+from core.sqlite_store import SQLiteRuntimeStore
 from webui.app import _compact_account_for_list
+from webui import app as web_app
 
 
 class AccountPlanCheckDbTests(unittest.TestCase):
@@ -77,6 +81,196 @@ class AccountPlanCheckDbTests(unittest.TestCase):
         self.assertEqual(recovered["plan_check_status"], "failed")
         self.assertIsNone(recovered["plan_check_error_kind"])
         self.assertEqual(recovered["plan_check_updated_at"], "2026-08-07T03:00:01")
+
+    def test_local_expiry_result_is_persisted_without_fabricated_http_status(self):
+        row = self._row()
+        row.update({
+            "current_plan_type": "plus",
+            "plan_last_success_at": "2026-08-06T23:00:00",
+            "plan_check_status": "success",
+            "plan_check_ok": True,
+        })
+        self.accounts_path.write_text(json.dumps([row]), encoding="utf-8")
+
+        with patch.object(db, "_now", return_value="2026-08-07T06:00:00"):
+            self.assertTrue(db.update_account_plan_check(acc_id=1, result={
+                "ok": False,
+                "checked_at": "2026-08-07T06:00:00",
+                "http_status": None,
+                "plan_check_error_kind": "local_token_expired",
+                "error": "本地AT已失效，请手动查活刷新",
+                "token_expired": True,
+                "token_expires_at": "2026-08-07T05:59:00Z",
+                "needs_live_check": True,
+            }))
+
+        persisted = self._row()
+        self.assertEqual(persisted["plan_check_status"], "failed")
+        self.assertFalse(persisted["plan_check_ok"])
+        self.assertEqual(persisted["plan_check_error_kind"], "local_token_expired")
+        self.assertIsNone(persisted["plan_check_http_status"])
+        self.assertEqual(persisted["plan_check_error"], "本地AT已失效，请手动查活刷新")
+        self.assertTrue(persisted["token_expired"])
+        self.assertEqual(persisted["token_expires_at"], "2026-08-07T05:59:00Z")
+        self.assertTrue(persisted["needs_live_check"])
+        self.assertEqual(json.loads(persisted["plan_check_result_json"])["plan_check_error_kind"], "local_token_expired")
+        self.assertEqual(persisted["current_plan_type"], "plus")
+        self.assertEqual(persisted["plan_last_success_at"], "2026-08-06T23:00:00")
+
+    def test_historical_local_expiry_compatibility_is_read_only_and_401_wins(self):
+        row = self._row()
+        row.update({
+            "plan_check_status": "failed",
+            "plan_check_ok": False,
+            "plan_check_error": "AT已过期/失效，请手动查活刷新",
+            "plan_check_http_status": None,
+            "plan_check_updated_at": "2026-08-07T07:00:00",
+        })
+        self.accounts_path.write_text(json.dumps([row]), encoding="utf-8")
+        before = self.accounts_path.read_text(encoding="utf-8")
+
+        decorated = db.get_account(1)
+        snapshot = db.list_account_plan_check_statuses()
+
+        self.assertEqual(decorated["plan_check_error_kind"], "local_token_expired")
+        self.assertEqual(snapshot["items"][0]["plan_check_error_kind"], "local_token_expired")
+        self.assertEqual(self.accounts_path.read_text(encoding="utf-8"), before)
+
+        row["plan_check_http_status"] = 401
+        self.accounts_path.write_text(json.dumps([row]), encoding="utf-8")
+        before_401 = self.accounts_path.read_text(encoding="utf-8")
+        decorated_401 = db.get_account(1)
+        snapshot_401 = db.list_account_plan_check_statuses()
+        self.assertEqual(decorated_401["plan_check_error_kind"], "http_4xx")
+        self.assertEqual(snapshot_401["items"][0]["plan_check_error_kind"], "http_4xx")
+        self.assertEqual(snapshot_401["items"][0]["plan_check_http_status"], 401)
+        self.assertEqual(self.accounts_path.read_text(encoding="utf-8"), before_401)
+
+        row["plan_check_http_status"] = None
+        row["plan_check_error"] = "请求失败，请稍后重试"
+        self.accounts_path.write_text(json.dumps([row]), encoding="utf-8")
+        unknown = db.get_account(1)
+        self.assertNotIn("plan_check_error_kind", unknown)
+
+    def test_sqlite_historical_read_preserves_payload_and_status_contract(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            sqlite_path = Path(tempdir) / "runtime.db"
+            store = SQLiteRuntimeStore(sqlite_path)
+            store.initialize()
+            row = {
+                "id": 1,
+                "email": "sqlite-plan@example.invalid",
+                "current_plan_type": "plus",
+                "plan_last_success_at": "2026-08-06T23:00:00",
+                "plan_check_status": "failed",
+                "plan_check_ok": False,
+                "plan_check_error": "AT已过期/失效，请手动查活刷新",
+                "plan_check_http_status": None,
+                "plan_check_updated_at": "2026-08-07T08:00:00",
+            }
+            store.replace_all("accounts", [row])
+            before = store.load("accounts")
+
+            with patch.dict(os.environ, {"RUNTIME_STORAGE_BACKEND": "sqlite"}), \
+                    patch.dict(db._SQLITE_PATH_BINDINGS, {"_ACCOUNTS_JSON": db._ACCOUNTS_JSON}), \
+                    patch.object(db, "_RUNTIME_DB", sqlite_path), \
+                    patch.object(db, "_SQLITE_STORE", store):
+                account = db.get_account(1)
+                snapshot = db.list_account_plan_check_statuses()
+                after = store.load("accounts")
+
+            self.assertEqual(account["plan_check_error_kind"], "local_token_expired")
+            self.assertEqual(snapshot["items"][0]["plan_check_error_kind"], "local_token_expired")
+            self.assertEqual(snapshot["items"][0]["plan_query_status"], "failed")
+            self.assertEqual(snapshot["items"][0]["plan_category_code"], "paid")
+            self.assertEqual(after, before)
+
+    def test_account_apis_return_consistent_plan_diagnostics_without_credentials(self):
+        self.accounts_path.write_text(json.dumps([
+            {
+                "id": 1,
+                "email": "local-expired@example.invalid",
+                "access_token": "fixture-local-token",
+                "password": "fixture-local-password",
+                "plan_check_status": "failed",
+                "plan_check_ok": False,
+                "plan_check_error": "本地AT已失效，请手动查活刷新",
+                "plan_check_error_kind": "local_token_expired",
+                "plan_check_http_status": None,
+                "token_expired": True,
+                "token_expires_at": "2026-08-07T05:59:00Z",
+                "needs_live_check": True,
+                "plan_check_updated_at": "2026-08-07T09:00:00",
+            },
+            {
+                "id": 2,
+                "email": "http-401@example.invalid",
+                "access_token": "fixture-http-token",
+                "password": "fixture-http-password",
+                "plan_check_status": "failed",
+                "plan_check_ok": False,
+                "plan_check_error": "AT已失效，请手动查活刷新",
+                "plan_check_http_status": 401,
+                "plan_check_updated_at": "2026-08-07T09:01:00",
+            },
+        ]), encoding="utf-8")
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(web_app.db, "_render_static_viewer"))
+            for name in (
+                "recover_interrupted_plan_checks",
+                "recover_interrupted_checkout_sessions",
+                "recover_interrupted_extract_links",
+                "recover_interrupted_live_checks",
+            ):
+                stack.enter_context(patch.object(web_app.db, name, return_value=0))
+            app = web_app.create_app(auth_code="test-auth")
+            client = app.test_client()
+            headers = {"X-Auth-Code": "test-auth"}
+            account_response = client.get("/api/accounts?archived=all", headers=headers)
+            snapshot_response = client.get(
+                "/api/accounts/plan-check-status?archived=all", headers=headers
+            )
+            paged_responses = []
+            for page in (1, 2):
+                paged_account = client.get(
+                    f"/api/accounts?archived=all&paged=1&page={page}&page_size=1",
+                    headers=headers,
+                )
+                paged_snapshot = client.get(
+                    f"/api/accounts/plan-check-status?archived=all&page={page}&page_size=1",
+                    headers=headers,
+                )
+                paged_responses.append((paged_account, paged_snapshot))
+
+        self.assertEqual(account_response.status_code, 200)
+        self.assertEqual(snapshot_response.status_code, 200)
+        accounts = {item["id"]: item for item in account_response.get_json()}
+        snapshot = {item["id"]: item for item in snapshot_response.get_json()["items"]}
+        for account_id in (1, 2):
+            for key in ("plan_check_error", "plan_check_error_kind", "plan_check_http_status"):
+                self.assertEqual(accounts[account_id].get(key), snapshot[account_id].get(key))
+        self.assertEqual(accounts[1]["plan_check_error_kind"], "local_token_expired")
+        self.assertIsNone(accounts[1].get("plan_check_http_status"))
+        self.assertEqual(accounts[2]["plan_check_error_kind"], "http_4xx")
+        self.assertEqual(accounts[2]["plan_check_http_status"], 401)
+        for page, (paged_account_response, paged_snapshot_response) in enumerate(paged_responses, start=1):
+            self.assertEqual(paged_account_response.status_code, 200)
+            self.assertEqual(paged_snapshot_response.status_code, 200)
+            paged_account = paged_account_response.get_json()
+            paged_snapshot = paged_snapshot_response.get_json()
+            self.assertEqual(paged_account["page"], page)
+            self.assertEqual(paged_snapshot["page"], page)
+            account_item = paged_account["items"][0]
+            snapshot_item = paged_snapshot["items"][0]
+            self.assertEqual(account_item["id"], snapshot_item["id"])
+            for key in ("plan_check_error", "plan_check_error_kind", "plan_check_http_status"):
+                self.assertEqual(account_item.get(key), snapshot_item.get(key))
+        response_text = account_response.get_data(as_text=True) + snapshot_response.get_data(as_text=True)
+        self.assertNotIn("fixture-local-token", response_text)
+        self.assertNotIn("fixture-http-token", response_text)
+        self.assertNotIn("fixture-local-password", response_text)
+        self.assertNotIn("fixture-http-password", response_text)
 
     def test_requeue_clears_previous_error_kind(self):
         db.update_account_plan_check(
@@ -264,6 +458,36 @@ process.stdout.write(JSON.stringify(rows.map(_planCell)));
         visible_subtext = rendered[0].split('<div class="acc-v2-sub"', 1)[1].split('</div>', 1)[0]
         self.assertNotIn("HTTP response body with sensitive details", visible_subtext)
         self.assertNotIn("proxy-user:proxy-pass@example.invalid:8080", visible_subtext)
+
+    def test_failed_summary_distinguishes_local_expiry_and_unknown_history(self):
+        base = {
+            "plan_check_status": "failed",
+            "plan_query_status": "failed",
+            "plan_check_updated_at": "2026-08-28T13:00:00",
+            "plan_check_error": "AT已失效，请手动查活刷新",
+            "current_plan_type": "plus",
+            "plan_category_code": "paid",
+            "plan_last_success_at": "2026-08-27T13:00:00",
+        }
+        rows = [
+            {**base, "plan_check_error_kind": "local_token_expired", "plan_check_http_status": None},
+            {**base, "plan_check_error_kind": "http_4xx", "plan_check_http_status": 401},
+            {**base, "plan_check_error_kind": "http_5xx", "plan_check_http_status": 503},
+            {**base, "plan_check_error_kind": "future_error", "plan_check_http_status": None},
+        ]
+        rendered = self._render_plan_cells(rows)
+
+        self.assertIn("查询失败：本地AT已失效|2026-08-28T13:00:00", rendered[0])
+        self.assertNotIn("HTTP 401|2026-08-28T13:00:00", rendered[0])
+        self.assertIn("查询失败：HTTP 401|2026-08-28T13:00:00", rendered[1])
+        self.assertNotIn("本地AT已失效|2026-08-28T13:00:00", rendered[1])
+        self.assertIn("查询失败：HTTP 503|2026-08-28T13:00:00", rendered[2])
+        self.assertIn("查询失败|2026-08-28T13:00:00", rendered[3])
+        self.assertNotIn("HTTP 401", rendered[3])
+        self.assertIn("上次: plus/付费套餐", rendered[0])
+        self.assertIn("AT已失效，请手动查活刷新", rendered[0])
+        self.assertIn("if (kind === 'local_token_expired') return '本地AT已失效';", self.renderer)
+        self.assertNotIn("r.token_expired", self.renderer)
 
     def test_each_primary_state_is_wrapped_with_status_meta(self):
         self.assertIn("return wrap(`<span class=\"pill status-running\"", self.renderer)
