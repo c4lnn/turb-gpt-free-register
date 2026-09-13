@@ -24,7 +24,11 @@ OPENAI_AUDIENCE = "https://api.openai.com/v1"
 OPENAI_REDIRECT_URI = "https://chatgpt.com/api/auth/callback/openai"
 
 # Sentinel SDK 版本号（影响 sentinel iframe URL 与 referer header）
-SENTINEL_SV = "20260219f9f6"
+SENTINEL_SV = "20260810913b"
+# 本地 SDK 资源必须与上面的版本基线配对；只用哈希校验资源，不在代码中散落版本常量。
+SENTINEL_SDK_SHA256 = "49d0284bf3eea8a59ebcad0e6b5dd8a53edd4c72606f15bbf51ebe5610a88efd"
+SENTINEL_SDK_URL = f"https://sentinel.openai.com/sentinel/{SENTINEL_SV}/sdk.js"
+SENTINEL_FRAME_URL = f"https://sentinel.openai.com/backend-api/sentinel/frame.html?sv={SENTINEL_SV}"
 
 # ChatGPT 页面 build 标识（用于 Sentinel p[6] / documentElement data-build 模拟）
 OPENAI_BUILD_ID = "prod-fb4a8a2a751dfec391053cfd7b01c52699ccf78c"
@@ -40,8 +44,8 @@ STATSIG_SDK_TYPE = "javascript-client"
 AB_CLIENT_KEY = "client-tN5GMyzpIPKXd3KNv7ANIfiqjRSvNNTTWbZdbdabF58"
 AB_SDK_VERSION = "3.32.4"
 
-# HAR 中 email-otp/validate 未携带 Sentinel；默认按 HAR 对齐，保留开关便于回退。
-SEND_SENTINEL_ON_EMAIL_OTP_VALIDATE = False
+# 当前注册流程在 OTP 校验前生成与 authorize_continue 步骤匹配的 fresh Sentinel token。
+SEND_SENTINEL_ON_EMAIL_OTP_VALIDATE = True
 
 # 是否补齐 HAR 中 ChatGPT Web 首屏 bootstrap 预热链路。
 CHATGPT_ANON_BOOTSTRAP_ENABLED = True

@@ -7,6 +7,7 @@ OpenAI Auth 模块
 import json
 import logging
 import time
+from urllib.parse import parse_qsl, urlsplit
 
 from core.session import BrowserSession
 from core.sentinel import (
@@ -14,6 +15,7 @@ from core.sentinel import (
     build_sentinel_request_body,
 )
 from core.sentinel_runner import generate_sentinel_token
+from core.sentinel_runner import validate_sentinel_resource_consistency
 
 logger = logging.getLogger(__name__)
 
@@ -115,9 +117,61 @@ def _extract_error_code(resp) -> str:
     return ""
 
 
+def _safe_url_label(url: str) -> str:
+    """仅保留 URL 的 origin/path 和 query 字段名，避免日志泄露认证参数。"""
+    try:
+        parsed = urlsplit(str(url or ""))
+        keys = sorted({key for key, _ in parse_qsl(parsed.query, keep_blank_values=True)})
+        suffix = f" query_keys={keys}" if keys else ""
+        return f"{parsed.scheme}://{parsed.netloc}{parsed.path}{suffix}" or "<empty-url>"
+    except Exception:
+        return "<invalid-url>"
+
+
+def _response_summary(resp) -> str:
+    """返回只含状态/字段名/存在性/长度的响应摘要。"""
+    status = int(getattr(resp, "status_code", 0) or 0)
+    text = str(getattr(resp, "text", "") or "")
+    try:
+        payload = resp.json()
+    except Exception:
+        return f"status={status} body_present={bool(text)} body_length={len(text)}"
+    if isinstance(payload, dict):
+        return f"status={status} json_fields={sorted(str(key) for key in payload)}"
+    return f"status={status} json_type={type(payload).__name__}"
+
+
+def _attach_auth_document_navigation_header(session: BrowserSession, headers: dict) -> dict:
+    """只在当前会话捕获到真实值时为目标 Auth JSON 请求补头。"""
+    attach = getattr(session, "attach_auth_document_navigation_header", None)
+    if callable(attach):
+        return attach(headers)
+    return headers
+
+
+def _validate_authorize_url(authorize_url: str) -> None:
+    """确保 protocol 的 authorize 入口始终是 auth.openai.com 的 GET 端点。"""
+    parsed = urlsplit(str(authorize_url or ""))
+    if (
+        parsed.scheme.lower() != "https"
+        or (parsed.hostname or "").lower() != "auth.openai.com"
+        or parsed.path != "/api/accounts/authorize"
+    ):
+        raise ValueError(
+            "authorize URL 必须是 "
+            "https://auth.openai.com/api/accounts/authorize?...，"
+            f"实际为 {_safe_url_label(authorize_url)}"
+        )
+
+
 # 步骤4 网络层临时性错误（代理抽风 / TLS 握手失败 / 重置等）的重试参数
 _FOLLOW_AUTH_MAX_ATTEMPTS = 3
 _FOLLOW_AUTH_BACKOFF_BASE = 2.0  # 第 N 次重试前等 2^(N-1) 秒
+_SENTINEL_MAX_ATTEMPTS = 3
+_SENTINEL_FLOWS = frozenset({
+    "authorize_continue",
+    "oauth_create_account",
+})
 
 
 def _is_transient_network_error(exc: Exception) -> bool:
@@ -149,6 +203,9 @@ def network_preflight(session: BrowserSession) -> None:
     这样真正会“烧邮箱”的 authorize 重定向发生前，已经确认当前代理、TLS
     impersonate、ChatGPT/Auth/Sentinel 三段链路都可达。
     """
+    validate_sentinel_resource_consistency()
+    from config import SENTINEL_FRAME_URL
+
     checks = [
         ("chatgpt-login", lambda: session.get(
             "https://chatgpt.com/login",
@@ -161,7 +218,7 @@ def network_preflight(session: BrowserSession) -> None:
             allow_redirects=True,
         )),
         ("sentinel-frame", lambda: session.get(
-            "https://sentinel.openai.com/backend-api/sentinel/frame.html?sv=" + __import__("config", fromlist=["SENTINEL_SV"]).SENTINEL_SV,
+            SENTINEL_FRAME_URL,
             headers=session.get_auth_navigate_headers(referer="https://auth.openai.com/log-in", target_origin="https://sentinel.openai.com"),
             allow_redirects=True,
         )),
@@ -173,14 +230,22 @@ def network_preflight(session: BrowserSession) -> None:
                 logger.info(f"[预检] {label} ({attempt}/{_FOLLOW_AUTH_MAX_ATTEMPTS})")
                 resp = fn()
                 if getattr(resp, "status_code", 0) >= 400:
-                    raise RuntimeError(f"{label} status={resp.status_code}, body={(getattr(resp, 'text', '') or '')[:180]}")
+                    raise RuntimeError(
+                        f"{label} status={resp.status_code}, "
+                        f"body_present={bool(getattr(resp, 'text', '') or '')}"
+                    )
                 break
             except Exception as exc:
                 last_exc = exc
                 if not _is_transient_network_error(exc) or attempt >= _FOLLOW_AUTH_MAX_ATTEMPTS:
                     raise
                 backoff = _FOLLOW_AUTH_BACKOFF_BASE ** (attempt - 1)
-                logger.warning(f"[预检] {label} 临时失败：{type(exc).__name__}: {str(exc)[:120]}，{backoff:.1f}s 后重试")
+                logger.warning(
+                    "[预检] %s 临时失败：%s，%s 后重试",
+                    label,
+                    type(exc).__name__,
+                    f"{backoff:.1f}s",
+                )
                 time.sleep(backoff)
         else:
             raise last_exc if last_exc else RuntimeError(f"[预检] {label} 未完成")
@@ -198,6 +263,7 @@ def follow_authorize(session: BrowserSession, authorize_url: str) -> str:
         session: 浏览器会话
         authorize_url: 从步骤3获取的 authorize URL
     """
+    _validate_authorize_url(authorize_url)
     headers = session.get_auth_navigate_headers(referer="https://chatgpt.com/")
 
     last_exc: Exception | None = None
@@ -208,8 +274,11 @@ def follow_authorize(session: BrowserSession, authorize_url: str) -> str:
             resp.raise_for_status()
             final_url = str(getattr(resp, "url", "") or "")
             if "/api/accounts/user/register" in final_url or "/create-account/password" in final_url:
-                raise RuntimeError(f"[步骤4] 落入旧密码注册路径，已拒绝继续烧邮箱: {final_url}")
-            logger.info(f"[步骤4] 重定向完成, 最终URL: {final_url}")
+                raise RuntimeError(
+                    "[步骤4] 落入旧密码注册路径，已拒绝继续烧邮箱: "
+                    f"{_safe_url_label(final_url)}"
+                )
+            logger.info("[步骤4] 重定向完成, 最终URL: %s", _safe_url_label(final_url))
             return final_url
         except Exception as exc:
             last_exc = exc
@@ -220,8 +289,9 @@ def follow_authorize(session: BrowserSession, authorize_url: str) -> str:
                 break
             backoff = _FOLLOW_AUTH_BACKOFF_BASE ** (attempt - 1)
             logger.warning(
-                f"[步骤4] 临时性网络错误 ({type(exc).__name__}: {str(exc)[:120]})，"
-                f"{backoff:.1f}s 后重试..."
+                "[步骤4] 临时性网络错误 (%s)，%s 后重试...",
+                type(exc).__name__,
+                f"{backoff:.1f}s",
             )
             time.sleep(backoff)
 
@@ -244,39 +314,70 @@ def request_sentinel_token(session: BrowserSession, flow: str) -> dict:
     Returns:
         sentinel 响应 JSON，包含 token、turnstile、proofofwork 等
     """
+    if flow not in _SENTINEL_FLOWS:
+        raise ValueError(f"不支持的 protocol Sentinel flow: {flow}")
+
+    validate_sentinel_resource_consistency()
     url = "https://sentinel.openai.com/backend-api/sentinel/req"
+    last_exc: Exception | None = None
+    for attempt in range(1, _SENTINEL_MAX_ATTEMPTS + 1):
+        # 每次尝试都重新生成 p/challenge，禁止复用已失败或已过期的上下文。
+        p = generate_requirements_token(
+            getattr(session, "sentinel_sid", session.device_id),
+            profile=getattr(session, "browser_profile", None),
+        )
+        body = build_sentinel_request_body(p, session.device_id, flow)
+        headers = session.get_sentinel_headers()
 
-    # 生成 p 字段（浏览器指纹）
-    p = generate_requirements_token(getattr(session, "sentinel_sid", session.device_id), profile=getattr(session, "browser_profile", None))
+        logger.info(
+            "[Sentinel] 请求 challenge, flow=%s, attempt=%s/%s",
+            flow,
+            attempt,
+            _SENTINEL_MAX_ATTEMPTS,
+        )
+        try:
+            resp = session.post(url, headers=headers, data=body)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            last_exc = exc
+            if attempt >= _SENTINEL_MAX_ATTEMPTS or not _is_transient_network_error(exc):
+                raise
+            backoff = _FOLLOW_AUTH_BACKOFF_BASE ** (attempt - 1)
+            logger.warning(
+                "[Sentinel] challenge 传输失败，flow=%s，%s 后重试：%s",
+                flow,
+                f"{backoff:.1f}s",
+                type(exc).__name__,
+            )
+            time.sleep(backoff)
+            continue
 
-    # 构建请求体
-    body = build_sentinel_request_body(p, session.device_id, flow)
+        if not isinstance(data, dict):
+            raise RuntimeError(f"Sentinel challenge 响应格式异常: type={type(data).__name__}")
 
-    headers = session.get_sentinel_headers()
+        pow_data = data.get("proofofwork") or {}
+        turnstile_data = data.get("turnstile") or {}
+        so_data = data.get("so") or {}
+        requires = []
+        if turnstile_data.get("required"):
+            requires.append("turnstile")
+        if so_data.get("required"):
+            requires.append("so")
+        if pow_data.get("required"):
+            requires.append("pow")
+        logger.info(
+            "[Sentinel] challenge 获取成功, flow=%s, requires=%s, has_persona=%s, "
+            "has_pow_seed=%s, pow_difficulty_length=%s",
+            flow,
+            requires or "无",
+            bool(data.get("persona")),
+            bool(pow_data.get("seed")),
+            len(str(pow_data.get("difficulty") or "")),
+        )
+        return data
 
-    logger.info(f"[Sentinel] 请求 sentinel token, flow={flow}")
-    resp = session.post(url, headers=headers, data=body)
-    resp.raise_for_status()
-
-    data = resp.json()
-    logger.info(f"[Sentinel] 获取 sentinel token 成功, persona={data.get('persona')}")
-
-    if data.get("proofofwork", {}).get("required"):
-        seed = data["proofofwork"]["seed"]
-        difficulty = data["proofofwork"]["difficulty"]
-        logger.info(f"[Sentinel] 需要 PoW: seed={seed}, difficulty={difficulty}")
-
-    # 增强诊断：哪些反爬机制被要求
-    requires = []
-    if data.get("turnstile", {}).get("required"):
-        requires.append("turnstile")
-    if data.get("so", {}).get("required"):
-        requires.append("so")
-    if data.get("proofofwork", {}).get("required"):
-        requires.append("pow")
-    logger.info(f"[Sentinel] 服务端要求项: {requires or '无'}")
-
-    return data
+    raise last_exc if last_exc else RuntimeError(f"Sentinel challenge 未完成: flow={flow}")
 
 
 def build_sentinel_header(session: BrowserSession, sentinel_resp: dict, flow: str) -> tuple:
@@ -296,6 +397,11 @@ def build_sentinel_header(session: BrowserSession, sentinel_resp: dict, flow: st
         sentinel_header: openai-sentinel-token 请求头的值（runner 直接产出的 JSON 字符串）
         so_header: openai-sentinel-so-token 请求头的值（若 SDK 输出含 so 字段则填充，否则为 None）
     """
+    if flow not in _SENTINEL_FLOWS:
+        raise ValueError(f"不支持的 protocol Sentinel flow: {flow}")
+    if not isinstance(sentinel_resp, dict):
+        raise TypeError("Sentinel challenge 必须是 JSON 对象")
+
     from config import USER_AGENT
 
     header_value = generate_sentinel_token(
@@ -311,26 +417,41 @@ def build_sentinel_header(session: BrowserSession, sentinel_resp: dict, flow: st
         cookie=session.auth_cookie_header() if hasattr(session, "auth_cookie_header") else f"oai-did={session.device_id}",
     )
 
-    # 解析 runner 输出，单独抽出 so 字段填充 openai-sentinel-so-token
-    so_header = None
     try:
         parsed = json.loads(header_value)
-        so_value = parsed.get("so")
-        if so_value:
-            so_header = json.dumps(
-                {
-                    "so": so_value,
-                    "c": parsed.get("c", sentinel_resp.get("token", "")),
-                    "id": session.device_id,
-                    "flow": flow,
-                },
-                separators=(',', ':'),
-            )
-            logger.info(f"[Sentinel] 检测到 SO 字段，已构建 so-token 头")
-    except (ValueError, TypeError) as exc:
-        logger.warning(f"[Sentinel] runner 输出解析失败: {exc}")
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("Sentinel runner 输出不是合法 JSON") from exc
+    if not isinstance(parsed, dict):
+        raise RuntimeError("Sentinel runner 输出必须是 JSON 对象")
+    if parsed.get("id") != session.device_id:
+        raise RuntimeError("Sentinel token 的 device id 与当前 BrowserSession 不一致")
+    if parsed.get("flow") != flow:
+        raise RuntimeError("Sentinel token 的 flow 与目标注册步骤不一致")
+    if not parsed.get("c"):
+        raise RuntimeError("Sentinel token 缺少 enforcement token")
+
+    # 解析 runner 输出，单独抽出 so 字段填充 openai-sentinel-so-token。
+    so_header = None
+    so_value = parsed.get("so")
+    if so_value:
+        so_header = json.dumps(
+            {
+                "so": so_value,
+                "c": parsed["c"],
+                "id": session.device_id,
+                "flow": flow,
+            },
+            separators=(',', ':'),
+        )
+        logger.info("[Sentinel] 检测到 SO 字段，已构建 so-token 头")
 
     return header_value, so_header
+
+
+def get_fresh_sentinel_headers(session: BrowserSession, flow: str) -> tuple[str, str | None]:
+    """为一个注册业务请求获取同一会话、同一 flow 的 fresh Sentinel headers。"""
+    challenge = request_sentinel_token(session, flow)
+    return build_sentinel_header(session, challenge, flow)
 
 
 # ============================================================
@@ -417,11 +538,14 @@ def navigate_about_you(session: BrowserSession, about_url: str | None = None) ->
     logger.info("[步骤10.5] 导航到 about-you 页面，建立资料页状态")
     resp = session.get(url, headers=headers, allow_redirects=True)
     if resp.status_code >= 400:
-        raise RuntimeError(f"about-you 导航失败 status={resp.status_code}: {(resp.text or '')[:240]}")
+        raise RuntimeError(f"about-you 导航失败: {_response_summary(resp)}")
     final_url = str(getattr(resp, "url", "") or url)
     if "/api/accounts/user/register" in final_url or "/create-account/password" in final_url:
-        raise RuntimeError(f"about-you 导航落入旧密码注册路径: {final_url}")
-    logger.info(f"[步骤10.5] about-you 导航完成，落点: {final_url}")
+        raise RuntimeError(
+            "about-you 导航落入旧密码注册路径: "
+            f"{_safe_url_label(final_url)}"
+        )
+    logger.info("[步骤10.5] about-you 导航完成，落点: %s", _safe_url_label(final_url))
     return final_url
 
 
@@ -434,7 +558,7 @@ def send_email_otp(session: BrowserSession, referer: str = "https://auth.openai.
     logger.info("[OTP] 请求重新发送邮箱验证码...")
     resp = session.get(url, headers=headers, allow_redirects=True)
     if resp.status_code >= 400:
-        logger.warning("[OTP] 重新发送验证码失败 status=%s: %s", resp.status_code, (resp.text or '')[:300])
+        logger.warning("[OTP] 重新发送验证码失败: %s", _response_summary(resp))
         resp.raise_for_status()
     logger.info("[OTP] 重新发送验证码请求完成，status=%s", resp.status_code)
 
@@ -460,6 +584,7 @@ def validate_email_otp(session: BrowserSession, code: str, sentinel_header: str 
     url = "https://auth.openai.com/api/accounts/email-otp/validate"
 
     headers = session.get_auth_headers(referer="https://auth.openai.com/email-verification")
+    _attach_auth_document_navigation_header(session, headers)
     if sentinel_header:
         headers["openai-sentinel-token"] = sentinel_header
     if so_header:
@@ -468,12 +593,16 @@ def validate_email_otp(session: BrowserSession, code: str, sentinel_header: str 
 
     body = json.dumps({"code": code})
 
-    logger.info(f"[步骤10] 提交邮箱验证码: {code}")
+    logger.info(
+        "[步骤10] 提交邮箱验证码: present=%s length=%s",
+        bool(code),
+        len(str(code or "")),
+    )
     resp = session.post(url, headers=headers, data=body)
 
     if resp.status_code != 200:
         logger.error(f"[步骤10] 请求失败, 状态码: {resp.status_code}")
-        logger.error(f"[步骤10] 响应内容: {resp.text}")
+        logger.error("[步骤10] 响应摘要: %s", _response_summary(resp))
         # 先看是不是"账号已废"——这类邮箱再试也没用，单独抛出让上层标 failed
         err_code = _extract_error_code(resp)
         if err_code in _ACCOUNT_DEAD_CODES:
@@ -485,13 +614,16 @@ def validate_email_otp(session: BrowserSession, code: str, sentinel_header: str 
             'invalid', 'incorrect', 'expired', 'code', 'otp', 'verification',
             '验证码', '認証コード', '確認コード', 'コード'
         )):
-            raise EmailOtpInvalidError(f"邮箱验证码无效或已过期: status={resp.status_code}, body={(resp.text or '')[:240]}")
+            raise EmailOtpInvalidError(
+                "邮箱验证码无效或已过期: "
+                f"status={resp.status_code}, error_code={err_code or 'unknown'}"
+            )
         resp.raise_for_status()
 
     data = resp.json()
     page_type = data.get('page', {}).get('type')
-    logger.info(f"[步骤10] 验证码验证成功: {page_type}")
-    logger.info(f"[步骤10] 验证响应摘要: {json.dumps(data, ensure_ascii=False)[:1000]}")
+    logger.info("[步骤10] 验证码验证成功: page_type=%s", page_type)
+    logger.info("[步骤10] 验证响应摘要: %s", _response_summary(resp))
     return data
 
 
@@ -513,6 +645,7 @@ def create_account(session: BrowserSession, name: str, birthday: str, sentinel_h
     url = "https://auth.openai.com/api/accounts/create_account"
 
     headers = session.get_auth_headers(referer="https://auth.openai.com/about-you")
+    _attach_auth_document_navigation_header(session, headers)
     headers["openai-sentinel-token"] = sentinel_header
     if so_header:
         headers["openai-sentinel-so-token"] = so_header
@@ -523,12 +656,17 @@ def create_account(session: BrowserSession, name: str, birthday: str, sentinel_h
         "birthdate": birthday,
     })
 
-    logger.info(f"[步骤12] 提交用户信息, 名称: {name}, 生日: {birthday}")
+    logger.info(
+        "[步骤12] 提交用户信息, name_present=%s name_length=%s birthday_present=%s",
+        bool(name),
+        len(str(name or "")),
+        bool(birthday),
+    )
     resp = session.post(url, headers=headers, data=body)
 
     if resp.status_code != 200:
         logger.error(f"[步骤12] 请求失败, 状态码: {resp.status_code}")
-        logger.error(f"[步骤12] 响应内容: {resp.text}")
+        logger.error("[步骤12] 响应摘要: %s", _response_summary(resp))
         resp.raise_for_status()
 
     data = resp.json()

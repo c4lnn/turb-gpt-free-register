@@ -13,6 +13,7 @@ navigator/screen/timezone/client hints 不能互相打架。
 from __future__ import annotations
 
 from config.env_loader import apply_env_overrides
+from config.openai_protocol import SENTINEL_SDK_URL
 
 import random
 import re
@@ -50,6 +51,7 @@ USER_AGENT = (
 )
 
 SEC_CH_UA = f'"Google Chrome";v="{CHROME_MAJOR}", "Chromium";v="{CHROME_MAJOR}", "Not)A;Brand";v="24"'
+SEC_CH_UA_FULL_VERSION = f'"{CHROME_FULL_VERSION}"'
 SEC_CH_UA_FULL_VERSION_LIST = f'"Google Chrome";v="{CHROME_FULL_VERSION}", "Chromium";v="{CHROME_FULL_VERSION}", "Not)A;Brand";v="24.0.0.0"'
 SEC_CH_UA_PLATFORM = '"macOS"'
 SEC_CH_UA_PLATFORM_VERSION = '"15.7.0"'
@@ -58,7 +60,9 @@ SEC_CH_UA_ARCH = '"arm"'
 SEC_CH_UA_BITNESS = '"64"'
 SEC_CH_UA_MODEL = '""'
 SEND_CLIENT_HINTS = True
-SEND_HIGH_ENTROPY_CLIENT_HINTS = False
+# 注册链路按 SAZ 的请求字段集合发送完整 Chromium Client Hints。
+# 具体值始终取当前 BrowserSession 的画像，不复用捕获样本的 Edge/Windows 值。
+SEND_HIGH_ENTROPY_CLIENT_HINTS = True
 
 # ---------- 语言 / 时区 ----------
 BROWSER_LOCALE_PROFILE = "jp"
@@ -224,7 +228,7 @@ WINDOW_KEY_SAMPLES = [
 SCRIPT_SRC_SAMPLES = [
     "https://accounts.google.com/gsi/client",
     "https://chatgpt.com/cdn-cgi/challenge-platform/scripts/jsd/api.js?onload=jsdOnload",
-    "https://sentinel.openai.com/sentinel/20260219f9f6/sdk.js",
+    SENTINEL_SDK_URL,
 ]
 
 WINDOW_FEATURE_FLAGS = {
@@ -282,6 +286,7 @@ def build_browser_environment(geo: dict | None = None, base_profile: dict | None
         "user_agent": USER_AGENT,
         "send_client_hints": SEND_CLIENT_HINTS,
         "sec_ch_ua": SEC_CH_UA,
+        "sec_ch_ua_full_version": SEC_CH_UA_FULL_VERSION,
         "sec_ch_ua_platform": SEC_CH_UA_PLATFORM,
         "sec_ch_ua_platform_version": SEC_CH_UA_PLATFORM_VERSION,
         "sec_ch_ua_arch": SEC_CH_UA_ARCH,
@@ -320,11 +325,14 @@ def validate_browser_profile(profile: dict) -> list[str]:
         chrome_major = str(profile.get("chrome_major") or "")
         chrome_full_version = str(profile.get("chrome_full_version") or "")
         sec_ch_ua = str(profile.get("sec_ch_ua") or "")
+        sec_ch_ua_full_version = str(profile.get("sec_ch_ua_full_version") or "")
         sec_ch_ua_full = str(profile.get("sec_ch_ua_full_version_list") or "")
         if chrome_major and f'v="{chrome_major}"' not in sec_ch_ua:
             issues.append("sec-ch-ua 与 chrome_major 不一致")
         if chrome_full_version and f'v="{chrome_full_version}"' not in sec_ch_ua_full:
             issues.append("sec-ch-ua-full-version-list 与 chrome_full_version 不一致")
+        if chrome_full_version and sec_ch_ua_full_version != f'"{chrome_full_version}"':
+            issues.append("sec-ch-ua-full-version 与 chrome_full_version 不一致")
         if chrome_major and IMPERSONATE != f"chrome{chrome_major}":
             issues.append("curl_cffi impersonate 与 chrome_major 不一致")
     if profile.get("browser_os") == "macOS":

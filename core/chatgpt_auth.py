@@ -14,10 +14,19 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
-# 2026-07-19 ARE 捕获：ChatGPT Web signin 已使用 5 位 passkey capabilities，
-# authorize URL 里还会带 ccaps=login_methods。纯协议保持同形态，避免落入旧/异常 auth 分支。
-_PASSKEY_CLIENT_CAPABILITIES = "11111"
-_CC_CAPS = "login_methods"
+# 当前注册捕获中的登录意图上下文。
+_CC_CAPS = "login_methods chatgpt_login_finalizer_v1"
+
+
+def _safe_url_label(url: str) -> str:
+    """仅保留 URL 的 origin/path 和 query 字段名。"""
+    try:
+        parsed = urlparse(str(url or ""))
+        keys = sorted(parse_qs(parsed.query, keep_blank_values=True))
+        suffix = f" query_keys={keys}" if keys else ""
+        return f"{parsed.scheme}://{parsed.netloc}{parsed.path}{suffix}" or "<empty-url>"
+    except Exception:
+        return "<invalid-url>"
 
 
 def _ensure_authorize_context(authorize_url: str, session: BrowserSession, email: str) -> str:
@@ -33,14 +42,14 @@ def _ensure_authorize_context(authorize_url: str, session: BrowserSession, email
         required = {
             "ext-oai-did": session.device_id,
             "auth_session_logging_id": session.auth_session_logging_id,
-            "ext-passkey-client-capabilities": _PASSKEY_CLIENT_CAPABILITIES,
             "screen_hint": "login_or_signup",
             "login_hint": email,
             "ccaps": _CC_CAPS,
         }
         changed = False
         for key, value in required.items():
-            if not params.get(key):
+            current = params.get(key) or []
+            if not current or (key == "ccaps" and current == ["login_methods"]):
                 params[key] = [value]
                 changed = True
         if not changed:
@@ -101,7 +110,7 @@ def get_csrf_token(session: BrowserSession) -> str:
 
     data = resp.json()
     csrf_token = data.get("csrfToken", "")
-    logger.info(f"[步骤2] 获取 CSRF Token 成功: {csrf_token[:20]}...")
+    logger.info("[步骤2] 获取 CSRF Token 成功: present=%s length=%s", bool(csrf_token), len(csrf_token))
     return csrf_token
 
 
@@ -125,7 +134,7 @@ def signin_openai(session: BrowserSession, csrf_token: str, email: str) -> str:
         "prompt": "login",
         "ext-oai-did": session.device_id,
         "auth_session_logging_id": session.auth_session_logging_id,
-        "ext-passkey-client-capabilities": _PASSKEY_CLIENT_CAPABILITIES,
+        "returning_browser_login_intent": "true",
         "screen_hint": "login_or_signup",
         "login_hint": email,
     }
@@ -151,9 +160,10 @@ def signin_openai(session: BrowserSession, csrf_token: str, email: str) -> str:
     authorize_url = data.get("url", "")
 
     if not authorize_url:
-        raise ValueError(f"[步骤3] 未获取到 authorize URL, 响应: {data}")
+        fields = sorted(str(key) for key in data) if isinstance(data, dict) else type(data).__name__
+        raise ValueError(f"[步骤3] 未获取到 authorize URL, response_fields={fields}")
 
     authorize_url = _ensure_authorize_context(authorize_url, session, email)
     logger.info("[步骤3] 获取 authorize URL 成功，已确认 login_or_signup/oai-did 上下文")
-    logger.debug(f"[步骤3] URL: {authorize_url[:160]}...")
+    logger.debug("[步骤3] URL 摘要: %s", _safe_url_label(authorize_url))
     return authorize_url

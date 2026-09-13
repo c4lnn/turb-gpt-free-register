@@ -40,8 +40,15 @@ class AccountStatusContractTests(unittest.TestCase):
         self.assertEqual(normalize_plan_query_status("queued"), "queued")
         self.assertEqual(normalize_plan_query_status("running"), "running")
         self.assertEqual(normalize_plan_query_status("failed"), "failed")
+        self.assertEqual(normalize_plan_query_status(""), "pending")
+        self.assertEqual(normalize_plan_query_status(None), "pending")
         self.assertEqual(normalize_plan_query_status("future_state"), "unknown")
+        self.assertFalse(plan_capabilities("free_no_trial", "pending")["is_checking"])
+        self.assertTrue(plan_capabilities("free_no_trial", "pending")["can_start"])
+        self.assertFalse(plan_capabilities("free_no_trial", "")["is_checking"])
+        self.assertTrue(plan_capabilities("free_no_trial", "")["can_start"])
         self.assertTrue(plan_capabilities("free_no_trial", "running")["is_checking"])
+        self.assertFalse(plan_capabilities("free_no_trial", "running")["can_start"])
         self.assertFalse(plan_capabilities("unknown", "failed")["is_eligible"])
         self.assertEqual(classify_plan_category({
             "current_plan_type": "free", "trial_eligibility_known": True,
@@ -139,6 +146,8 @@ class AccountStatusContractTests(unittest.TestCase):
 
         self.assertTrue(plan_capabilities("free_no_trial", "success")["can_start"])
         self.assertTrue(plan_capabilities("free_no_trial", "failed")["can_start"])
+        self.assertFalse(plan_capabilities("free_no_trial", "pending")["is_checking"])
+        self.assertTrue(plan_capabilities("free_no_trial", "pending")["can_start"])
         self.assertTrue(checkout_capabilities("success")["can_retry"])
         self.assertTrue(checkout_capabilities("failed")["can_retry"])
         self.assertFalse(extract_link_capabilities("success")["can_start"])
@@ -156,6 +165,54 @@ class AccountStatusContractTests(unittest.TestCase):
             action_keys = {"can_start", "can_retry", "can_stop"} & capabilities.keys()
             self.assertTrue(action_keys)
             self.assertFalse(any(capabilities[key] for key in action_keys))
+
+    def test_plan_capability_matrix_covers_missing_pending_processing_and_terminal_states(self):
+        cases = (
+            (None, "pending", False, True, False),
+            ("", "pending", False, True, False),
+            ("pending", "pending", False, True, False),
+            ("queued", "queued", True, False, False),
+            ("running", "running", True, False, False),
+            ("success", "success", False, True, True),
+            ("failed", "failed", False, True, True),
+            ("unknown", "unknown", False, False, False),
+            ("future_state", "unknown", False, False, False),
+        )
+        for raw_status, expected_query, is_checking, can_start_with_token, is_terminal in cases:
+            with self.subTest(status=raw_status):
+                self.assertEqual(normalize_plan_query_status(raw_status), expected_query)
+                with_token = plan_capabilities("free_no_trial", raw_status, has_access_token=True)
+                without_token = plan_capabilities("free_no_trial", raw_status, has_access_token=False)
+                self.assertEqual(with_token["is_checking"], is_checking)
+                self.assertEqual(with_token["can_start"], can_start_with_token)
+                self.assertEqual(with_token["is_terminal"], is_terminal)
+                self.assertTrue(with_token["has_access_token"])
+                self.assertEqual(without_token["is_checking"], is_checking)
+                self.assertFalse(without_token["can_start"])
+                self.assertEqual(without_token["is_terminal"], is_terminal)
+                self.assertFalse(without_token["has_access_token"])
+
+                contract = build_account_status_contract({
+                    "plan_check_status": raw_status,
+                    "access_token": "token-fixture",
+                    "current_plan_type": "free",
+                    "trial_eligibility_known": True,
+                    "plus_trial_eligible": False,
+                })
+                self.assertEqual(contract["plan_query_status"], expected_query)
+                self.assertEqual(contract["plan_capabilities"]["is_checking"], is_checking)
+                self.assertEqual(contract["plan_capabilities"]["can_start"], can_start_with_token)
+                self.assertNotIn("access_token", contract)
+
+        missing_status = build_account_status_contract({
+            "access_token": "token-fixture",
+            "current_plan_type": "free",
+            "trial_eligibility_known": True,
+            "plus_trial_eligible": False,
+        })
+        self.assertEqual(missing_status["plan_query_status"], "pending")
+        self.assertFalse(missing_status["plan_capabilities"]["is_checking"])
+        self.assertTrue(missing_status["plan_capabilities"]["can_start"])
 
     def test_codex_legacy_operation_values_do_not_become_auth_facts(self):
         self.assertEqual(normalize_codex_auth_status("retrying"), "unknown")

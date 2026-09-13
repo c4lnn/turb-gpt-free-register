@@ -7,9 +7,9 @@ import tempfile
 import unittest
 from contextlib import ExitStack
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from core import db
+from core import db, plan_check_service
 from core.sqlite_store import SQLiteRuntimeStore
 from webui.app import _compact_account_for_list
 from webui import app as web_app
@@ -57,6 +57,54 @@ class AccountPlanCheckDbTests(unittest.TestCase):
         with patch.object(db, "_now", return_value="2026-08-07T02:00:00"):
             self.assertTrue(db.update_account_note(1, "unrelated"))
         self.assertEqual(self._row()["plan_check_updated_at"], "2026-08-07T01:00:02")
+
+    def test_claim_blocks_only_queued_and_running(self):
+        self.assertTrue(db.claim_account_plan_check(acc_id=1, trigger="manual"))
+        self.assertEqual(self._row()["plan_check_status"], "queued")
+        self.assertFalse(db.claim_account_plan_check(acc_id=1, trigger="manual"))
+        self.assertEqual(self._row()["plan_check_status"], "queued")
+
+        self.assertTrue(db.mark_account_plan_check_running(1))
+        self.assertFalse(db.claim_account_plan_check(acc_id=1, trigger="manual"))
+        self.assertEqual(self._row()["plan_check_status"], "running")
+
+        for status in ("pending", "success", "failed"):
+            row = self._row()
+            row["plan_check_status"] = status
+            self.accounts_path.write_text(json.dumps([row]), encoding="utf-8")
+            self.assertTrue(db.claim_account_plan_check(acc_id=1, trigger="manual"), status)
+            self.assertEqual(self._row()["plan_check_status"], "queued")
+
+    def test_enqueue_first_query_becomes_queued_and_duplicate_is_busy(self):
+        row = self._row()
+        row["access_token"] = "token-fixture"
+        self.accounts_path.write_text(json.dumps([row]), encoding="utf-8")
+
+        slots = Mock()
+        slots.acquire.return_value = True
+        with patch.object(plan_check_service, "_EXECUTOR") as executor, \
+                patch.object(plan_check_service, "_QUEUE_SLOTS", slots):
+            first = plan_check_service.enqueue_account_plan_check(
+                account_id=1,
+                email="plan@example.invalid",
+                access_token="token-fixture",
+                trigger="manual",
+            )
+            second = plan_check_service.enqueue_account_plan_check(
+                account_id=1,
+                email="plan@example.invalid",
+                access_token="token-fixture",
+                trigger="manual",
+            )
+
+        self.assertTrue(first["accepted"])
+        self.assertFalse(first["busy"])
+        self.assertEqual(first["status"], "queued")
+        self.assertEqual(self._row()["plan_check_status"], "queued")
+        self.assertFalse(second["accepted"])
+        self.assertTrue(second["busy"])
+        executor.submit.assert_called_once()
+        slots.release.assert_called_once_with()
 
     def test_failed_and_recovered_checks_refresh_plan_timestamp(self):
         with patch.object(db, "_now", return_value="2026-08-07T03:00:00"):
@@ -271,6 +319,65 @@ class AccountPlanCheckDbTests(unittest.TestCase):
         self.assertNotIn("fixture-http-token", response_text)
         self.assertNotIn("fixture-local-password", response_text)
         self.assertNotIn("fixture-http-password", response_text)
+
+    def test_empty_plan_status_list_and_snapshot_are_pending_startable_without_credentials(self):
+        self.accounts_path.write_text(json.dumps([
+            {
+                "id": 1,
+                "email": "empty-status@example.invalid",
+                "access_token": "fixture-empty-token",
+                "password": "fixture-empty-password",
+            },
+            {
+                "id": 2,
+                "email": "explicit-pending@example.invalid",
+                "access_token": "fixture-pending-token",
+                "password": "fixture-pending-password",
+                "plan_check_status": "pending",
+            },
+            {
+                "id": 3,
+                "email": "no-token@example.invalid",
+                "access_token": "",
+                "password": "fixture-no-token-password",
+            },
+        ]), encoding="utf-8")
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(web_app.db, "_render_static_viewer"))
+            for name in (
+                "recover_interrupted_plan_checks",
+                "recover_interrupted_checkout_sessions",
+                "recover_interrupted_extract_links",
+                "recover_interrupted_live_checks",
+            ):
+                stack.enter_context(patch.object(web_app.db, name, return_value=0))
+            app = web_app.create_app(auth_code="test-auth")
+            client = app.test_client()
+            headers = {"X-Auth-Code": "test-auth"}
+            account_response = client.get("/api/accounts?archived=all", headers=headers)
+            snapshot_response = client.get(
+                "/api/accounts/plan-check-status?archived=all", headers=headers
+            )
+
+        self.assertEqual(account_response.status_code, 200)
+        self.assertEqual(snapshot_response.status_code, 200)
+        accounts = {item["id"]: item for item in account_response.get_json()}
+        snapshot = {item["id"]: item for item in snapshot_response.get_json()["items"]}
+        for account_id, can_start in ((1, True), (2, True), (3, False)):
+            for payload in (accounts[account_id], snapshot[account_id]):
+                self.assertEqual(payload["plan_query_status"], "pending")
+                self.assertFalse(payload["plan_capabilities"]["is_checking"])
+                self.assertEqual(payload["plan_capabilities"]["can_start"], can_start)
+                self.assertEqual(payload["has_access_token"], can_start)
+                self.assertNotIn("access_token", payload)
+                self.assertNotIn("password", payload)
+        response_text = account_response.get_data(as_text=True) + snapshot_response.get_data(as_text=True)
+        self.assertNotIn("fixture-empty-token", response_text)
+        self.assertNotIn("fixture-pending-token", response_text)
+        self.assertNotIn("fixture-empty-password", response_text)
+        self.assertNotIn("fixture-pending-password", response_text)
+        self.assertNotIn("fixture-no-token-password", response_text)
 
     def test_requeue_clears_previous_error_kind(self):
         db.update_account_plan_check(

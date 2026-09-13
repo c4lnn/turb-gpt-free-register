@@ -156,6 +156,9 @@ class AccountFilterToolbarTemplateTests(unittest.TestCase):
         plan = self.template[plan_start:plan_end]
         self.assertIn("capabilities.is_checking === true", plan)
         self.assertIn("capabilities.can_start !== true", plan)
+        self.assertNotIn("status === 'pending'", plan)
+        self.assertNotIn("'pending', 'queued', 'running'", plan)
+        self.assertNotIn('"pending", "queued", "running"', plan)
 
         checkout_start = self.template.index("function _checkoutSessionAction")
         checkout_end = self.template.index("function _checkoutSessionCell", checkout_start)

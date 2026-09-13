@@ -13,7 +13,7 @@ from curl_cffi.requests import Session
 
 from config import (
     USER_AGENT, SEC_CH_UA, SEC_CH_UA_PLATFORM, SEC_CH_UA_MOBILE,
-    SEC_CH_UA_FULL_VERSION_LIST, SEC_CH_UA_PLATFORM_VERSION, SEC_CH_UA_ARCH,
+    SEC_CH_UA_FULL_VERSION, SEC_CH_UA_FULL_VERSION_LIST, SEC_CH_UA_PLATFORM_VERSION, SEC_CH_UA_ARCH,
     SEC_CH_UA_BITNESS, SEC_CH_UA_MODEL, SEND_HIGH_ENTROPY_CLIENT_HINTS,
     ACCEPT_LANGUAGE, IMPERSONATE, OAI_CLIENT_BUILD_NUMBER, OAI_CLIENT_VERSION,
     REQUEST_TIMEOUT, pick_proxy, pick_browser_profile, validate_browser_profile,
@@ -89,6 +89,9 @@ class BrowserSession:
         # 会话级熔断：收到 403/429 后停止继续打后续接口，避免异常状态下扩大误伤。
         self.blocked_until = 0.0
         self.blocked_reason = ""
+
+        # Auth 页面导航关联 ID 只属于当前 BrowserSession，不跨会话/账号复用。
+        self.auth_document_navigation_id = ""
 
         # 先用当前代理检测出口 IP 地理信息，再为本会话挑一份稳定浏览器画像。
         # 这样 Accept-Language / navigator.language / timezone 可自动跟随出口地区。
@@ -195,7 +198,7 @@ class BrowserSession:
     def _observe_cf_cookie_changes(self, url: str) -> None:
         current = self.cf_cookie_snapshot()
         if current != getattr(self, "_cf_cookie_seen", {}):
-            logger.info("[CF] Cookie 状态更新 url=%s keys=%s", url, sorted(current.keys()))
+            logger.info("[CF] Cookie 状态更新 url=%s keys=%s", self._url_label(url), sorted(current.keys()))
             self._cf_cookie_seen = current
 
     def _enforce_proxy_quality(self) -> None:
@@ -321,11 +324,12 @@ class BrowserSession:
                 headers["sec-ch-ua-platform"] = str(profile.get("sec_ch_ua_platform") or SEC_CH_UA_PLATFORM)
             if SEND_HIGH_ENTROPY_CLIENT_HINTS:
                 headers.update({
-                    "sec-ch-ua-full-version-list": SEC_CH_UA_FULL_VERSION_LIST,
-                    "sec-ch-ua-platform-version": SEC_CH_UA_PLATFORM_VERSION,
-                    "sec-ch-ua-arch": SEC_CH_UA_ARCH,
-                    "sec-ch-ua-bitness": SEC_CH_UA_BITNESS,
-                    "sec-ch-ua-model": SEC_CH_UA_MODEL,
+                    "sec-ch-ua-full-version": str(profile.get("sec_ch_ua_full_version") or SEC_CH_UA_FULL_VERSION),
+                    "sec-ch-ua-full-version-list": str(profile.get("sec_ch_ua_full_version_list") or SEC_CH_UA_FULL_VERSION_LIST),
+                    "sec-ch-ua-platform-version": str(profile.get("sec_ch_ua_platform_version") or SEC_CH_UA_PLATFORM_VERSION),
+                    "sec-ch-ua-arch": str(profile.get("sec_ch_ua_arch") or SEC_CH_UA_ARCH),
+                    "sec-ch-ua-bitness": str(profile.get("sec_ch_ua_bitness") or SEC_CH_UA_BITNESS),
+                    "sec-ch-ua-model": str(profile.get("sec_ch_ua_model") or SEC_CH_UA_MODEL),
                 })
         return headers
 
@@ -443,6 +447,19 @@ class BrowserSession:
         })
         return self._attach_auth_rum_headers(headers)
 
+    def reset_auth_document_navigation_context(self) -> None:
+        """清空当前会话的 Auth 页面导航关联 ID。"""
+        self.auth_document_navigation_id = ""
+
+    def attach_auth_document_navigation_header(self, headers: dict) -> dict:
+        """仅在 Auth 上游真实提供时透传页面导航关联 ID。"""
+        value = str(getattr(self, "auth_document_navigation_id", "") or "").strip()
+        if value:
+            headers["x-openai-document-navigation-id"] = value
+        else:
+            logger.debug("[Auth] x-openai-document-navigation-id present=False")
+        return headers
+
     def get_auth_navigate_headers(self, referer: str = "https://chatgpt.com/", user_initiated: bool = True, target_origin: str = "https://auth.openai.com") -> dict:
         """
         获取 auth.openai.com 导航请求头（用于GET页面请求）。
@@ -483,13 +500,13 @@ class BrowserSession:
         获取 sentinel.openai.com 的请求头。
         用于步骤6、9、11。
         """
-        from config import SENTINEL_SV
+        from config import SENTINEL_FRAME_URL
         headers = self._get_common_headers()
         headers.update({
             "accept": "*/*",
             "content-type": "text/plain;charset=UTF-8",
             "origin": "https://sentinel.openai.com",
-            "referer": f"https://sentinel.openai.com/backend-api/sentinel/frame.html?sv={SENTINEL_SV}",
+            "referer": SENTINEL_FRAME_URL,
             "sec-fetch-site": "same-origin",
             "sec-fetch-mode": "cors",
             "sec-fetch-dest": "empty",
@@ -552,14 +569,52 @@ class BrowserSession:
     def _observe_response_for_circuit_breaker(self, resp, url: str):
         status = int(getattr(resp, "status_code", 0) or 0)
         self._observe_cf_cookie_changes(url)
+        self._observe_auth_document_navigation_id(resp, url)
         if status not in (403, 429):
             return resp
         retry_after = self._parse_retry_after(getattr(resp, "headers", {}).get("retry-after") if getattr(resp, "headers", None) else None)
         cool_down = retry_after if retry_after > 0 else (300 if status == 429 else 900)
         self.blocked_until = max(self.blocked_until, time.time() + min(cool_down, 3600))
-        self.blocked_reason = f"HTTP {status} from {url}"
-        logger.warning("[熔断] 当前会话收到 HTTP %s，进入冷却 %ss，停止后续请求：%s", status, min(cool_down, 3600), url)
+        url_label = self._url_label(url)
+        self.blocked_reason = f"HTTP {status} from {url_label}"
+        logger.warning("[熔断] 当前会话收到 HTTP %s，进入冷却 %ss，停止后续请求：%s", status, min(cool_down, 3600), url_label)
         return resp
+
+    @staticmethod
+    def _header_value(headers, name: str) -> str:
+        wanted = str(name or "").lower()
+        for key, value in (headers or {}).items():
+            if str(key).lower() == wanted:
+                return str(value or "").strip()
+        return ""
+
+    def _observe_auth_document_navigation_id(self, resp, url: str) -> None:
+        """从 Auth 响应及重定向历史中保存真实导航关联 ID。"""
+        responses = list(getattr(resp, "history", []) or [])
+        responses.append(resp)
+        for candidate in responses:
+            candidate_url = str(getattr(candidate, "url", "") or url)
+            try:
+                host = (urlparse(candidate_url).hostname or "").lower()
+            except Exception:
+                host = ""
+            if host != "auth.openai.com":
+                continue
+            value = self._header_value(
+                getattr(candidate, "headers", {}) or {},
+                "x-openai-document-navigation-id",
+            )
+            if value:
+                self.auth_document_navigation_id = value
+
+    @staticmethod
+    def _url_label(url: str) -> str:
+        """仅保留 URL 的 origin/path，避免日志泄露 query 中的认证上下文。"""
+        try:
+            parsed = urlparse(str(url or ""))
+            return f"{parsed.scheme}://{parsed.netloc}{parsed.path}" or str(url or "")
+        except Exception:
+            return "<invalid-url>"
 
     def get(self, url: str, headers: dict = None, **kwargs):
         """发送 GET 请求"""

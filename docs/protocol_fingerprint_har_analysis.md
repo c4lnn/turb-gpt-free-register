@@ -120,7 +120,7 @@ HAR 没有直接保存 `.js` 响应正文，但从 Sentinel `p[5]` 还原出被�
   - Chrome Navigator/DOM/Window 样本补齐。
   - Node Runner 的版本默认值与 Python 画像统一为 Chrome 146。
   - Auth Sentinel token 支持 `data-build=null` 形态。
-  - 默认 SDK src 对齐 `https://sentinel.openai.com/sentinel/20260219f9f6/sdk.js`。
+  - 当前 protocol 默认 SDK src 对齐 `https://sentinel.openai.com/sentinel/20260810913b/sdk.js`；历史 HAR 中的旧版本仅保留为样本事实。
 
 ## 6. 重新生成摘要
 
@@ -170,9 +170,9 @@ AUTO_BROWSER_LOCALE_FROM_IP="True"
    - 已将 `core.chatgpt_auth.signin_openai()` 从 `/login` 对齐为根路径 `/`。
 
 3. **email-otp/validate Sentinel 策略**
-   - HAR 样本中 `email-otp/validate` 未携带 `openai-sentinel-token`。
-   - 已新增开关：`config.openai_protocol.SEND_SENTINEL_ON_EMAIL_OTP_VALIDATE = False`。
-   - 默认按 HAR 不带 Sentinel；如后续服务端要求，可改为 `True` 回退旧逻辑。
+   - 历史 HAR 样本中 `email-otp/validate` 未携带 `openai-sentinel-token`。
+   - 当前 protocol 已按新版注册捕获，在提交 OTP 前使用 `authorize_continue` flow 获取 fresh Sentinel token。
+   - `config.openai_protocol.SEND_SENTINEL_ON_EMAIL_OTP_VALIDATE` 当前默认值为 `True`；该配置仅保留兼容性导出，主 protocol 不再回退到无 Sentinel 的旧路径。
 
 4. **timezone_offset_min 符号**
    - ChatGPT `accounts/check` URL 使用 JS `Date.getTimezoneOffset()` 语义：东八区是 `-480`，日本是 `-540`。

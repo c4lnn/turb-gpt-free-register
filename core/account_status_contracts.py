@@ -150,12 +150,13 @@ def plan_capabilities(
 ) -> dict[str, bool]:
     category = category if category in PLAN_CATEGORY_CODES else "unknown"
     query = normalize_plan_query_status(query_status)
-    checking = query in {"pending", "queued", "running"}
+    checking = query in {"queued", "running"}
+    actionable = query in {"pending", "success", "failed"} and bool(has_access_token)
     return {
         "is_checking": checking,
         "is_terminal": query in {"success", "failed"},
         "is_eligible": category == "free_trial_eligible" and query != "failed",
-        "can_start": bool(has_access_token) and not checking and query != "unknown",
+        "can_start": actionable,
         "has_access_token": bool(has_access_token),
     }
 

@@ -18,6 +18,11 @@ const DEFAULT_SEC_CH_UA =
 const DEFAULT_SEC_CH_UA_FULL_VERSION_LIST =
   `"Google Chrome";v="${DEFAULT_CHROME_FULL_VERSION}", ` +
   `"Chromium";v="${DEFAULT_CHROME_FULL_VERSION}", "Not)A;Brand";v="24.0.0.0"`;
+const DEFAULT_SENTINEL_SCRIPT_SRC =
+  process.env.SENTINEL_SCRIPT_SRC ||
+  (process.env.SENTINEL_SV
+    ? `https://sentinel.openai.com/sentinel/${process.env.SENTINEL_SV}/sdk.js`
+    : "");
 
 function readArgs(argv) {
   const args = {};
@@ -1315,7 +1320,7 @@ async function main(argv = process.argv.slice(2), writeOutput = true) {
         args["script-src"],
         cfg("scriptSrc", "script_src"),
         process.env.SENTINEL_SCRIPT_SRC,
-      "https://sentinel.openai.com/sentinel/20260219f9f6/sdk.js",
+        DEFAULT_SENTINEL_SCRIPT_SRC,
       ),
     buildId: pick(args["build-id"], cfg("buildId", "build_id"), process.env.SENTINEL_BUILD_ID, ""),
     reactListeningKey: pick(args["react-listening-key"], cfg("reactListeningKey", "react_listening_key"), process.env.SENTINEL_REACT_LISTENING_KEY, ""),

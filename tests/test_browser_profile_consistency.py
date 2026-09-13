@@ -30,6 +30,7 @@ class BrowserProfileVersionTests(unittest.TestCase):
         self.assertIn("Chrome/146.0.0.0", profile["user_agent"])
         self.assertIn('"Google Chrome";v="146"', profile["sec_ch_ua"])
         self.assertIn('"Chromium";v="146"', profile["sec_ch_ua"])
+        self.assertEqual(profile["sec_ch_ua_full_version"], '"146.0.0.0"')
         self.assertIn('"Google Chrome";v="146.0.0.0"', profile["sec_ch_ua_full_version_list"])
         self.assertEqual(browser.validate_browser_profile(profile), [])
 
@@ -112,7 +113,14 @@ class BrowserProfileCrossLayerTests(unittest.TestCase):
         self.assertEqual(headers["User-Agent"], profile["user_agent"])
         self.assertEqual(headers["accept-language"], profile["accept_language"])
         self.assertEqual(headers["sec-ch-ua"], profile["sec_ch_ua"])
+        self.assertEqual(headers["sec-ch-ua-mobile"], profile["sec_ch_ua_mobile"])
         self.assertEqual(headers["sec-ch-ua-platform"], profile["sec_ch_ua_platform"])
+        self.assertEqual(headers["sec-ch-ua-full-version"], profile["sec_ch_ua_full_version"])
+        self.assertEqual(headers["sec-ch-ua-full-version-list"], profile["sec_ch_ua_full_version_list"])
+        self.assertEqual(headers["sec-ch-ua-platform-version"], profile["sec_ch_ua_platform_version"])
+        self.assertEqual(headers["sec-ch-ua-arch"], profile["sec_ch_ua_arch"])
+        self.assertEqual(headers["sec-ch-ua-bitness"], profile["sec_ch_ua_bitness"])
+        self.assertEqual(headers["sec-ch-ua-model"], profile["sec_ch_ua_model"])
 
     def test_runner_receives_profile_version_and_locale_parameters(self):
         profile = browser.build_browser_environment({"country": "CN", "timezone": "Asia/Shanghai"}, base_profile={})

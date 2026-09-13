@@ -10,6 +10,7 @@ Sentinel Runner 适配层
 3. 调用 node sentinel-runner.js --challenge-file <临时文件> ...
 4. 捕获 stdout 即为 openai-sentinel-token 的 value
 """
+import hashlib
 import json
 import logging
 import os
@@ -40,6 +41,8 @@ from config import (
     JS_HEAP_SIZE_LIMIT,
     DEVICE_MEMORY,
     SENTINEL_SV,
+    SENTINEL_SDK_SHA256,
+    SENTINEL_SDK_URL,
     OPENAI_BUILD_ID,
 )
 
@@ -74,12 +77,66 @@ def _resolve_node_executable() -> str:
     return "node.exe" if sys.platform.startswith("win") else "node"
 
 
+def _runner_output_summary(value: str) -> str:
+    """只返回 runner 输出的字段/长度摘要，避免错误路径泄露 token。"""
+    text = str(value or "")
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        return f"text_length={len(text)}"
+    if isinstance(parsed, dict):
+        fields = {
+            key: len(item) if isinstance(item, str) else type(item).__name__
+            for key, item in parsed.items()
+        }
+        return f"json_fields={fields}"
+    return f"json_type={type(parsed).__name__}"
+
+
+def _redact_command(command: list[str]) -> str:
+    """隐藏 runner 命令中的 Cookie 和临时 challenge 路径。"""
+    redacted = []
+    redact_next = False
+    for item in command:
+        if redact_next:
+            redacted.append("<redacted>")
+            redact_next = False
+            continue
+        redacted.append(item)
+        if item in {"--cookie", "--challenge-file"}:
+            redact_next = True
+    return " ".join(redacted)
+
+
+def _sdk_sha256() -> str:
+    """按仓库规范化的 LF 内容计算 SDK 哈希，兼容 Windows checkout 换行。"""
+    content = _SDK_PATH.read_bytes().replace(b"\r\n", b"\n")
+    return hashlib.sha256(content).hexdigest()
+
+
 def _ensure_runner_environment() -> None:
-    """启动前的强制检查：runner.js / sdk.js 必须存在。"""
+    """启动前检查 runner/SDK 存在，并确认 SDK 与版本配置配对。"""
     if not _RUNNER_PATH.exists():
         raise FileNotFoundError(f"找不到 sentinel-runner.js: {_RUNNER_PATH}")
     if not _SDK_PATH.exists():
         raise FileNotFoundError(f"找不到 sdk.js: {_SDK_PATH}")
+    expected_url = f"https://sentinel.openai.com/sentinel/{SENTINEL_SV}/sdk.js"
+    if SENTINEL_SDK_URL != expected_url:
+        raise RuntimeError(
+            f"Sentinel 版本配置不一致: sv={SENTINEL_SV}, sdk_url={SENTINEL_SDK_URL}"
+        )
+    actual_sha256 = _sdk_sha256()
+    if SENTINEL_SDK_SHA256 and actual_sha256.lower() != SENTINEL_SDK_SHA256.lower():
+        raise RuntimeError(
+            "Sentinel SDK 资源版本不一致: "
+            f"sv={SENTINEL_SV}, expected_sha256={SENTINEL_SDK_SHA256}, "
+            f"actual_sha256={actual_sha256}"
+        )
+
+
+def validate_sentinel_resource_consistency() -> None:
+    """在注册请求前校验 Sentinel 版本、SDK 资源和 runner 入口。"""
+    _ensure_runner_environment()
 
 
 def generate_sentinel_token(
@@ -187,7 +244,7 @@ def generate_sentinel_token(
             "--user-agent-data-platform", user_agent_data_platform,
             "--request-idle-callback", "1" if request_idle_callback else "0",
             "--sdk", str(_SDK_PATH),
-            "--script-src", f"https://sentinel.openai.com/sentinel/{SENTINEL_SV}/sdk.js",
+            "--script-src", SENTINEL_SDK_URL,
             "--build-id", runner_build_id,
             # 与 config.browser / core.sentinel.py 中的指纹默认值保持一致
             "--width", str(screen_width),
@@ -214,12 +271,14 @@ def generate_sentinel_token(
         ]
 
         logger.info(f"[SentinelRunner] 调用 Node 生成 token, flow={flow}")
-        logger.debug(f"[SentinelRunner] 命令: {' '.join(cmd)}")
+        logger.debug("[SentinelRunner] 命令: %s", _redact_command(cmd))
 
         # 关键：禁用 sentinel.config.json 自动发现（避免外部配置干扰）
         env = os.environ.copy()
         env.pop("SENTINEL_CONFIG", None)
         env["SENTINEL_CONFIG"] = "__none__"  # 故意指向不存在的文件，跳过 fallback 列表
+        env["SENTINEL_SV"] = SENTINEL_SV
+        env["SENTINEL_SCRIPT_SRC"] = SENTINEL_SDK_URL
         env["TZ"] = timezone_iana  # 让 Node VM 里的 Date.toString() 与 Python p 指纹时区一致
 
         try:
@@ -247,14 +306,15 @@ def generate_sentinel_token(
             stdout = (proc.stdout or "").strip()
             raise RuntimeError(
                 f"sentinel-runner.js 退出码 {proc.returncode}\n"
-                f"stderr: {stderr}\n"
-                f"stdout: {stdout}"
+                f"stderr_summary: {_runner_output_summary(stderr)}\n"
+                f"stdout_summary: {_runner_output_summary(stdout)}"
             )
 
         token_text = (proc.stdout or "").strip()
         if not token_text:
             raise RuntimeError(
-                f"sentinel-runner.js 输出为空, stderr: {(proc.stderr or '').strip()}"
+                "sentinel-runner.js 输出为空, "
+                f"stderr_summary: {_runner_output_summary(proc.stderr or '')}"
             )
 
         # 简单合法性校验：必须是合法 JSON 且包含关键字段
@@ -262,13 +322,15 @@ def generate_sentinel_token(
             parsed = json.loads(token_text)
         except json.JSONDecodeError as exc:
             raise RuntimeError(
-                f"runner 输出不是合法 JSON: {token_text[:200]}"
+                "runner 输出不是合法 JSON: "
+                f"output_summary={_runner_output_summary(token_text)}"
             ) from exc
 
         for required_key in ("p", "c", "id", "flow"):
             if required_key not in parsed:
                 raise RuntimeError(
-                    f"runner 输出缺少字段 {required_key}: {token_text[:200]}"
+                    f"runner 输出缺少字段 {required_key}: "
+                    f"output_summary={_runner_output_summary(token_text)}"
                 )
 
         # 详细诊断：打印输出 JSON 的所有顶层字段名 + 值长度

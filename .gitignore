@@ -76,7 +76,7 @@ sentinel/sentinel.config.json
 
 # 本地代码分析与 Codex 工具状态
 /.codegraph/
-/.codex/
+/.agents/
 
 # ============================================================
 # 编辑器 / 操作系统

@@ -19,7 +19,7 @@ import hashlib
 from datetime import datetime, timezone, timedelta
 
 from config import (
-    USER_AGENT, SENTINEL_SV, NAVIGATOR_LANGUAGE, NAVIGATOR_LANGUAGES,
+    USER_AGENT, SENTINEL_SDK_URL, NAVIGATOR_LANGUAGE, NAVIGATOR_LANGUAGES,
     TIMEZONE_OFFSET_MINUTES, TIMEZONE_NAME, SCREEN_WIDTH, SCREEN_HEIGHT,
     HARDWARE_CONCURRENCY, JS_HEAP_SIZE_LIMIT, NAVIGATOR_PROTO_SAMPLES,
     DOCUMENT_KEY_SAMPLES, WINDOW_KEY_SAMPLES, WINDOW_FEATURE_FLAGS,
@@ -103,7 +103,7 @@ def generate_fingerprint_data(device_id: str, attempt: int = 1, elapsed_ms: floa
     window_keys = list(profile.get("window_key_samples") or WINDOW_KEY_SAMPLES)
     window_flags = dict(WINDOW_FEATURE_FLAGS)
     window_flags.update(profile.get("window_feature_flags") or {})
-    script_src_samples = list(profile.get("script_src_samples") or [f"https://sentinel.openai.com/sentinel/{SENTINEL_SV}/sdk.js"])
+    script_src_samples = list(profile.get("script_src_samples") or [SENTINEL_SDK_URL])
 
     config = [
         screen_width + screen_height,       # [0] screen.width + screen.height

@@ -19,8 +19,7 @@ from core.session import BrowserSession
 from core.chatgpt_auth import get_providers, get_csrf_token, signin_openai
 from core.openai_auth import (
     follow_authorize,
-    request_sentinel_token,
-    build_sentinel_header,
+    get_fresh_sentinel_headers,
     validate_email_otp,
     send_email_otp,
     network_preflight,
@@ -286,6 +285,9 @@ def run_registration(
 
     # 创建浏览器会话（proxy=None 时自动从 config.PROXY_POOL 随机抽一个）
     session = BrowserSession(proxy=proxy)
+    reset_auth_context = getattr(session, "reset_auth_document_navigation_context", None)
+    if callable(reset_auth_context):
+        reset_auth_context()
 
     # 从代理 URL 中抽取 sid 段做日志，避免把账号密码完整打印
     proxy_label = "无"
@@ -304,7 +306,7 @@ def run_registration(
         birthday = generate_random_birthday()
 
     logger.info(f"[注册] 开始：{email}，代理={proxy_label}")
-    logger.info(f"[注册] 本次随机生日: {birthday}")
+    logger.info("[注册] 本次随机生日已生成: present=%s", bool(birthday))
     logger.debug(f"[注册] 设备ID={session.device_id}，会话日志ID={session.auth_session_logging_id}")
 
     create_acknowledged = False
@@ -368,14 +370,12 @@ def run_registration(
 
             human_delay("otp_input")
             try:
-                # HAR 对齐：2026-07-19 抓包中的 email-otp/validate 未携带 Sentinel。
-                # 保留开关，必要时可切回旧逻辑。
-                sentinel_header_9 = None
-                so_header_9 = None
-                if getattr(_protocol_cfg, "SEND_SENTINEL_ON_EMAIL_OTP_VALIDATE", False):
-                    sentinel_resp_9 = request_sentinel_token(session, "authorize_continue")
-                    sentinel_header_9, so_header_9 = build_sentinel_header(session, sentinel_resp_9, "authorize_continue")
-                    human_delay("challenge")
+                # OTP 校验前紧贴获取 fresh challenge，避免等待邮箱期间上下文过期。
+                sentinel_header_9, so_header_9 = get_fresh_sentinel_headers(
+                    session,
+                    "authorize_continue",
+                )
+                human_delay("challenge")
 
                 # 步骤10: 提交验证码
                 validate_result = validate_email_otp(session, current_otp, sentinel_header_9, so_header_9)
@@ -426,7 +426,11 @@ def run_registration(
         )
         if page_type == "external_url" or direct_oauth_after_otp:
             if not otp_continue_url:
-                raise RuntimeError(f"OTP external_url 响应缺少可跟随 URL，无法继续: {validate_result}")
+                response_fields = sorted(str(key) for key in validate_result) if isinstance(validate_result, dict) else type(validate_result).__name__
+                raise RuntimeError(
+                    "OTP external_url 响应缺少可跟随 URL，无法继续: "
+                    f"response_fields={response_fields}"
+                )
             logger.info(f"[注册] OTP 后进入 OAuth 回调分支，跳过 create_account：{email}")
             create_acknowledged = True
             session_info, access_token = _finalize_registration_session(
@@ -449,7 +453,7 @@ def run_registration(
                 if otp_continue_url and "about-you" not in str(otp_continue_url):
                     raise RuntimeError(
                         f"OTP 后续页面类型未知，不应盲目 create_account: "
-                        f"page_type={page_type}, resp={validate_result}"
+                        f"page_type={page_type}, response_fields={sorted(str(key) for key in validate_result) if isinstance(validate_result, dict) else type(validate_result).__name__}"
                     )
                 logger.warning(
                     f"[步骤10] 未知 page_type={page_type}，但 continue_url 指向 about-you，继续 create_account"
@@ -461,8 +465,10 @@ def run_registration(
             human_delay("navigate")
 
             # 步骤11: 获取 Sentinel Token（oauth_create_account）
-            sentinel_resp_11 = request_sentinel_token(session, "oauth_create_account")
-            sentinel_header_11, so_header_11 = build_sentinel_header(session, sentinel_resp_11, "oauth_create_account")
+            sentinel_header_11, so_header_11 = get_fresh_sentinel_headers(
+                session,
+                "oauth_create_account",
+            )
             human_delay("challenge")
 
             human_delay("form")
@@ -478,7 +484,8 @@ def run_registration(
             continue_url = create_result.get("continue_url")
             if not continue_url:
                 raise RuntimeError(
-                    f"create_account 响应缺少 continue_url，无法继续: {create_result}"
+                    "create_account 响应缺少 continue_url，无法继续: "
+                    f"response_fields={sorted(str(key) for key in create_result) if isinstance(create_result, dict) else type(create_result).__name__}"
                 )
 
             # 步骤13: 拉 /api/auth/session 提取 accessToken
@@ -554,7 +561,13 @@ def run_registration(
             },
         )
 
-        logger.info(f"[完成] {email}，账号ID={account_id}，Token={access_token[:16]}...")
+        logger.info(
+            "[完成] %s，账号ID=%s，access_token_present=%s access_token_length=%s",
+            email,
+            account_id,
+            bool(access_token),
+            len(str(access_token or "")),
+        )
 
         # ==================== 阶段9: 后置自动触发 flow ====================
         # 只有走完回调、拿到 token 并保存成功的账号，才会触发 flow。
@@ -579,7 +592,7 @@ def run_registration(
                 f"原因={flow_result.get('message')}"
             )
 
-        logger.debug(f"[完成] TOTP Secret: {totp_secret or '(未设置)'}")
+        logger.debug("[完成] TOTP Secret 是否设置: %s", bool(totp_secret))
 
         # 注册任务的成功判定：账号本身(注册+token)+Codex 授权都成功才算 success。
         # Codex 失败时账号仍保存（token 拿到了、有补跑机会），但任务状态标失败，
