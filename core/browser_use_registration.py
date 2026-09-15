@@ -2374,6 +2374,7 @@ def run_browser_use_registration(
     browser = None
     context = None
     page = None
+    network_traffic: dict[str, Any] | None = None
 
     logger.info(
         "[%s] 开始注册：%s proxyCountry=%s profileId=%s local_proxy_arg=%s",
@@ -2401,6 +2402,9 @@ def run_browser_use_registration(
             page = context.pages[0] if context.pages else context.new_page()
             page.set_default_timeout(_timeout_ms())
             page.set_default_navigation_timeout(_timeout_ms(getattr(_cfg, "BROWSER_USE_NAVIGATION_TIMEOUT", 90)))
+            # Browser Use/Skyvern 是云端浏览器，不安装本地省流量路由、网络流量
+            # 监听器或 JS 覆盖率采集，确保云端页面按原始流程运行且不增加 CDP 开销。
+            logger.info("[%s] 云端浏览器跳过省流量、网络监听和 JS 覆盖率采集", cloud_label)
             if _should_apply_cloud_automation_mask(provider_prefix):
                 _apply_cloud_browser_automation_mask(
                     context,
@@ -2646,6 +2650,8 @@ def run_browser_use_registration(
                     "message": f"{type(exc).__name__}: {str(exc)[:220]}",
                 }
 
+            # 云端浏览器不采集本地流量明细；注册后停留仅用于完成页面流程。
+            _post_register_dwell(page, context, provider_prefix=provider_prefix, email=email)
             account_id = save_account_data(
                 email=email,
                 access_token=access_token,
@@ -2665,9 +2671,9 @@ def run_browser_use_registration(
                     },
                     "registration_password": openai_password,
                     "codex": codex_result,
+                    "network_traffic": network_traffic,
                 },
             )
-            _post_register_dwell(page, context, provider_prefix=provider_prefix, email=email)
             _t_all.done("success")
             return {
                 "success": True,
@@ -2676,6 +2682,7 @@ def run_browser_use_registration(
                 "access_token": access_token,
                 "totp_secret": totp_secret,
                 "codex": codex_result,
+                "network_traffic": network_traffic,
                 "error": None,
             }
     except Exception as exc:
@@ -2693,6 +2700,7 @@ def run_browser_use_registration(
         return {
             "success": False,
             "email": email,
+            "network_traffic": network_traffic,
             "error": f"{type(exc).__name__}: {str(exc)[:300]}",
         }
     finally:

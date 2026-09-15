@@ -13,11 +13,21 @@ from typing import Callable
 from config import roxybrowser as _cfg
 from config import twofa as _twofa_cfg
 from core.account_export import save_account_data, post_register_dwell
+from core.browser_data_saver import BrowserDataSaver
+from core.browser_traffic import SeleniumTrafficTracker
 from core.email_provider import acquire_email_after_input, wait_for_otp, resolve_email_source
 from core.humanize import delay as human_delay
 from core.roxybrowser_client import RoxyBrowserClient, RoxyOpenResult
 
 logger = logging.getLogger(__name__)
+
+
+def _enable_performance_logging(options) -> None:
+    """尽量开启 Chrome performance log；不支持时不阻断注册。"""
+    try:
+        options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
+    except Exception as exc:
+        logger.debug("[Roxy] 当前 Selenium 选项不支持 performance log：%s", exc)
 
 
 def _log_prefix(driver=None) -> str:
@@ -48,6 +58,7 @@ def _build_driver(opened: RoxyOpenResult):
         options = Options()
         # 页面里长轮询/风控脚本偶尔会让 driver.get 等到超时；eager 只等 DOMContentLoaded。
         options.page_load_strategy = "eager"
+        _enable_performance_logging(options)
         options.add_experimental_option("debuggerAddress", opened.debugger_address)
         driver_path = ""
         try:
@@ -68,6 +79,7 @@ def _build_driver(opened: RoxyOpenResult):
         logger.info("[Roxy] Selenium 连接 webdriver_url=%s", opened.webdriver_url)
         options = Options()
         options.page_load_strategy = "eager"
+        _enable_performance_logging(options)
         driver = RemoteWebDriver(command_executor=opened.webdriver_url, options=options)
         _apply_browser_automation_mask(driver)
         return driver
@@ -2186,23 +2198,43 @@ def _apply_roxy_twofa(
     return initial_session_info, initial_access_token, None, summary
 
 
-def run_roxy_registration(
-    email: str | None,
-    name: str,
+ def run_roxy_registration(
+     email: str | None,
+     name: str,
     birthday: str,
     proxy: str = None,
     otp_code: str = None,
     batch_dir: Path | None = None,
-    on_email_acquired: Callable[[str], None] | None = None,
-) -> dict:
+     on_email_acquired: Callable[[str], None] | None = None,
+ ) -> dict:
     """Roxy 指纹浏览器自动化注册入口。"""
     client = RoxyBrowserClient()
     opened = client.open_profile()
     driver = None
     create_acknowledged = False
     openai_password: str | None = None
+    traffic_tracker: SeleniumTrafficTracker | None = None
+    data_saver: BrowserDataSaver | None = None
+    network_traffic: dict | None = None
+
+    def _traffic_checkpoint() -> None:
+        if traffic_tracker is not None:
+            try:
+                traffic_tracker.checkpoint()
+            except Exception as exc:
+                logger.debug("[Roxy注册] 刷新浏览器流量统计失败：%s", exc)
+
     try:
         driver = _build_driver(opened)
+        try:
+            traffic_tracker = SeleniumTrafficTracker(driver, label="Roxy")
+        except Exception as exc:
+            # 统计失败不应影响注册主流程。
+            logger.warning("[Roxy注册] 初始化浏览器流量统计失败，继续注册：%s: %s", type(exc).__name__, str(exc)[:180])
+        data_saver = BrowserDataSaver(label="Roxy")
+        if traffic_tracker is not None:
+            traffic_tracker.attach_data_saver(data_saver)
+        data_saver.install_selenium(driver)
         _center_browser_window(driver)
         driver.set_page_load_timeout(int(_cfg.ROXY_SELENIUM_TIMEOUT))
         try:
@@ -2220,6 +2252,7 @@ def run_roxy_registration(
             attempts=2,
             accept_hosts=("chatgpt.com", "auth.openai.com"),
         )
+        _traffic_checkpoint()
         human_delay("navigate")
         _page_warmup(driver, reason="login_page")
         logger.info("[Roxy注册] 登录页加载完成，准备填写邮箱")
@@ -2242,12 +2275,14 @@ def run_roxy_registration(
             attempts=3,
             email_supplier=_email_supplier_after_input,
         )
+        _traffic_checkpoint()
         _check_manual_stop()
 
         # 新版注册流可能先进入 /create-account/password；参考 FlowPilot 的 fill-password 步骤，
         # 先设置密码并提交，然后再等待邮箱验证码页。
         # 即使邮箱提交后直接进入 OTP 页，也检查是否提供“使用密码继续”入口。
         openai_password = _fill_password_page_if_present(driver, email, timeout=25)
+        _traffic_checkpoint()
         _check_manual_stop()
 
         current_otp = otp_code
@@ -2299,6 +2334,7 @@ def run_roxy_registration(
                 logger.info("[Roxy注册][OTP] 未找到显式提交按钮，继续等待页面状态：%s", str(exc)[:120])
 
             outcome = _wait_after_email_otp_submit(driver, timeout=30)
+            _traffic_checkpoint()
             if outcome == 'accepted':
                 break
             if otp_attempt >= max_otp_attempts:
@@ -2306,6 +2342,7 @@ def run_roxy_registration(
             logger.warning("[Roxy注册][OTP] 验证码错误/过期，准备重新发送并重新获取验证码（%s/%s）", otp_attempt + 1, max_otp_attempts)
             otp_after_ts = time.time()
             _click_resend_email_otp(driver, timeout=25)
+            _traffic_checkpoint()
             human_delay("api")
             current_otp = None
 
@@ -2313,6 +2350,7 @@ def run_roxy_registration(
         logger.info("[Roxy注册] 开始等待资料页/登录态")
         _check_manual_stop()
         profile_submitted = _complete_profile_page(driver, name, birthday, timeout=60)
+        _traffic_checkpoint()
         if profile_submitted:
             create_acknowledged = True
             # 给 OAuth 回调 / session cookie 写入一点时间。
@@ -2354,11 +2392,19 @@ def run_roxy_registration(
                     force=True,
                     clear_existing_state=True,
                 )
+                _traffic_checkpoint()
             else:
                 logger.info("[Roxy注册][Codex] ENABLE_CODEX_AUTO=False，注册后跳过 Codex OAuth")
         except Exception as exc:
             codex_result = {"status": "failed", "ok": False, "message": f"{type(exc).__name__}: {str(exc)[:180]}"}
 
+        # 统计注册浏览器关闭前的完整会话；注册后停留期间的网络请求也计入。
+        post_register_dwell(email, label="Roxy注册")
+        _traffic_checkpoint()
+        if traffic_tracker is not None:
+            network_traffic = traffic_tracker.stop()
+        if data_saver is not None:
+            data_saver.stop()
         account_id = save_account_data(
             email=email,
             access_token=access_token,
@@ -2374,9 +2420,9 @@ def run_roxy_registration(
                 "registration_password": openai_password,
                 "twofa": twofa,
                 "codex": codex_result,
+                "network_traffic": network_traffic,
             },
         )
-        post_register_dwell(email, label="Roxy注册")
         codex_ok = codex_result.get("ok") or codex_result.get("status") == "skipped"
         return {
             "success": bool(codex_ok),
@@ -2386,9 +2432,17 @@ def run_roxy_registration(
             "totp_secret": totp_secret,
             "twofa": twofa,
             "codex": codex_result,
+            "network_traffic": network_traffic,
             "error": None if codex_ok else f"Codex 未完成: {codex_result.get('message')}",
         }
     except Exception as exc:
+        if traffic_tracker is not None:
+            try:
+                network_traffic = traffic_tracker.stop()
+            except Exception:
+                pass
+        if data_saver is not None:
+            data_saver.stop()
         logger.error("[Roxy注册] 失败：%s: %s", type(exc).__name__, exc)
         logger.debug("[Roxy注册] 失败详情", exc_info=True)
         # 已领取邮箱无论失败发生在哪个阶段都不可再次复用；若账号已保存，
@@ -2402,8 +2456,20 @@ def run_roxy_registration(
             )
         except Exception:
             pass
-        return {"success": False, "email": email, "error": f"{type(exc).__name__}: {str(exc)[:300]}"}
+        return {
+            "success": False,
+            "email": email,
+            "network_traffic": network_traffic,
+            "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+        }
     finally:
+        if traffic_tracker is not None:
+            try:
+                traffic_tracker.stop()
+            except Exception:
+                pass
+        if data_saver is not None:
+            data_saver.stop()
         if driver and not bool(_cfg.ROXY_KEEP_BROWSER_OPEN):
             try:
                 driver.quit()

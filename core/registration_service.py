@@ -344,6 +344,7 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                 db.update_job(
                     job_id,
                     status="stopped",
+                    network_traffic=(result or {}).get("network_traffic") if isinstance(result, dict) else None,
                     error="用户手动停止",
                     completed_at=datetime.now().isoformat(timespec="seconds"),
                 )
@@ -355,6 +356,7 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                     status="success",
                     email=result.get("email"),
                     account_id=result.get("account_id"),
+                    network_traffic=result.get("network_traffic"),
                     completed_at=datetime.now().isoformat(timespec="seconds"),
                 )
                 log_logger.info(f"[Job {job_id}] 成功: {result.get('email')}")
@@ -367,6 +369,7 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                     status="failed",
                     email=result_email,
                     account_id=(result or {}).get("account_id") if isinstance(result, dict) else None,
+                    network_traffic=(result or {}).get("network_traffic") if isinstance(result, dict) else None,
                     error=str(err)[:500],
                     completed_at=datetime.now().isoformat(timespec="seconds"),
                 )

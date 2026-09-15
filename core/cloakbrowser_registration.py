@@ -10,6 +10,8 @@ from typing import Callable
 from config import cloakbrowser as _cfg
 from config import twofa as _twofa_cfg
 from core.account_export import save_account_data, post_register_dwell
+from core.browser_data_saver import BrowserDataSaver
+from core.browser_traffic import PlaywrightTrafficTracker
 from core.cloakbrowser_driver import build_cloak_driver
 from core.email_provider import acquire_email_after_input, wait_for_otp, resolve_email_source
 from core.humanize import delay as human_delay
@@ -38,8 +40,20 @@ def run_cloak_registration(
     opened = None
     create_acknowledged = False
     openai_password: str | None = None
+    traffic_tracker: PlaywrightTrafficTracker | None = None
+    data_saver: BrowserDataSaver | None = None
+    network_traffic: dict | None = None
     try:
         driver, opened = build_cloak_driver(proxy=proxy)
+        try:
+            traffic_tracker = PlaywrightTrafficTracker(driver.context, label="Cloak")
+        except Exception as exc:
+            # 统计失败不应影响注册主流程。
+            logger.warning("[Cloak注册] 初始化浏览器流量统计失败，继续注册：%s: %s", type(exc).__name__, str(exc)[:180])
+        data_saver = BrowserDataSaver(label="Cloak")
+        if traffic_tracker is not None:
+            traffic_tracker.attach_data_saver(data_saver)
+        data_saver.install_playwright(driver.context)
         logger.info("[Cloak注册] 开始：%s，profile=%s", email, opened.profile_id)
 
         otp_after_ts = time.time()
@@ -146,6 +160,12 @@ def run_cloak_registration(
         except Exception as exc:
             codex_result = {"status": "failed", "ok": False, "message": f"{type(exc).__name__}: {str(exc)[:180]}"}
 
+        # 统计注册浏览器关闭前的完整会话；注册后停留期间的网络请求也计入。
+        post_register_dwell(email, label="Cloak注册")
+        if traffic_tracker is not None:
+            network_traffic = traffic_tracker.stop()
+        if data_saver is not None:
+            data_saver.stop()
         account_id = save_account_data(
             email=email,
             access_token=access_token,
@@ -160,12 +180,28 @@ def run_cloak_registration(
                 "cloakbrowser": {"profile_id": opened.profile_id, "open_result": opened.raw},
                 "registration_password": openai_password,
                 "codex": codex_result,
+                "network_traffic": network_traffic,
             },
         )
-        post_register_dwell(email, label="Cloak注册")
         codex_ok = codex_result.get("ok") or codex_result.get("status") == "skipped"
-        return {"success": bool(codex_ok), "email": email, "account_id": account_id, "access_token": access_token, "totp_secret": totp_secret, "codex": codex_result, "error": None if codex_ok else f"Codex 未完成: {codex_result.get('message')}"}
+        return {
+            "success": bool(codex_ok),
+            "email": email,
+            "account_id": account_id,
+            "access_token": access_token,
+            "totp_secret": totp_secret,
+            "codex": codex_result,
+            "network_traffic": network_traffic,
+            "error": None if codex_ok else f"Codex 未完成: {codex_result.get('message')}",
+        }
     except Exception as exc:
+        if traffic_tracker is not None:
+            try:
+                network_traffic = traffic_tracker.stop()
+            except Exception:
+                pass
+        if data_saver is not None:
+            data_saver.stop()
         logger.error("[Cloak注册] 失败：%s: %s", type(exc).__name__, exc)
         logger.debug("[Cloak注册] 失败详情", exc_info=True)
         try:
@@ -177,8 +213,20 @@ def run_cloak_registration(
             )
         except Exception:
             pass
-        return {"success": False, "email": email, "error": f"{type(exc).__name__}: {str(exc)[:300]}"}
+        return {
+            "success": False,
+            "email": email,
+            "network_traffic": network_traffic,
+            "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+        }
     finally:
+        if traffic_tracker is not None:
+            try:
+                traffic_tracker.stop()
+            except Exception:
+                pass
+        if data_saver is not None:
+            data_saver.stop()
         if driver and not bool(_cfg.CLOAK_KEEP_BROWSER_OPEN):
             try:
                 driver.quit()
