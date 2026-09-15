@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Outlook 邮箱账号池配置。
+邮箱服务配置。
 
 注册邮箱与 OTP 均只走 Outlook 账号池：
     1. 把邮箱素材写入项目根目录 `用于注册的邮箱.txt`
@@ -14,7 +14,8 @@ from config.env_loader import env_str, apply_env_overrides
 # False: 走人工输入邮箱 + 人工填 OTP 的流程
 USE_EMAIL_SERVICE = False
 
-# 可选值（也可以用英文逗号配置多个，按顺序兜底，例如 "outlook,generic_api,mailnest"）：
+# 可选值（也可以用英文逗号配置多个，按顺序兜底，例如 "outlook,generic_api,mailnest,remail"）：
+#   "remail"            — Remail API 动态购买邮箱并自动取 OTP
 #   "outlook"           — 外购 Outlook 账号池 + mail.chatai.codes 远端取信
 #   "cloudflare_domain" — Cloudflare 域名邮箱（转发到 QQ 邮箱），通过 IMAP 取信
 #   "icloud" — 导入 iCloud 隐私邮箱（转发到 QQ 邮箱），通过 IMAP 取信
@@ -177,6 +178,35 @@ CLOUDMAIL_AUTO_ADD_USER = True
 
 # 随机邮箱 local-part 长度。
 CLOUDMAIL_RANDOM_LOCAL_LENGTH = 12
+
+
+# ============================================================
+# Remail 开放 API：https://remail.aishop6.com/docs
+# ============================================================
+
+# API 根地址；也兼容填写 https://remail.aishop6.com/docs，客户端会自动规范化。
+REMAIL_API_BASE = "https://remail.aishop6.com"
+
+# Remail 控制台生成的 rk- 开头 API Key。
+REMAIL_API_KEY = env_str("REMAIL_API_KEY", "")
+
+# 在 Remail 项目列表中选择用于 ChatGPT/OpenAI 验证码的项目 ID，默认使用项目 2。
+REMAIL_PROJECT_ID = 2
+
+# 项目下单的邮箱后缀；outlook.com 为微软邮箱商品的常用选择。
+REMAIL_EMAIL_SUFFIX = "outlook.com"
+
+# code 为短效接码；purchase 为可重复收件的长效购买，默认使用 purchase。
+REMAIL_SERVICE_MODE = "purchase"
+
+# private_first 优先使用自己的库存；public_only 只使用公开库存，默认使用 public_only。
+REMAIL_SUPPLY_POLICY = "public_only"
+
+# 下单响应未立即返回 service token 时，等待订单详情补齐凭证的最长秒数。
+REMAIL_ORDER_WAIT_SECONDS = 30
+
+# Remail HTTP 请求超时。
+REMAIL_REQUEST_TIMEOUT = 20
 
 # ---- .env overrides for WebUI editable fields ----
 apply_env_overrides(globals(), {'USE_EMAIL_SERVICE': 'bool', 'OTP_MAX_WAIT': 'int', 'OTP_POLL_INTERVAL': 'int', 'EMAIL_SOURCE': 'str', 'EMAIL_DOMAIN': 'str', 'QQ_EMAIL': 'str', 'QQ_IMAP_PASSWORD': 'str', 'QQ_IMAP_TIMEOUT': 'int', 'GPTMAIL_API_KEY': 'str', 'OUTLOOK_FETCH_MODE': 'str', 'MAIL_NEST_API_KEY': 'str', 'MAIL_NEST_PROJECT_CODE': 'str', 'MAILCOM_REQUEST_TIMEOUT': 'int', 'MAILCOM_PAGE_SIZE': 'int', 'MAILCOM_MAX_PAGES': 'int', 'MAILCOM_LIFETIME_SNAPSHOT_TTL_SECONDS': 'int', 'MAILCOM_LIFETIME_NEAR_LIMIT': 'int', 'MAILCOM_DELETE_ALIAS_IF_NO_TRIAL': 'bool', 'CLOUDFLARE_API_BASE': 'str', 'CLOUDFLARE_API_KEY': 'str', 'CLOUDFLARE_AUTH_MODE': 'str', 'CLOUDFLARE_CUSTOM_AUTH': 'str', 'CLOUDFLARE_PATH_DOMAINS': 'str', 'CLOUDFLARE_PATH_ACCOUNTS': 'str', 'CLOUDFLARE_PATH_TOKEN': 'str', 'CLOUDFLARE_PATH_MESSAGES': 'str', 'CLOUDFLARE_DEFAULT_DOMAINS': 'list_str_multiline', 'CLOUDFLARE_REQUEST_TIMEOUT': 'int', 'CLOUDFLARE_NAME_LENGTH': 'int', 'CLOUDFLARE_RANDOM_SUBDOMAIN_ENABLED': 'bool', 'CLOUDFLARE_RANDOM_SUBDOMAIN_LENGTH': 'int', 'CLOUDFLARE_RANDOM_SUBDOMAIN_SUFFIX': 'str', 'CLOUDMAIL_API_BASE': 'str', 'CLOUDMAIL_ADMIN_EMAIL': 'str', 'CLOUDMAIL_PASSWORD': 'str', 'CLOUDMAIL_TOKEN_PATH': 'str', 'CLOUDMAIL_AUTH_TOKEN': 'str', 'CLOUDMAIL_DOMAINS': 'list_str_multiline', 'CLOUDMAIL_AUTO_ADD_USER': 'bool', 'CLOUDMAIL_RANDOM_LOCAL_LENGTH': 'int'})

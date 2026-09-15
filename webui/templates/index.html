@@ -2208,6 +2208,13 @@
       line-height: 1.45; white-space: normal; overflow: visible;
       overflow-wrap: anywhere; word-break: break-word;
     }
+    .config-field-wrap { min-width: 0; }
+    .config-field-wrap > label.fld { margin-bottom: 0; }
+    .config-external-link {
+      display: inline-flex; align-items: center; gap: 4px; margin-top: 7px;
+      color: #377DFF; font-size: 12px; font-weight: 500; text-decoration: none;
+    }
+    .config-external-link:hover { text-decoration: underline; }
     .config-section-v2-actions {
       margin-top: 18px; display: flex; justify-content: flex-end; gap: 8px;
     }
@@ -2250,6 +2257,13 @@
     .config-subtabs-v2 button.active { background: #ecf5ff; color: #377DFF; font-weight: 600; }
     .config-section-v2-subhelp {
       margin: 12px 0 0; font-size: 13px; color: #909399; line-height: 1.5;
+    }
+    .remail-promo-notice {
+      display: inline-flex; align-items: center; gap: 6px;
+      margin: 0 0 0 10px; padding: 8px 12px;
+      color: #b42318; background: #fff1f0; border: 1px solid #fecdca;
+      border-radius: 8px; font-size: 13px; font-weight: 700; line-height: 1.4;
+      vertical-align: middle; white-space: nowrap;
     }
     .config-switches-v2 + .config-section-v2-body {
 
@@ -2556,6 +2570,15 @@
           <label class="acc-v2-select-field" for="checkoutTypeFilterV2" title="按已保存的 Checkout Session 类型筛选账号">
             <span>Checkout类型</span>
             <select id="checkoutTypeFilterV2" data-account-filter="checkout_type" aria-label="筛选 Checkout 类型"></select>
+          </label>
+          <label class="acc-v2-inline" title="按账号 2FA/TOTP 状态筛选账号">
+            <select id="totpStatusFilterV2">
+              <option value="">2FA：全部</option>
+              <option value="enabled">2FA：已开启</option>
+              <option value="disabled">2FA：未开启</option>
+              <option value="pending">2FA：设置中</option>
+              <option value="failed">2FA：设置失败</option>
+            </select>
           </label>
           <div class="acc-v2-date-select" id="dateSelectAccountsV2">
             <button type="button" class="acc-v2-date-select-btn" id="btnDateFilterAccountsV2" title="按注册时间筛选日期范围">📅 日期筛选</button>
@@ -7035,6 +7058,7 @@ function emailConfigSectionForKey(key) {
   if (key.startsWith('GPTMAIL_')) return ['GPTMail', 'GPTMail 临时邮箱 API 配置'];
   if (key.startsWith('MAIL_NEST_')) return ['MailNest', 'MailNest / 迈巢临时邮箱 API 配置'];
   if (key.startsWith('CLOUDMAIL_')) return ['CloudMail', 'CloudMail 域名随机邮箱、Token 和收信 API 配置'];
+  if (key.startsWith('REMAIL_')) return ['Remail', 'Remail 开放 API、项目下单和取件配置'];
   if (key.startsWith('OUTLOOK_')) return ['Outlook 邮箱池', 'Outlook 邮箱池和取件模式配置'];
   if (key.startsWith('CLOUDFLARE_')) return ['Cloudflare 临时邮箱', 'Cloudflare Worker 临时邮箱 API、鉴权与路径配置'];
   if (['EMAIL_DOMAIN','QQ_EMAIL','QQ_IMAP_PASSWORD'].includes(key)) return ['Cloudflare 域名邮箱', 'Cloudflare 转发到 QQ 邮箱后的 IMAP 收信配置'];
@@ -7493,13 +7517,16 @@ function renderConfigPlainFieldV2(f) {
     const ph = f.secret ? (f.configured ? '已配置；输入新值可覆盖' : '保存在 .env，可留空') : '可留空';
     control = `<input type="${inputType}" data-key="${attrEsc(f.key)}" value="${attrEsc(shown)}" placeholder="${ph}" autocomplete="off" spellcheck="false">`;
   }
-  return `
+  const field = `
     <label class="fld">
       ${esc(f.label)}
       <span class="hint">${esc(f.help || '')}</span>
       ${control}
     </label>
   `;
+  return f.external_url
+    ? `<div class="config-field-wrap">${field}${renderConfigExternalLink(f)}</div>`
+    : field;
 }
 
 function currentExtractProvider() {
@@ -7646,6 +7673,12 @@ function renderSectionedConfigSectionV2(name, fields, sectionForKey, preferred, 
   const current = bySection[active] || { help: '', fields: [] };
   const switches = current.fields.filter(f => f.type === 'bool');
   const inputs = current.fields.filter(f => f.type !== 'bool');
+  const promo = name === '邮箱 / OTP' && active === 'Remail'
+    ? '<span class="remail-promo-notice" role="note">通过作者卡网购买积分9折优惠</span>'
+    : '';
+  const sectionHelp = current.help
+    ? `<p class="config-section-v2-subhelp">${esc(current.help)}${promo}</p>`
+    : promo;
   let extra = '';
   if (name === '邮箱 / OTP' && active === 'CloudMail') {
     extra = renderCloudMailTokenToolsV2();
@@ -7663,7 +7696,7 @@ function renderSectionedConfigSectionV2(name, fields, sectionForKey, preferred, 
           </button>
         `).join('')}
       </div>
-      ${current.help ? `<p class="config-section-v2-subhelp">${esc(current.help)}</p>` : ''}
+      ${sectionHelp}
       ${switches.length ? `<div class="config-switches-v2">${switches.map(f => renderFeatureSwitchField(f, { withIcon: false })).join('')}</div>` : ''}
       ${inputs.length ? `<div class="config-section-v2-body">${inputs.map(renderConfigPlainFieldV2).join('')}</div>` : ''}
       ${extra}
@@ -7911,7 +7944,7 @@ function renderConfigSectionV2(name, fields) {
       name,
       fields,
       emailConfigSectionForKey,
-      ['通用邮箱 / OTP', 'GPTMail', 'MailNest', 'CloudMail', 'Outlook 邮箱池', 'Cloudflare 临时邮箱', 'Cloudflare 域名邮箱', '其他邮箱配置'],
+      ['通用邮箱 / OTP', 'GPTMail', 'MailNest', 'CloudMail', 'Remail', 'Outlook 邮箱池', 'Cloudflare 临时邮箱', 'Cloudflare 域名邮箱', '其他邮箱配置'],
       { get: () => CONFIG_EMAIL_ACTIVE_SECTION_V2, set: v => { CONFIG_EMAIL_ACTIVE_SECTION_V2 = v; } },
       'email-section-v2'
     );
