@@ -11,6 +11,7 @@ from pathlib import Path
 from core import db
 from core.account_liveness import check_account_liveness, log_path
 from core.chatgpt_plan import resolve_plan_check_route
+from core.chatgpt_plan import check_account_plan
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +69,31 @@ def _run_live_check(*, account_id: int, email: str, proxy: str | None, trigger: 
         ):
             _append_log(email, "[查活] 代理出口收到 403，尝试直连兜底一次")
             result = check_account_liveness(email, proxy="", clear_log=False)
+        browser_session = result.get("_browser_session") if result.get("ok") else None
         db.update_account_liveness(account_id, result)
+        if result.get("ok") and browser_session is not None:
+            try:
+                plan_result = check_account_plan(
+                    result.get("access_token") or "",
+                    env=browser_session,
+                    timezone_offset_min="-",
+                )
+            except Exception as exc:
+                plan_result = {
+                    "ok": False,
+                    "checked_at": datetime.now().isoformat(timespec="seconds"),
+                    "error": f"{type(exc).__name__}: {str(exc)[:180]}",
+                }
+            db.update_account_plan_check(acc_id=account_id, result=plan_result)
+            result["plan_check"] = plan_result
+            _append_log(
+                email,
+                "[查活] 自动查套餐完成："
+                f"status={'success' if plan_result.get('ok') else 'failed'} "
+                f"http_status={plan_result.get('http_status') or '-'} "
+                f"plan={plan_result.get('current_plan_type') or '-'} "
+                f"error={str(plan_result.get('error') or '-')[:180]}"
+            )
         if result.get("ok"):
             _append_log(email, "[查活] 完成：账号正常，已刷新最新 AT/accessToken")
         elif result.get("status") == "deactivated":
@@ -94,6 +119,12 @@ def _run_live_check(*, account_id: int, email: str, proxy: str | None, trigger: 
             pass
         return result
     finally:
+        try:
+            browser_session = locals().get("browser_session")
+            if browser_session is not None:
+                browser_session.session.close()
+        except Exception:
+            logger.debug("[查活] 关闭复用 BrowserSession 失败", exc_info=True)
         with _LOCK:
             _RUNNING.discard(int(account_id))
         _QUEUE_SLOTS.release()

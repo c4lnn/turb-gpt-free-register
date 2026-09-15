@@ -111,6 +111,25 @@ class AccountLivenessDbTests(unittest.TestCase):
         self.assertEqual(row["access_token"], "old-at")
         self.assertEqual(row["codex_status"], "success")
 
+    def test_plan_failure_after_live_refresh_does_not_replace_new_token(self):
+        self.assertTrue(db.update_account_liveness(1, {
+            "ok": True,
+            "status": "live",
+            "checked_at": "2026-08-11T12:03:00",
+            "access_token": "new-at",
+        }))
+        self.assertTrue(db.update_account_plan_check(acc_id=1, result={
+            "ok": False,
+            "checked_at": "2026-08-11T12:03:01",
+            "error": "HTTP 503",
+            "http_status": 503,
+        }))
+        row = self._account()
+        self.assertEqual(row["access_token"], "new-at")
+        self.assertEqual(row["live_check_status"], "live")
+        self.assertEqual(row["plan_check_status"], "failed")
+        self.assertEqual(row["plan_check_http_status"], 503)
+
     def test_deactivated_result_preserves_token_and_codex_authorization_history(self):
         self.assertTrue(db.update_account_liveness(1, {
             "ok": False,

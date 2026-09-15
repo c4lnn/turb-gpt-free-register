@@ -3887,9 +3887,12 @@ async function pollAccountPlanStatuses() {
         const isExtracting = Boolean(item.extract_link_capabilities?.is_running);
         const wasCheckouting = Boolean(account?.checkout_capabilities?.is_checking);
         const isCheckouting = Boolean(item.checkout_capabilities?.is_checking);
+        const wasLiveChecking = ['queued', 'running'].includes(String(account?.live_check_status || '').toLowerCase());
+        const isLiveChecking = ['queued', 'running'].includes(String(item.live_check_status || '').toLowerCase());
         if (wasChecking && !isChecking) needsFullReload = true;
         if (wasExtracting && !isExtracting) needsFullReload = true;
         if (wasCheckouting && !isCheckouting) needsFullReload = true;
+        if (wasLiveChecking && !isLiveChecking) needsFullReload = true;
         Object.assign(account, item);
       });
       planStatusRevision = snapshot.revision || '';

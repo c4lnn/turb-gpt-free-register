@@ -63,6 +63,17 @@ def jwt_with_payload(payload):
 
 
 class PlanCheckErrorClassificationTests(unittest.TestCase):
+    def test_existing_session_is_reused_across_retries_and_not_closed(self):
+        fake_session = FakeBrowserSession([FakeResponse(503, text="busy"), valid_plan_response()])
+        fake_session.proxy = "http://proxy.example:8080"
+        with patch.object(chatgpt_plan, "BrowserSession") as factory:
+            result = chatgpt_plan.check_account_plan(
+                "not-a-jwt", env=fake_session, max_attempts=2, retry_delay=0,
+            )
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["attempt_count"], 2)
+        factory.assert_not_called()
+
     def run_check(self, responses, *, max_attempts=1, token="not-a-jwt"):
         holder = {}
         fake_session = FakeBrowserSession(responses)

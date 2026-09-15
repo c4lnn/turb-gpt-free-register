@@ -2630,7 +2630,7 @@ def list_account_plan_check_statuses(
         "codex_status", "codex_error",
         "codex_auth_status", "codex_operation_status", "codex_capabilities",
         "plan_category_code", "plan_query_status", "plan_capabilities",
-        "extract_link_capabilities", "live_check_status",
+        "extract_link_capabilities", "live_check_status", "live_check_ok", "live_check_error", "live_checked_at",
         "live_check_capabilities", "checkout_query_status", "checkout_capabilities",
     )
     with _LOCK:
@@ -2697,6 +2697,10 @@ def list_account_plan_check_statuses(
                     "plan_type": row.get("plan_type"),
                     "plus_trial_eligible": row.get("plus_trial_eligible"),
                     "trial_eligibility_known": row.get("trial_eligibility_known"),
+                    "live_check_status": row.get("live_check_status"),
+                    "live_check_ok": row.get("live_check_ok"),
+                    "live_check_error": row.get("live_check_error"),
+                    "live_checked_at": row.get("live_checked_at"),
                     "extract_link_status": row.get("extract_link_status"),
                     "codex_status": row.get("codex_status"),
                 }

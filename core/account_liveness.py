@@ -152,6 +152,8 @@ def check_account_liveness(email: str, proxy: str | None = None, *, clear_log: b
         path.write_text("", encoding="utf-8")
 
     fh: logging.FileHandler | None = None
+    session: BrowserSession | None = None
+    keep_session = False
     root_logger = logging.getLogger()
     thread_name = threading.current_thread().name
     with _RUNNING_LOCK:
@@ -204,6 +206,7 @@ def check_account_liveness(email: str, proxy: str | None = None, *, clear_log: b
         account = session_info.get("account") or {}
         logger.info("[查活] 正常：%s user_id=%s plan=%s", email, user.get("id"), account.get("planType"))
         fp = session.fingerprint_summary()
+        keep_session = True
         return {
             "ok": True,
             "status": "live",
@@ -214,6 +217,8 @@ def check_account_liveness(email: str, proxy: str | None = None, *, clear_log: b
             "proxy_used": session.proxy or None,
             "fingerprint": fp,
             "fingerprint_text": session.fingerprint_summary_text(),
+            # 仅供同一后台任务继续请求；不得序列化到 API 或账号存储。
+            "_browser_session": session,
         }
     except AccountUnusableError as exc:
         code = getattr(exc, "error_code", "") or detect_account_unusable_text(str(exc)) or "account_deactivated"
@@ -233,5 +238,10 @@ def check_account_liveness(email: str, proxy: str | None = None, *, clear_log: b
                 root_logger.removeHandler(fh)
                 fh.close()
         finally:
+            if session is not None and not keep_session:
+                try:
+                    session.session.close()
+                except Exception:
+                    pass
             with _RUNNING_LOCK:
                 _RUNNING.discard(key)

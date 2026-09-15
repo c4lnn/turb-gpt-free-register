@@ -447,6 +447,7 @@ def check_account_plan(
     timeout: float | None = None,
     max_attempts: int | None = None,
     retry_delay: float | None = None,
+    env: BrowserSession | None = None,
 ) -> dict:
     token = normalize_token(token)
     if not token:
@@ -463,15 +464,29 @@ def check_account_plan(
             **{k: v for k, v in claims.items() if k != "payload"},
         }
 
-    try:
-        route = resolve_plan_check_route(proxy)
-    except Exception as exc:
-        return {
-            "ok": False,
-            "checked_at": now_iso(),
-            "http_status": None,
-            "error": f"套餐查询网络配置错误: {exc}",
-            **{k: v for k, v in claims.items() if k != "payload"},
+    owns_env = env is None
+    if owns_env:
+        try:
+            route = resolve_plan_check_route(proxy)
+        except Exception as exc:
+            return {
+                "ok": False,
+                "checked_at": now_iso(),
+                "http_status": None,
+                "error": f"套餐查询网络配置错误: {exc}",
+                **{k: v for k, v in claims.items() if k != "payload"},
+            }
+    else:
+        # 外部会话的代理、Cookie、设备 ID 和浏览器画像属于调用方所有。
+        # 这里仅构造与现有结果兼容的路由摘要，绝不覆盖或重建该会话。
+        session_proxy = getattr(env, "proxy", "") or ""
+        route = {
+            "proxy": session_proxy,
+            "proxy_mode": "direct" if not session_proxy else "proxy",
+            "network_route": "direct" if not session_proxy else "proxy",
+            "proxy_used": session_proxy or None,
+            "proxy_fallback_reason": None,
+            "allow_direct_fallback": False,
         }
     route_meta = plan_check_route_metadata(route)
     url = f"https://chatgpt.com{ACCOUNTS_CHECK_PATH}?timezone_offset_min={quote(str(timezone_offset_min))}"
@@ -490,11 +505,13 @@ def check_account_plan(
 
     last_result: dict | None = None
     for attempt in range(1, attempts + 1):
-        env = None
+        if owns_env:
+            env = None
         resp = None
         try:
             # 套餐查询只需要稳定的请求头，不需要额外访问 IP 地理信息接口。
-            env = BrowserSession(proxy=route["proxy"], detect_exit_geo=False)
+            if owns_env:
+                env = BrowserSession(proxy=route["proxy"], detect_exit_geo=False)
             resp = env.session.get(
                 url,
                 headers=_common_headers(env, token),
@@ -577,7 +594,7 @@ def check_account_plan(
                 "retryable": True,
             }
         finally:
-            if env is not None:
+            if owns_env and env is not None:
                 try:
                     env.session.close()
                 except Exception:
