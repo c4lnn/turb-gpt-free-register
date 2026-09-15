@@ -90,14 +90,24 @@ def is_checking(email: str) -> bool:
         return key in _RUNNING
 
 
-def _validate_with_retry(session: BrowserSession, email: str, otp_after_ts: float, max_otp_attempts: int = 3) -> dict:
+def _validate_with_retry(
+    session: BrowserSession,
+    email: str,
+    otp_after_ts: float,
+    max_otp_attempts: int = 3,
+    email_source: str | None = None,
+) -> dict:
     current_otp = None
     last_exc: Exception | None = None
     for attempt in range(1, max_otp_attempts + 1):
         try:
             if current_otp is None:
                 logger.info("[查活] 等待登录 OTP：%s（第 %s/%s 次）", email, attempt, max_otp_attempts)
-                current_otp = wait_for_otp(email, after_ts=otp_after_ts)
+                current_otp = wait_for_otp(
+                    email,
+                    after_ts=otp_after_ts,
+                    email_source=email_source,
+                )
             result = validate_email_otp(session, current_otp, sentinel_header=None, so_header=None)
             return result
         except EmailOtpInvalidError as exc:
@@ -126,7 +136,13 @@ def _validate_with_retry(session: BrowserSession, email: str, otp_after_ts: floa
     raise last_exc if last_exc else RuntimeError("OTP 验证失败")
 
 
-def check_account_liveness(email: str, proxy: str | None = None, *, clear_log: bool = True) -> dict:
+def check_account_liveness(
+    email: str,
+    proxy: str | None = None,
+    *,
+    clear_log: bool = True,
+    email_source: str | None = None,
+) -> dict:
     """
     重新登录账号并刷新最新 accessToken。
 

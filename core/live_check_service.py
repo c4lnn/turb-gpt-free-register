@@ -48,6 +48,16 @@ def _run_live_check(*, account_id: int, email: str, proxy: str | None, trigger: 
             return {"ok": False, "status": "failed", "error": "账号已删除或查活状态已被重置"}
         route = resolve_plan_check_route(explicit_proxy=proxy)
         selected_proxy = route.get("proxy")
+        # 查活必须沿用账号注册时记录的邮箱来源。不能只调用
+        # resolve_email_source(email)：Remail 等临时邮箱的上下文只在领取进程
+        # 内存中存在，服务重启后按当前 EMAIL_SOURCE 推断会把来源判错。
+        try:
+            account = db.get_account(account_id) or {}
+        except Exception:
+            account = {}
+        email_source = str(account.get("email_source") or "").strip() or None
+        if email_source:
+            _append_log(email, f"[查活] 使用注册时保存的邮箱来源：{email_source}")
         _append_log(
             email,
             "[查活] 开始后台执行 "
