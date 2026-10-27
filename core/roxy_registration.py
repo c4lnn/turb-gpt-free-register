@@ -31,19 +31,7 @@ def _enable_performance_logging(options) -> None:
 
 
 def _log_prefix(driver=None) -> str:
-    """按当前浏览器实现返回注册日志前缀。
-
-    CloakBrowser 复用 Roxy 的页面操作函数；这些共享函数必须跟随实际 driver
-    输出 `[Cloak注册]`，避免 Cloak 流程里混入 `[Roxy注册]` 日志。
-    """
-    try:
-        explicit = str(getattr(driver, "_registration_log_prefix", "") or "").strip()
-        if explicit:
-            return explicit
-        if driver is not None and driver.__class__.__name__ == "CloakSeleniumDriver":
-            return "[Cloak注册]"
-    except Exception:
-        pass
+    """返回注册日志前缀。"""
     return "[Roxy注册]"
 
 
@@ -967,7 +955,7 @@ def _is_email_login_page_still_present(driver) -> bool:
 def _wait_email_submit_next_state(driver, email: str, timeout: int = 18) -> str:
     """邮箱提交后等待进入 password / otp / logged_in；仍停留邮箱页则返回 email_page。
 
-    Cloak/Playwright 路径里，点击 submit 后页面经常先发生一次 SPA 导航：
+    部分浏览器路径里，点击 submit 后页面经常先发生一次 SPA 导航：
     `chatgpt.com/auth/login?email=...`，同时 React 会短暂把 email input 清空。
     旧逻辑一看到空 input 就立刻返回 `email_cleared`，导致在真正跳到
     `auth.openai.com/...` 前过早重填，形成“提交 -> 清空 -> 重填”的循环。
@@ -1326,28 +1314,8 @@ def _is_profile_like(snapshot: dict) -> bool:
 
 
 def _set_element_value(driver, el, value: str) -> None:
-    """Roxy 使用原生键盘输入；Cloak 继续使用其兼容的 DOM setter。"""
-    if el.__class__.__name__ != "CloakElement":
-        _human_type_text(driver, el, str(value))
-        return
-    driver.execute_script(r"""
-    const el = arguments[0];
-    const value = String(arguments[1]);
-    const tag = (el.tagName || '').toLowerCase();
-    el.scrollIntoView({block:'center'});
-    el.focus();
-    if (tag === 'select') {
-      el.value = value;
-    } else {
-      const proto = tag === 'textarea' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-      const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-      if (setter) setter.call(el, value);
-      else el.value = value;
-    }
-    el.dispatchEvent(new Event('input', {bubbles:true}));
-    el.dispatchEvent(new Event('change', {bubbles:true}));
-    el.blur();
-    """, el, value)
+    """使用原生键盘输入。"""
+    _human_type_text(driver, el, str(value))
 
 
 def _select_or_type(driver, selectors: list[str], value: str, timeout: int = 3) -> bool:
@@ -1358,30 +1326,17 @@ def _select_or_type(driver, selectors: list[str], value: str, timeout: int = 3) 
     try:
         tag = (el.tag_name or '').lower()
         if tag == 'select':
-            if el.__class__.__name__ == 'CloakElement':
-                driver.execute_script(r"""
-                const el = arguments[0], value = String(arguments[1]);
-                const n = parseInt(value, 10);
-                const opts = [...el.options];
-                const match = opts.find(o => o.value === value)
-                  || opts.find(o => (o.textContent || '').trim() === value)
-                  || opts[Math.max(0, n - 1)];
-                if (match) el.value = match.value; else el.value = value;
-                el.dispatchEvent(new Event('input', {bubbles:true}));
-                el.dispatchEvent(new Event('change', {bubbles:true}));
-                """, el, str(value))
-            else:
-                from selenium.webdriver.support.ui import Select
-                sel = Select(el)
+            from selenium.webdriver.support.ui import Select
+            sel = Select(el)
+            try:
+                sel.select_by_value(str(int(value)))
+            except Exception:
                 try:
-                    sel.select_by_value(str(int(value)))
+                    sel.select_by_visible_text(str(int(value)))
                 except Exception:
-                    try:
-                        sel.select_by_visible_text(str(int(value)))
-                    except Exception:
-                        # 月份 select 可能是 0-based，也可能是 1-based；先 value/text，不行再 index。
-                        sel.select_by_index(max(0, int(value)-1))
-                driver.execute_script("arguments[0].dispatchEvent(new Event('change', {bubbles:true}));", el)
+                    # 月份 select 可能是 0-based，也可能是 1-based；先 value/text，不行再 index。
+                    sel.select_by_index(max(0, int(value)-1))
+            driver.execute_script("arguments[0].dispatchEvent(new Event('change', {bubbles:true}));", el)
         else:
             _human_type_text(driver, el, str(value), clear=True)
         return True
@@ -2059,7 +2014,7 @@ def _switch_to_chatgpt_window_if_any(driver) -> bool:
 def _fetch_chatgpt_session(driver, timeout: int = 90, auto_jump_wait: int = 15) -> dict:
     """等待页面完成跳转并从 ChatGPT 页面内读取登录 session/accessToken。
 
-    旧逻辑会在 auth.openai.com 上一直等到总超时，Cloak/部分 Chromium 场景下
+    旧逻辑会在 auth.openai.com 上一直等到总超时，部分 Chromium 场景下
     实际账号已创建成功但当前句柄 URL 没及时更新，导致白等 120 秒。现在只给
     自动跳转 `auto_jump_wait` 秒；超过后立即主动打开 chatgpt.com 读 session。
     """
@@ -2198,15 +2153,15 @@ def _apply_roxy_twofa(
     return initial_session_info, initial_access_token, None, summary
 
 
- def run_roxy_registration(
-     email: str | None,
-     name: str,
+def run_roxy_registration(
+    email: str | None,
+    name: str,
     birthday: str,
     proxy: str = None,
     otp_code: str = None,
     batch_dir: Path | None = None,
-     on_email_acquired: Callable[[str], None] | None = None,
- ) -> dict:
+    on_email_acquired: Callable[[str], None] | None = None,
+) -> dict:
     """Roxy 指纹浏览器自动化注册入口。"""
     client = RoxyBrowserClient()
     opened = client.open_profile()

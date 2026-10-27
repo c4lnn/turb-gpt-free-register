@@ -5,40 +5,6 @@ from core.browser_data_saver import BrowserDataSaver, configured_resource_types
 from core.roxybrowser_client import _apply_data_saver_open_args
 
 
-class _Request:
-    def __init__(self, resource_type, url):
-        self.resource_type = resource_type
-        self.url = url
-
-
-class _Route:
-    def __init__(self, request):
-        self.request = request
-        self.action = None
-        self.error_code = None
-
-    def abort(self, error_code=None):
-        self.action = "abort"
-        self.error_code = error_code
-
-    def continue_(self):
-        self.action = "continue"
-
-
-class _Context:
-    def __init__(self):
-        self.route_pattern = None
-        self.handler = None
-        self.unroute_args = None
-
-    def route(self, pattern, handler):
-        self.route_pattern = pattern
-        self.handler = handler
-
-    def unroute(self, pattern, handler):
-        self.unroute_args = (pattern, handler)
-
-
 class _Driver:
     def __init__(self):
         self.commands = []
@@ -49,73 +15,6 @@ class _Driver:
 
 
 class BrowserDataSaverTests(unittest.TestCase):
-    def test_disabled_mode_does_not_install_route(self):
-        context = _Context()
-        with patch("core.browser_data_saver._cfg.BROWSER_DATA_SAVER_MODE", False):
-            saver = BrowserDataSaver(label="test")
-            saver.install_playwright(context)
-
-        self.assertFalse(saver.enabled)
-        self.assertIsNone(context.handler)
-        self.assertEqual(saver.snapshot()["data_saver_blocked_count"], 0)
-
-    def test_playwright_blocks_optional_types_but_keeps_critical_requests(self):
-        context = _Context()
-        with patch("core.browser_data_saver._cfg.BROWSER_DATA_SAVER_MODE", True), patch(
-            "core.browser_data_saver._cfg.BROWSER_DATA_SAVER_BLOCKED_RESOURCE_TYPES",
-            ["image", "media"],
-        ):
-            saver = BrowserDataSaver(label="test")
-            saver.install_playwright(context)
-            image_request = _Request("image", "https://cdn.example/avatar.png")
-            image = _Route(image_request)
-            script = _Route(_Request("script", "https://cdn.example/app.js"))
-            captcha = _Route(_Request("image", "https://auth.example/captcha.png"))
-            context.handler(image)
-            context.handler(script)
-            context.handler(captcha)
-
-        self.assertEqual(context.route_pattern, "**/*")
-        self.assertEqual(image.action, "abort")
-        self.assertEqual(image.error_code, "blockedbyclient")
-        self.assertEqual(script.action, "continue")
-        self.assertEqual(captcha.action, "continue")
-        stats = saver.snapshot()
-        self.assertEqual(stats["data_saver_blocked_count"], 1)
-        self.assertEqual(stats["data_saver_blocked_by_type"], {"image": 1})
-        self.assertTrue(saver.was_playwright_blocked(image_request))
-        # 这里传入的是另一个对象；只有实际被 route.abort 的 request 才会被标记。
-        self.assertFalse(saver.was_playwright_blocked(_Request("image", "https://cdn.example/avatar.png")))
-
-        saver.stop()
-        self.assertIsNotNone(context.unroute_args)
-
-    def test_playwright_url_pattern_can_block_script_independently_of_resource_type(self):
-        context = _Context()
-        with patch("core.browser_data_saver._cfg.BROWSER_DATA_SAVER_MODE", True), patch(
-            "core.browser_data_saver._cfg.BROWSER_DATA_SAVER_BLOCKED_RESOURCE_TYPES", []
-        ), patch(
-            "core.browser_data_saver._cfg.BROWSER_DATA_SAVER_BLOCKED_URL_PATTERNS",
-            ["**://metrics.example/**"],
-        ):
-            saver = BrowserDataSaver(label="test")
-            saver.install_playwright(context)
-            telemetry = _Route(_Request("script", "https://metrics.example/sdk/main.js"))
-            critical = _Route(_Request("script", "https://auth.example/assets/app.js"))
-            context.handler(telemetry)
-            context.handler(critical)
-
-        self.assertEqual(telemetry.action, "abort")
-        self.assertEqual(critical.action, "continue")
-        stats = saver.snapshot()
-        self.assertEqual(stats["data_saver_blocked_count"], 1)
-        self.assertEqual(stats["data_saver_blocked_by_type"], {"script": 1})
-        self.assertEqual(
-            stats["data_saver_blocked_by_url_pattern"],
-            {"**://metrics.example/**": 1},
-        )
-        self.assertEqual(stats["data_saver_blocked_url_patterns"], ["**://metrics.example/**"])
-
     def test_selenium_uses_static_resource_url_patterns(self):
         driver = _Driver()
         with patch("core.browser_data_saver._cfg.BROWSER_DATA_SAVER_MODE", True), patch(

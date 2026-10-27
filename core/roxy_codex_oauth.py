@@ -46,12 +46,6 @@ def _codex_driver_name() -> str:
 
 
 def _detect_browser_kind(opened=None) -> str:
-    try:
-        raw = getattr(opened, "raw", None) or {}
-        if isinstance(raw, dict) and str(raw.get("driver") or "").lower().startswith("cloak"):
-            return "Cloak"
-    except Exception:
-        pass
     return "Roxy"
 
 
@@ -973,7 +967,7 @@ def _wait_after_phone_send(driver, timeout: int = 12) -> str:
             invalid = any(str(i.get('ariaInvalid') or '').lower() == 'true' for i in (last.get('inputs') or []))
             if invalid:
                 raise RuntimeError(f"invalid_phone: add-phone input aria-invalid state={last}")
-            # Cloak/React-Aria 场景下 btn.click 可能只聚焦没触发表单提交；补一次 requestSubmit。
+            # React-Aria 场景下 btn.click 可能只聚焦没触发表单提交；补一次 requestSubmit。
             if not force_submitted and time.time() > end - timeout + 3:
                 info = _force_submit_add_phone_form(driver)
                 logger.info("[Codex][Browser] add-phone 点击后仍停留本页，补执行 form.requestSubmit：%s", info)

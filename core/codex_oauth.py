@@ -1319,7 +1319,7 @@ def run_codex_oauth(
         return _codex_result(status="skipped", message="email 为空")
 
     # Codex OAuth 支持多种驱动：
-    # protocol：原纯协议；roxy/cloak/browser_use：用真实浏览器跑页面并捕获 localhost callback。
+    # protocol：原纯协议；roxy：用真实浏览器跑页面并捕获 localhost callback。
     try:
         from config import codex as _codex_cfg
         from config import roxybrowser as _roxy_cfg
@@ -1329,36 +1329,8 @@ def run_codex_oauth(
         if oauth_driver in ("roxy", "roxybrowser", "fingerprint", "browser"):
             from core.roxy_codex_oauth import run_roxy_codex_oauth
             return run_roxy_codex_oauth(email, otp_provider=otp_provider, proxy=proxy, force=True)
-        if oauth_driver in ("browser_use", "browseruse", "browser-use", "bu"):
-            from core.browser_use_codex_oauth import run_browser_use_codex_oauth
-            return run_browser_use_codex_oauth(email, otp_provider=otp_provider, proxy=proxy, force=True)
-        if oauth_driver in ("skyvern", "sv"):
-            from core.skyvern_codex_oauth import run_skyvern_codex_oauth
-            return run_skyvern_codex_oauth(email, otp_provider=otp_provider, proxy=proxy, force=True)
-        if oauth_driver in ("cloak", "cloakbrowser"):
-            from config import cloakbrowser as _cloak_cfg
-            from core.cloakbrowser_driver import build_cloak_driver
-            from core.roxy_codex_oauth import run_roxy_codex_oauth
-            driver, opened = build_cloak_driver(proxy=proxy)
-            try:
-                return run_roxy_codex_oauth(
-                    email,
-                    otp_provider=otp_provider,
-                    proxy=proxy,
-                    force=True,
-                    existing_driver=driver,
-                    existing_opened=opened,
-                    reuse_existing_profile=True,
-                    clear_existing_state=True,
-                )
-            finally:
-                if not bool(getattr(_cloak_cfg, "CLOAK_KEEP_BROWSER_OPEN", False)):
-                    try:
-                        driver.quit()
-                    except Exception:
-                        pass
         if oauth_driver not in ("protocol", "api", "http"):
-            raise RuntimeError(f"[Codex] 不支持的 CODEX_OAUTH_DRIVER={oauth_driver!r}，可选 protocol / roxy / cloak / browser_use / skyvern")
+            raise RuntimeError(f"[Codex] 不支持的 CODEX_OAUTH_DRIVER={oauth_driver!r}，可选 protocol / roxy / same_as_registration")
     except ImportError:
         # 没装 selenium / 未提供 roxy 配置时继续走协议模式，保持旧行为。
         pass

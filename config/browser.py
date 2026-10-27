@@ -84,14 +84,12 @@ CLOUD_PROXY_ORG_KEYWORDS = [
     "data center", "datacenter", "hosting", "host", "server", "cloud",
 ]
 
-# ---------- Roxy/Cloak 浏览器省流量模式 ----------
+# ---------- Roxy 浏览器省流量模式 ----------
 # 默认关闭。开启后只拦截可选的图片/媒体，以及下面明确列出的统计/第三方 URL；
-# 不拦截登录所需的 document、核心 script、stylesheet、xhr/fetch、websocket；
-# Playwright 会放行带验证码/challenge 关键词的 URL。
-# 该模式仅应用于 Roxy/Cloak，本地浏览器才需要节省带宽；Browser Use/Skyvern 云端
-# 浏览器不会安装省流量拦截器。Selenium/CDP 只能按 URL 后缀拦截，若验证码异常可关闭。
+# 不拦截登录所需的 document、核心 script、stylesheet、xhr/fetch、websocket。
+# 该模式仅应用于 Roxy 本地浏览器；Selenium/CDP 只能按 URL 后缀拦截，若验证码异常可关闭。
 BROWSER_DATA_SAVER_MODE: bool = False
-# 每行一个 Playwright resource_type。可选 image/media/font/manifest/texttrack 等；
+# 每行一个 resource_type。可选 image/media/font/manifest/texttrack 等；
 # 默认只拦截 image、media；也可配置 stylesheet/font 等资源；Roxy 还会通过 Chromium 启动参数关闭图片加载，
 # 遇到页面布局或验证码异常时可关闭模式。
 BROWSER_DATA_SAVER_BLOCKED_RESOURCE_TYPES: list[str] = ["image", "media"]
@@ -100,7 +98,7 @@ BROWSER_DATA_SAVER_BLOCKED_RESOURCE_TYPES: list[str] = ["image", "media"]
 # 不要把 ChatGPT/auth.openai 的 CDN chunk 当作候选：即使某个 chunk 只有少量函数
 # 被调用，也可能负责路由、表单切换或懒加载；需经过单变量 A/B 验证后才能加入规则。
 # 不要把 chatgpt/openai 的核心 API 或 sentinel URL 加到这里。
-# `**` 用于匹配 URL 中的任意路径；Roxy/Cloak 的 Playwright/Selenium 会读取这组规则。
+# `**` 用于匹配 URL 中的任意路径；Roxy 的 Selenium 会读取这组规则。
 BROWSER_DATA_SAVER_BLOCKED_URL_PATTERNS: list[str] = [
     "**://auth.openai.com/awe/api/v2/rum**",
     "**://chatgpt.com/ces/statsc/flush**",
@@ -111,16 +109,16 @@ BROWSER_DATA_SAVER_BLOCKED_URL_PATTERNS: list[str] = [
     "**://accounts.google.com/gsi/client**",
 ]
 
-# ---------- Roxy/Cloak 浏览器流量明细日志 ----------
+# ---------- Roxy 浏览器流量明细日志 ----------
 # 默认关闭；开启后在每次注册结束时按单请求总字节降序输出资源 URL、类型、状态和大小。
 # URL 查询参数值会脱敏，不保存请求/响应 body 或完整 Header 内容。
 BROWSER_TRAFFIC_DETAIL_LOG: bool = False
 BROWSER_TRAFFIC_DETAIL_MAX_ENTRIES: int = 2000
 
-# ---------- Roxy/Cloak 浏览器 JS 精确覆盖率 ----------
+# ---------- Roxy 浏览器 JS 精确覆盖率 ----------
 # 开启后通过 Chrome DevTools Protocol Profiler 记录本次会话实际执行过的
 # JavaScript 函数/代码范围。只保存函数名、调用计数和 offset，不读取参数、返回值
-# 或源码；Browser Use/Skyvern 云端浏览器不启用该监听；默认关闭，避免给正常注册增加额外开销。
+# 或源码；默认关闭，避免给正常注册增加额外开销。
 BROWSER_JS_COVERAGE_LOG: bool = False
 BROWSER_JS_COVERAGE_MAX_ENTRIES: int = 1000
 COUNTRY_LOCALE_PROFILE_MAP = {

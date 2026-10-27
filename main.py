@@ -234,9 +234,6 @@ def run_registration(
     # 可选注册驱动：
     #   protocol     = 原有纯协议（curl_cffi）
     #   roxy         = RoxyBrowser 指纹浏览器 + Selenium
-    #   cloak        = CloakBrowser + Playwright/Selenium 适配层
-    #   browser_use  = Browser Use Cloud stealth Chromium + Playwright
-    #   skyvern      = Skyvern Browser Sessions + Playwright
     driver_mode = str(getattr(_roxy_cfg, "REGISTRATION_DRIVER", "protocol") or "protocol").strip().lower()
     if driver_mode in ("roxy", "roxybrowser", "fingerprint", "browser"):
         from core.roxy_registration import run_roxy_registration
@@ -249,44 +246,11 @@ def run_registration(
             batch_dir=batch_dir,
             on_email_acquired=on_email_acquired,
         )
-    if driver_mode in ("cloak", "cloakbrowser"):
-        from core.cloakbrowser_registration import run_cloak_registration
-        return run_cloak_registration(
-            email=email,
-            name=name,
-            birthday=birthday or generate_random_birthday(),
-            proxy=proxy,
-            otp_code=otp_code,
-            batch_dir=batch_dir,
-            on_email_acquired=on_email_acquired,
-        )
-    if driver_mode in ("browser_use", "browseruse", "browser-use", "bu"):
-        from core.browser_use_registration import run_browser_use_registration
-        return run_browser_use_registration(
-            email=email,
-            name=name,
-            birthday=birthday or generate_random_birthday(),
-            proxy=proxy,
-            otp_code=otp_code,
-            batch_dir=batch_dir,
-            on_email_acquired=on_email_acquired,
-        )
-    if driver_mode in ("skyvern", "sv"):
-        from core.skyvern_registration import run_skyvern_registration
-        return run_skyvern_registration(
-            email=email,
-            name=name,
-            birthday=birthday or generate_random_birthday(),
-            proxy=proxy,
-            otp_code=otp_code,
-            batch_dir=batch_dir,
-            on_email_acquired=on_email_acquired,
-        )
     if driver_mode not in ("protocol", "api", "http"):
         if persisted_email:
             _release_persisted_email_after_entry_failure(email, f"不支持的 REGISTRATION_DRIVER={driver_mode!r}")
         raise RuntimeError(
-            f"不支持的 REGISTRATION_DRIVER={driver_mode!r}，可选 protocol / roxy / cloak / browser_use / skyvern"
+            f"不支持的 REGISTRATION_DRIVER={driver_mode!r}，可选 protocol / roxy"
         )
 
     # 纯协议驱动没有“邮箱输入框”可等待，因此在创建 BrowserSession 前领取。

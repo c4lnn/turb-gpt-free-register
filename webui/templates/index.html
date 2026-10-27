@@ -7149,14 +7149,12 @@ function configGroupSlug(name) {
     .toLowerCase();
 }
 function configGroupDisplayName(name) {
-  if (name === 'CloakBrowser') return '本地指纹浏览器';
   return name;
 }
 function configNavIcon(name) {
   const n = String(name || '');
   if (n.includes('网站') || n.includes('WebUI')) return '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>';
   if (n.includes('开关') || n.includes('功能')) return '<rect x="1" y="8" width="22" height="8" rx="4"/><circle cx="7" cy="12" r="2.8"/>';
-  if (n === '本地指纹浏览器' || n.includes('Cloak')) return '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/>';
   if (n.includes('邮箱') || n.includes('OTP')) return '<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><path d="M22 6l-10 7L2 6"/>';
   if (n.includes('接码') || n.includes('SMS')) return '<rect x="5" y="2" width="14" height="20" rx="2"/><path d="M12 18h.01"/>';
   if (n.includes('Codex')) return '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>';
@@ -7164,7 +7162,7 @@ function configNavIcon(name) {
   if (n.includes('画像') || n.includes('指纹')) return '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>';
   if (n.includes('人工') || n.includes('节奏')) return '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>';
   if (n.includes('提链')) return '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>';
-  if (n.includes('Browser') || n.includes('Roxy') || n.includes('Skyvern') || n.includes('注册')) return '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/>';
+  if (n.includes('Browser') || n.includes('Roxy') || n.includes('注册')) return '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/>';
   return '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>';
 }
 function getConfigGroupNames() {
@@ -7176,9 +7174,6 @@ function configSectionIntro(name) {
   if (name === '网站配置') return '配置网站登录授权码与 Session 签名密钥。';
   if (name === '功能开关') return '';
   if (name === '注册方式') return '选择账号注册时使用的自动化方式。';
-  if (name === 'CloakBrowser') return '本地指纹浏览器运行参数、语言时区与代理设置。';
-  if (name === 'Browser Use') return 'Browser Use Cloud 远端浏览器与代理参数。';
-  if (name === 'Skyvern') return 'Skyvern Browser Sessions 与代理参数。';
   if (name === 'RoxyBrowser') return 'RoxyBrowser API、环境与代理相关设置。';
   if (name === 'Codex') return 'Codex 授权驱动、CPA 与 sub2api 相关设置。';
   if (name === '邮箱 / OTP') return '邮箱来源、OTP 等待与各邮箱服务商参数。';
@@ -7231,9 +7226,6 @@ function registrationDriverChoices() {
   return [
     { value: 'protocol', label: '纯协议注册' },
     { value: 'roxy', label: 'RoxyBrowser' },
-    { value: 'cloak', label: '本地指纹浏览器' },
-    { value: 'browser_use', label: 'browser_use' },
-    { value: 'skyvern', label: 'skyvern' },
   ];
 }
 function getRegistrationDriverField() {
@@ -7624,9 +7616,6 @@ function codexOauthDriverChoices() {
   return [
     { value: 'protocol', label: '纯协议授权' },
     { value: 'roxy', label: 'RoxyBrowser' },
-    { value: 'cloak', label: '本地指纹浏览器' },
-    { value: 'browser_use', label: 'browser_use' },
-    { value: 'skyvern', label: 'skyvern' },
     { value: 'same_as_registration', label: '跟随注册驱动' },
   ];
 }
