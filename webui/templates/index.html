@@ -3757,7 +3757,7 @@ const ACCOUNT_FILTER_META = Object.freeze({
     domain: 'emailSource',
     codes: Object.freeze([
       'outlook', 'generic_api', 'cloudflare_domain', 'icloud', 'cloudflare',
-      'gptmail', 'mailnest', 'cloudmail', 'mailcom', 'unknown',
+      'mailcom', 'unknown',
     ]),
   }),
   planCategory: Object.freeze({
@@ -3947,7 +3947,7 @@ const ACCOUNT_STATUS_LABELS = Object.freeze({
   query: Object.freeze({pending: '待查询', queued: '查询排队中', running: '查询中', success: '查询成功', failed: '查询失败', unknown: '未知'}),
   extract: Object.freeze({pending: '待提链', queued: '排队', running: '提炼中', success: '提炼成功', failed: '提炼失败', canceled: '已取消', unknown: '未知'}),
   planCategory: Object.freeze({free_trial_eligible: 'Free｜Plus 试用资格可用', free_no_trial: 'Free｜无 Plus 试用资格', paid: '付费套餐', unknown: '未知'}),
-  emailSource: Object.freeze({outlook: 'Outlook 邮箱池', generic_api: '通用 API 邮箱', cloudflare_domain: 'Cloudflare 域名邮箱', icloud: 'iCloud 隐私邮箱', cloudflare: 'Cloudflare 临时邮箱', gptmail: 'GPTMail 临时邮箱', mailnest: 'MailNest 临时邮箱', cloudmail: 'CloudMail 随机邮箱', mailcom: 'mail.com 账号池', unknown: '未知'}),
+  emailSource: Object.freeze({outlook: 'Outlook 邮箱池', generic_api: '通用 API 邮箱', cloudflare_domain: 'Cloudflare 域名邮箱', icloud: 'iCloud 隐私邮箱', cloudflare: 'Cloudflare 临时邮箱', mailcom: 'mail.com 账号池', unknown: '未知'}),
   checkoutType: Object.freeze({oaics: 'OAICS', cs_live: 'Stripe Live', other_cs: '其它 Stripe', unknown: '未知'}),
   live: Object.freeze({pending: '待查活', queued: '排队', running: '运行中', live: '正常', deactivated: '已废', failed: '失败', unknown: '未知'}),
   mailcomCleanup: Object.freeze({pending: '待套餐查询', not_eligible: '保留（有试用资格）', not_requested: '未执行清理', cleanup_running: '清理中', cleanup_pending: '待人工处理', deleted: '已删除'}),
@@ -7071,9 +7071,6 @@ function emailConfigSectionForKey(key) {
   if (['USE_EMAIL_SERVICE','REGISTER_EMAIL','REGISTER_NAME','OTP_MAX_WAIT','OTP_POLL_INTERVAL','EMAIL_SOURCE'].includes(key)) {
     return ['通用邮箱 / OTP', '邮箱来源选择、OTP 等待参数、手动邮箱等通用设置'];
   }
-  if (key.startsWith('GPTMAIL_')) return ['GPTMail', 'GPTMail 临时邮箱 API 配置'];
-  if (key.startsWith('MAIL_NEST_')) return ['MailNest', 'MailNest / 迈巢临时邮箱 API 配置'];
-  if (key.startsWith('CLOUDMAIL_')) return ['CloudMail', 'CloudMail 域名随机邮箱、Token 和收信 API 配置'];
   if (key.startsWith('REMAIL_')) return ['Remail', 'Remail 开放 API、项目下单和取件配置'];
   if (key.startsWith('OUTLOOK_')) return ['Outlook 邮箱池', 'Outlook 邮箱池和取件模式配置'];
   if (key.startsWith('CLOUDFLARE_')) return ['Cloudflare 临时邮箱', 'Cloudflare Worker 临时邮箱 API、鉴权与路径配置'];
@@ -7273,7 +7270,6 @@ function setRegistrationDriverValue(value) {
   const sectionMount = document.getElementById('configRegistrationSelectV2');
   if (sectionMount) renderRegistrationEpSelect(sectionMount, 'configRegistrationSelectV2');
   bindRoxyWorkspaceToolsV2();
-  bindCloudMailToolsV2();
 }
 function renderRegistrationEpSelect(mount, wrapId) {
   if (!mount) return;
@@ -7685,9 +7681,6 @@ function renderSectionedConfigSectionV2(name, fields, sectionForKey, preferred, 
     ? `<p class="config-section-v2-subhelp">${esc(current.help)}${promo}</p>`
     : promo;
   let extra = '';
-  if (name === '邮箱 / OTP' && active === 'CloudMail') {
-    extra = renderCloudMailTokenToolsV2();
-  }
   if (name === '接码平台' && active === 'SMSBower') {
     extra = renderSmsbowerMetadataToolsV2();
   }
@@ -7709,23 +7702,6 @@ function renderSectionedConfigSectionV2(name, fields, sectionForKey, preferred, 
         <button type="button" class="btn primary" data-save-config-v2>保存</button>
       </div>
     </section>
-  `;
-}
-function renderCloudMailTokenToolsV2() {
-  const hasCloudMail = CONFIG.some(f => String(f.key || '').startsWith('CLOUDMAIL_'));
-  if (!hasCloudMail) return '';
-  return `
-    <div class="roxy-workspace-box" style="margin-top:18px;">
-      <div>
-        <b>CloudMail Token</b>
-        <div class="hint">填写 API 地址、管理员邮箱、密码后，生成 Token；保存配置不会自动生成。</div>
-      </div>
-      <div class="action-cell">
-        <button class="btn primary" type="button" id="btnGenCloudMailTokenV2">生成 CloudMail Token</button>
-        <button class="btn" type="button" id="btnLoadCloudMailDomainsV2">获取 CloudMail 域名</button>
-      </div>
-      <div id="cloudMailTokenStatusV2" class="muted" style="font-size:12px;">未生成</div>
-    </div>
   `;
 }
 function renderSmsbowerMetadataToolsV2() {
@@ -7778,78 +7754,12 @@ async function loadSmsbowerMetadataV2({silent = false} = {}) {
     renderConfigLayoutV2();
   }
 }
-function bindCloudMailToolsV2() {
-  const genBtn = $('#btnGenCloudMailTokenV2');
-  const domainBtn = $('#btnLoadCloudMailDomainsV2');
-  if (genBtn && !genBtn.dataset.bound) {
-    genBtn.dataset.bound = '1';
-    genBtn.addEventListener('click', () => genCloudMailTokenV2());
-  }
-  if (domainBtn && !domainBtn.dataset.bound) {
-    domainBtn.dataset.bound = '1';
-    domainBtn.addEventListener('click', () => loadCloudMailDomainsV2());
-  }
-}
 function _configValueV2(key) {
   const root = document.querySelector(`#configSectionsV2 [data-key="${CSS.escape(key)}"]`);
   if (root) return root.value;
   const f = CONFIG.find(x => x.key === key);
   return f ? String(f.value ?? '') : '';
 }
-async function genCloudMailTokenV2() {
-  const btn = $('#btnGenCloudMailTokenV2');
-  const status = $('#cloudMailTokenStatusV2');
-  if (!btn || !status) return;
-  btn.disabled = true;
-  status.textContent = '正在调用 CloudMail /api/public/genToken...';
-  try {
-    const r = await api('/api/cloudmail/gen-token', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({
-        api_base: _configValueV2('CLOUDMAIL_API_BASE').trim(),
-        admin_email: _configValueV2('CLOUDMAIL_ADMIN_EMAIL').trim(),
-        password: _configValueV2('CLOUDMAIL_PASSWORD').trim(),
-        path: _configValueV2('CLOUDMAIL_TOKEN_PATH').trim() || '/api/public/genToken',
-      }),
-    });
-    status.innerHTML = `✅ ${esc(r.message || 'Token 已生成并保存')}`;
-    showToast('CloudMail Token 已生成');
-    await loadConfig();
-  } catch(e) {
-    status.innerHTML = `<span style="color:var(--red);">生成失败：${esc(e.message)}</span>`;
-  } finally {
-    btn.disabled = false;
-  }
-}
-async function loadCloudMailDomainsV2() {
-  const btn = $('#btnLoadCloudMailDomainsV2');
-  const status = $('#cloudMailTokenStatusV2');
-  if (!btn || !status) return;
-  btn.disabled = true;
-  status.textContent = '正在从 CloudMail 平台获取可用域名...';
-  try {
-    const r = await api('/api/cloudmail/domains', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({
-        api_base: _configValueV2('CLOUDMAIL_API_BASE').trim(),
-        admin_email: _configValueV2('CLOUDMAIL_ADMIN_EMAIL').trim(),
-        password: _configValueV2('CLOUDMAIL_PASSWORD').trim(),
-        token: _configValueV2('CLOUDMAIL_AUTH_TOKEN').trim(),
-      }),
-    });
-    const domains = Array.isArray(r.domains) ? r.domains : [];
-    status.innerHTML = `✅ ${esc(r.message || '域名已获取')}：<span class="mono">${esc(domains.join(', '))}</span>`;
-    showToast(`CloudMail 已获取 ${domains.length} 个域名`);
-    await loadConfig();
-  } catch(e) {
-    status.innerHTML = `<span style="color:var(--red);">获取域名失败：${esc(e.message)}</span>`;
-  } finally {
-    btn.disabled = false;
-  }
-}
-
 function renderCodexSectionV2(fields) {
   const slug = configGroupSlug('Codex');
   const preferred = ['基础配置', 'CPA配置', 'sub2api通用'];
@@ -7949,7 +7859,7 @@ function renderConfigSectionV2(name, fields) {
       name,
       fields,
       emailConfigSectionForKey,
-      ['通用邮箱 / OTP', 'GPTMail', 'MailNest', 'CloudMail', 'Remail', 'Outlook 邮箱池', 'Cloudflare 临时邮箱', 'Cloudflare 域名邮箱', '其他邮箱配置'],
+      ['通用邮箱 / OTP', 'Remail', 'Outlook 邮箱池', 'Cloudflare 临时邮箱', 'Cloudflare 域名邮箱', '其他邮箱配置'],
       { get: () => CONFIG_EMAIL_ACTIVE_SECTION_V2, set: v => { CONFIG_EMAIL_ACTIVE_SECTION_V2 = v; } },
       'email-section-v2'
     );
@@ -7988,7 +7898,6 @@ function renderConfigLayoutV2() {
   const sectionMount = document.getElementById('configRegistrationSelectV2');
   if (sectionMount) renderRegistrationEpSelect(sectionMount, 'configRegistrationSelectV2');
   bindRoxyWorkspaceToolsV2();
-  bindCloudMailToolsV2();
   bindSmsbowerMetadataToolsV2();
   if (CONFIG_SMS_ACTIVE_SECTION_V2 === 'SMSBower' && !SMSBOWER_METADATA.loaded && !SMSBOWER_METADATA.loading) {
     const keyField = CONFIG.find(f => f.key === 'SMSBOWER_API_KEY');

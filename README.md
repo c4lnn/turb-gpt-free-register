@@ -41,15 +41,12 @@ ChatGPT / OpenAI 账号自动注册与 Codex OAuth 授权工具。当前项目�
 - Cloudflare 域名邮箱 + QQ 邮箱 IMAP 收信（`cloudflare_domain`）
 - Cloudflare Worker 临时邮箱：自动创建 + JWT 取码（`cloudflare`，兼容 cloudflare_temp_email）
 - 通用 API 邮箱：`email----取码地址`
-- GPTMail 临时邮箱 API：运行时随机生成邮箱并自动收取验证码
 - Remail 开放 API：按项目下单短效邮箱并自动收取验证码（`remail`）
 - `EMAIL_SOURCE` 支持多个来源组合，例如：
 
 ```python
 EMAIL_SOURCE = "outlook,generic_api"
 ```
-
-- MailNest-迈巢：Outlook 临时邮箱
 
 ### Codex OAuth
 
@@ -283,24 +280,8 @@ EMAIL_SOURCE = "generic_api"
 或使用组合来源：
 
 ```python
-EMAIL_SOURCE = "outlook,generic_api,mailnest"
+EMAIL_SOURCE = "outlook,generic_api,remail"
 ```
-
-#### GPTMail 临时邮箱
-
-在 WebUI 的「配置 → 邮箱 / OTP」填写 `GPTMail API Key`，然后将邮箱来源设置为：
-
-```python
-EMAIL_SOURCE = "gptmail"
-```
-
-也可以在项目根目录 `.env` 中填写：
-
-```dotenv
-GPTMAIL_API_KEY=你的_GPTMail_API_Key
-```
-
-服务地址固定为 `https://mail.chatgpt.org.uk`。未填写 Key 时，任务会提示填写 `GPTMail API Key`，不会使用公共测试 Key。
 
 #### Cloudflare Worker 临时邮箱（`cloudflare`）
 
@@ -351,13 +332,6 @@ QQ_IMAP_PASSWORD = "QQ邮箱IMAP授权码"
 ```
 
 Cloudflare Email Routing 需要把域名邮件转发到 QQ 邮箱。此模式不调用 Worker 创建接口，仅本地生成地址并通过 QQ IMAP 取件。
-
-#### MailNest-迈巢 Outlook 临时邮箱
-
-可直接在 Web-UI 中配置 API Key 与项目代码`MAIL_NEST_PROJECT_CODE`，也可以在配置文件中配置。
-
-- `api-key`获取页面：https://mailnest.top/account
-- 项目代码获取页面：https://mailnest.top/buy-email。默认为`chatgpt001`，可以直接使用
 
 #### Remail 开放 API
 

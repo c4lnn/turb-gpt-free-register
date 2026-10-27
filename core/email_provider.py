@@ -8,13 +8,10 @@ EMAIL_SOURCE 支持单个或多个来源：
     "icloud"              # 导入 iCloud 隐私邮箱 + QQ IMAP
     "cloudflare"          # Cloudflare Worker 临时邮箱
     "generic_api"
-    "gptmail"
-    "mailnest"
-    "cloudmail"
     "remail"
     "mailcom"             # mail.com 账号池 + 持久化 mailbox AT
-    "outlook,generic_api,mailnest,cloudmail"          # 按顺序兜底
-    ["outlook", "generic_api", "mailnest", "cloudmail"]  # 也兼容列表写法
+    "outlook,generic_api,remail"          # 按顺序兜底
+    ["outlook", "generic_api", "remail"]  # 也兼容列表写法
 """
 import logging
 from typing import Iterable
@@ -28,9 +25,6 @@ VALID_EMAIL_SOURCES = (
     "cloudflare_domain",
     "icloud",
     "cloudflare",
-    "gptmail",
-    "mailnest",
-    "cloudmail",
     "remail",
     "mailcom",
 )
@@ -68,9 +62,6 @@ def _pick_from_source(source: str) -> str:
     if source == "mailcom":
         from core.mailcom_provider import pick_account
         return pick_account().email
-    if source == "gptmail":
-        from core.gptmail_client import pick_account
-        return pick_account().email
     if source == "cloudflare":
         from core.cf_temp_mail_client import pick_account
         return pick_account().email
@@ -82,12 +73,6 @@ def _pick_from_source(source: str) -> str:
         return pick_account()["email"]
     if source == "generic_api":
         from core.generic_api_mail_client import pick_account
-        return pick_account().email
-    if source == "mailnest":
-        from core.mailnest_client import pick_account
-        return pick_account().email
-    if source == "cloudmail":
-        from core.cloudmail_client import pick_account
         return pick_account().email
     if source == "remail":
         from core.remail_client import pick_account
@@ -148,18 +133,9 @@ def resolve_email_source(email: str) -> str:
     if account_source in _VALID_SOURCES:
         return account_source
 
-    from core.gptmail_client import get_account_context as get_gptmail_context
-    if get_gptmail_context(email):
-        return "gptmail"
     from core.cf_temp_mail_client import get_account_context as get_cf_context
     if get_cf_context(email):
         return "cloudflare"
-    from core.mailnest_client import get_account_context as get_mailnest_context
-    if get_mailnest_context(email):
-        return "mailnest"
-    from core.cloudmail_client import get_account_context as get_cloudmail_context
-    if get_cloudmail_context(email):
-        return "cloudmail"
     from core.remail_client import get_account_context as get_remail_context
     if get_remail_context(email):
         return "remail"
@@ -265,9 +241,6 @@ def wait_for_otp(
         or _registered_email_source(email)
         or resolve_email_source(email)
     )
-    if source == "gptmail":
-        from core.gptmail_client import fetch_latest_otp
-        return fetch_latest_otp(email, after_ts=after_ts, **extra_kwargs)
     if source == "cloudflare":
         from core.cf_temp_mail_client import fetch_latest_otp
         return fetch_latest_otp(email, after_ts=after_ts, **extra_kwargs)
@@ -279,12 +252,6 @@ def wait_for_otp(
         return fetch_latest_otp(email, after_ts=after_ts, **extra_kwargs)
     if source == "generic_api":
         from core.generic_api_mail_client import fetch_latest_otp
-        return fetch_latest_otp(email, after_ts=after_ts, **extra_kwargs)
-    if source == "mailnest":
-        from core.mailnest_client import fetch_latest_otp
-        return fetch_latest_otp(email, after_ts=after_ts, **extra_kwargs)
-    if source == "cloudmail":
-        from core.cloudmail_client import fetch_latest_otp
         return fetch_latest_otp(email, after_ts=after_ts, **extra_kwargs)
     if source == "mailcom":
         try:
@@ -302,10 +269,7 @@ def wait_for_otp(
 def release_email(email: str, status: str = "failed", note: str | None = None) -> str:
     """按邮箱实际来源回收状态，返回来源名。"""
     source = resolve_email_source(email)
-    if source == "gptmail":
-        from core.gptmail_client import release_account
-        release_account(email, status=status, note=note)
-    elif source == "cloudflare":
+    if source == "cloudflare":
         from core.cf_temp_mail_client import release_account
         release_account(email, status=status, note=note)
     elif source == "cloudflare_domain":
@@ -316,12 +280,6 @@ def release_email(email: str, status: str = "failed", note: str | None = None) -
         release_account(email, status=status, note=note)
     elif source == "generic_api":
         from core.generic_api_mail_client import release_account
-        release_account(email, status=status, note=note)
-    elif source == "mailnest":
-        from core.mailnest_client import release_account
-        release_account(email, status=status, note=note)
-    elif source == "cloudmail":
-        from core.cloudmail_client import release_account
         release_account(email, status=status, note=note)
     elif source == "mailcom":
         from core.mailcom_provider import release_account

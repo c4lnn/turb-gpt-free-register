@@ -6,7 +6,7 @@ from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import patch
 
-from core import db, email_provider, gptmail_client, registration_service
+from core import cf_temp_mail_client, db, email_provider, registration_service
 from core.email_pool_status import (
     EMAIL_POOL_STATUSES,
     can_transition,
@@ -213,11 +213,13 @@ class EmailPoolProviderStatusTests(unittest.TestCase):
         self.assertIsNone(db.claim_next_icloud_email(job_id=30))
 
     def test_temporary_email_failure_clears_context_without_persistent_row(self):
-        gptmail_client._CONTEXT_CACHE.clear()
-        gptmail_client._CONTEXT_CACHE["temp@example.com"] = gptmail_client.GPTMailAccount("temp@example.com")
-        with patch.object(email_provider, "resolve_email_source", return_value="gptmail"):
+        cf_temp_mail_client._CONTEXT_CACHE.clear()
+        cf_temp_mail_client._CONTEXT_CACHE["temp@example.com"] = cf_temp_mail_client.CFTempMailAccount(
+            email="temp@example.com", jwt="jwt", domain="example.com"
+        )
+        with patch.object(email_provider, "resolve_email_source", return_value="cloudflare"):
             self.assertTrue(email_provider.release_email_if_unconsumed("temp@example.com", note="driver failed"))
-        self.assertIsNone(gptmail_client.get_account_context("temp@example.com"))
+        self.assertIsNone(cf_temp_mail_client.get_account_context("temp@example.com"))
 
     def test_mailcom_recovery_releases_parent_and_keeps_alias_terminal(self):
         db.import_mailcom_emails([{"email": "mother@mail.com", "password": "pw"}])

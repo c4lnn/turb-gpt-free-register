@@ -21,12 +21,12 @@ class EmailSourceConfigTests(unittest.TestCase):
 
     def test_normalizes_valid_ordered_sources_to_legacy_string_format(self):
         self.assertEqual(
-            config_editor.normalize_email_source_value("outlook;generic_api|mailnest"),
-            "outlook,generic_api,mailnest",
+            config_editor.normalize_email_source_value("outlook;generic_api|cloudflare"),
+            "outlook,generic_api,cloudflare",
         )
         self.assertEqual(
-            config_editor.normalize_email_source_value(["cloudflare", "gptmail", "mailnest"]),
-            "cloudflare,gptmail,mailnest",
+            config_editor.normalize_email_source_value(["cloudflare", "remail", "icloud"]),
+            "cloudflare,remail,icloud",
         )
 
     def test_rejects_empty_unknown_and_duplicate_sources(self):
@@ -64,9 +64,9 @@ class EmailSourceConfigTests(unittest.TestCase):
             patch("config.env_loader.write_env_values", return_value=["EMAIL_SOURCE"]) as write_values,
             patch("config.env_loader.load_env"),
         ):
-            result = config_editor.update_config({"EMAIL_SOURCE": ["cloudflare", "gptmail"]})
+            result = config_editor.update_config({"EMAIL_SOURCE": ["cloudflare", "remail"]})
 
-        write_values.assert_called_once_with({"EMAIL_SOURCE": "cloudflare,gptmail"})
+        write_values.assert_called_once_with({"EMAIL_SOURCE": "cloudflare,remail"})
         self.assertEqual(result["updated"], ["EMAIL_SOURCE"])
 
 
@@ -117,12 +117,12 @@ class EmailSourceConfigApiTests(unittest.TestCase):
         ):
             response = self.client.post(
                 "/api/config",
-                json={"updates": {"EMAIL_SOURCE": ["cloudflare", "gptmail", "mailnest"]}},
+                json={"updates": {"EMAIL_SOURCE": ["cloudflare", "remail"]}},
                 headers=self.headers,
             )
 
         self.assertEqual(response.status_code, 200)
-        update_config.assert_called_once_with({"EMAIL_SOURCE": "cloudflare,gptmail,mailnest"})
+        update_config.assert_called_once_with({"EMAIL_SOURCE": "cloudflare,remail"})
         reload_all.assert_called_once_with()
 
 

@@ -14,18 +14,15 @@ from config.env_loader import env_str, apply_env_overrides
 # False: 走人工输入邮箱 + 人工填 OTP 的流程
 USE_EMAIL_SERVICE = False
 
-# 可选值（也可以用英文逗号配置多个，按顺序兜底，例如 "outlook,generic_api,mailnest,remail"）：
+# 可选值（也可以用英文逗号配置多个，按顺序兜底，例如 "outlook,generic_api,remail"）：
 #   "remail"            — Remail API 动态购买邮箱并自动取 OTP
 #   "outlook"           — 外购 Outlook 账号池 + mail.chatai.codes 远端取信
 #   "cloudflare_domain" — Cloudflare 域名邮箱（转发到 QQ 邮箱），通过 IMAP 取信
 #   "icloud" — 导入 iCloud 隐私邮箱（转发到 QQ 邮箱），通过 IMAP 取信
 #   "cloudflare" — Cloudflare Worker 临时邮箱（cloudflare_temp_email），API 创建并取码
 #   "generic_api"       — 通用 API 取码邮箱池（邮箱----取码地址）
-#   "gptmail"           — GPTMail 临时邮箱 API（运行时随机生成邮箱并自动收码）
-#   "mailnest"          — MailNest/迈巢临时邮箱 API（运行时购买邮箱并自动收码）
-#   "cloudmail"         — CloudMail/Cloud Mail API（自动从平台获取域名并随机生成邮箱）
 #   "mailcom"           — mail.com 账号池（WebUI 导入 email----password，复用 mailbox AT）
-EMAIL_SOURCE = "outlook,generic_api,mailnest"
+EMAIL_SOURCE = "generic_api"
 
 
 # ============================================================
@@ -102,14 +99,6 @@ QQ_IMAP_PASSWORD = env_str("QQ_IMAP_PASSWORD", "")
 
 
 # ============================================================
-# GPTMail 临时邮箱 API（固定地址：https://mail.chatgpt.org.uk）
-# ============================================================
-
-# 选择 EMAIL_SOURCE="gptmail" 时必填；请在 WebUI「配置 → 邮箱 / OTP」填写。
-GPTMAIL_API_KEY = env_str("GPTMAIL_API_KEY", "")
-
-
-# ============================================================
 # Cloudflare Worker 临时邮箱（cloudflare_temp_email 兼容）
 # EMAIL_SOURCE 含 "cloudflare" 时启用；与 cloudflare_domain（QQ IMAP）不同。
 # ============================================================
@@ -144,43 +133,6 @@ CLOUDFLARE_RANDOM_SUBDOMAIN_SUFFIX = ""
 
 
 # ============================================================
-# MailNest-迈巢 Outlook 临时邮箱：https://mailnest.top/
-# ============================================================
-
-# 选择 EMAIL_SOURCE="mailnest" 时必填；请在 WebUI「配置 → 邮箱 / OTP」填写。
-MAIL_NEST_API_KEY = env_str("MAIL_NEST_API_KEY", "")
-
-# MailNest 项目代码；OpenAI/ChatGPT 默认 chatgpt001。
-MAIL_NEST_PROJECT_CODE = "chatgpt001"
-
-# ============================================================
-# CloudMail API 文档：https://doc.skymail.ink/api/api-doc
-# ============================================================
-
-# Cloud Mail Worker/API 地址，例如：https://mail.example.com
-CLOUDMAIL_API_BASE = ""
-
-# CloudMail 管理员邮箱/密码；用于手动生成 Token，也用于域名被隐藏时自动登录获取域名。
-CLOUDMAIL_ADMIN_EMAIL = env_str("CLOUDMAIL_ADMIN_EMAIL", "")
-CLOUDMAIL_PASSWORD = env_str("CLOUDMAIL_PASSWORD", "")
-
-# CloudMail 生成 Token 接口路径；默认按 Cloud Mail 公共 API 风格。
-CLOUDMAIL_TOKEN_PATH = "/api/public/genToken"
-
-# CloudMail/Cloud Mail API Authorization Token；可手动填写，也可由账号密码自动获取。
-CLOUDMAIL_AUTH_TOKEN = env_str("CLOUDMAIL_AUTH_TOKEN", "")
-
-# 邮箱域名列表，每行一个或用英文逗号分隔；可留空，运行时会从 CloudMail 平台自动获取。
-CLOUDMAIL_DOMAINS = []
-
-# 生成邮箱后是否调用 /api/public/addUser 创建邮箱用户。
-CLOUDMAIL_AUTO_ADD_USER = True
-
-# 随机邮箱 local-part 长度。
-CLOUDMAIL_RANDOM_LOCAL_LENGTH = 12
-
-
-# ============================================================
 # Remail 开放 API：https://remail.aishop6.com/docs
 # ============================================================
 
@@ -209,7 +161,7 @@ REMAIL_ORDER_WAIT_SECONDS = 30
 REMAIL_REQUEST_TIMEOUT = 20
 
 # ---- .env overrides for WebUI editable fields ----
-apply_env_overrides(globals(), {'USE_EMAIL_SERVICE': 'bool', 'OTP_MAX_WAIT': 'int', 'OTP_POLL_INTERVAL': 'int', 'EMAIL_SOURCE': 'str', 'EMAIL_DOMAIN': 'str', 'QQ_EMAIL': 'str', 'QQ_IMAP_PASSWORD': 'str', 'QQ_IMAP_TIMEOUT': 'int', 'GPTMAIL_API_KEY': 'str', 'OUTLOOK_FETCH_MODE': 'str', 'MAIL_NEST_API_KEY': 'str', 'MAIL_NEST_PROJECT_CODE': 'str', 'MAILCOM_REQUEST_TIMEOUT': 'int', 'MAILCOM_PAGE_SIZE': 'int', 'MAILCOM_MAX_PAGES': 'int', 'MAILCOM_LIFETIME_SNAPSHOT_TTL_SECONDS': 'int', 'MAILCOM_LIFETIME_NEAR_LIMIT': 'int', 'MAILCOM_DELETE_ALIAS_IF_NO_TRIAL': 'bool', 'CLOUDFLARE_API_BASE': 'str', 'CLOUDFLARE_API_KEY': 'str', 'CLOUDFLARE_AUTH_MODE': 'str', 'CLOUDFLARE_CUSTOM_AUTH': 'str', 'CLOUDFLARE_PATH_DOMAINS': 'str', 'CLOUDFLARE_PATH_ACCOUNTS': 'str', 'CLOUDFLARE_PATH_TOKEN': 'str', 'CLOUDFLARE_PATH_MESSAGES': 'str', 'CLOUDFLARE_DEFAULT_DOMAINS': 'list_str_multiline', 'CLOUDFLARE_REQUEST_TIMEOUT': 'int', 'CLOUDFLARE_NAME_LENGTH': 'int', 'CLOUDFLARE_RANDOM_SUBDOMAIN_ENABLED': 'bool', 'CLOUDFLARE_RANDOM_SUBDOMAIN_LENGTH': 'int', 'CLOUDFLARE_RANDOM_SUBDOMAIN_SUFFIX': 'str', 'CLOUDMAIL_API_BASE': 'str', 'CLOUDMAIL_ADMIN_EMAIL': 'str', 'CLOUDMAIL_PASSWORD': 'str', 'CLOUDMAIL_TOKEN_PATH': 'str', 'CLOUDMAIL_AUTH_TOKEN': 'str', 'CLOUDMAIL_DOMAINS': 'list_str_multiline', 'CLOUDMAIL_AUTO_ADD_USER': 'bool', 'CLOUDMAIL_RANDOM_LOCAL_LENGTH': 'int'})
+apply_env_overrides(globals(), {'USE_EMAIL_SERVICE': 'bool', 'OTP_MAX_WAIT': 'int', 'OTP_POLL_INTERVAL': 'int', 'EMAIL_SOURCE': 'str', 'EMAIL_DOMAIN': 'str', 'QQ_EMAIL': 'str', 'QQ_IMAP_PASSWORD': 'str', 'QQ_IMAP_TIMEOUT': 'int', 'OUTLOOK_FETCH_MODE': 'str', 'MAILCOM_REQUEST_TIMEOUT': 'int', 'MAILCOM_PAGE_SIZE': 'int', 'MAILCOM_MAX_PAGES': 'int', 'MAILCOM_LIFETIME_SNAPSHOT_TTL_SECONDS': 'int', 'MAILCOM_LIFETIME_NEAR_LIMIT': 'int', 'MAILCOM_DELETE_ALIAS_IF_NO_TRIAL': 'bool', 'CLOUDFLARE_API_BASE': 'str', 'CLOUDFLARE_API_KEY': 'str', 'CLOUDFLARE_AUTH_MODE': 'str', 'CLOUDFLARE_CUSTOM_AUTH': 'str', 'CLOUDFLARE_PATH_DOMAINS': 'str', 'CLOUDFLARE_PATH_ACCOUNTS': 'str', 'CLOUDFLARE_PATH_TOKEN': 'str', 'CLOUDFLARE_PATH_MESSAGES': 'str', 'CLOUDFLARE_DEFAULT_DOMAINS': 'list_str_multiline', 'CLOUDFLARE_REQUEST_TIMEOUT': 'int', 'CLOUDFLARE_NAME_LENGTH': 'int', 'CLOUDFLARE_RANDOM_SUBDOMAIN_ENABLED': 'bool', 'CLOUDFLARE_RANDOM_SUBDOMAIN_LENGTH': 'int', 'CLOUDFLARE_RANDOM_SUBDOMAIN_SUFFIX': 'str'})
 
 # 配置文件可能来自旧版本，确保策略值不会因误填负数而产生无限期缓存。
 if MAILCOM_LIFETIME_SNAPSHOT_TTL_SECONDS < 0:

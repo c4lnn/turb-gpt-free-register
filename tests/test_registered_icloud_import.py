@@ -192,10 +192,7 @@ class RegisteredICloudOtpRoutingTests(unittest.TestCase):
 
     def test_icloud_pool_is_used_when_account_source_is_missing(self):
         with patch.object(db, "get_account_by_email", return_value=None), \
-             patch("core.gptmail_client.get_account_context", return_value=None), \
              patch("core.cf_temp_mail_client.get_account_context", return_value=None), \
-             patch("core.mailnest_client.get_account_context", return_value=None), \
-             patch("core.cloudmail_client.get_account_context", return_value=None), \
              patch.object(db, "get_generic_api_email_by_email", return_value=None), \
              patch.object(db, "get_icloud_email_by_email", return_value={"email": "pool@icloud.com"}), \
              patch.object(email_provider, "parse_email_sources", return_value=["outlook"]):

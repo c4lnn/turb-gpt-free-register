@@ -9,8 +9,8 @@ from core import email_provider
 class RemailProviderTests(unittest.TestCase):
     def test_parse_sources_keeps_remail(self):
         self.assertEqual(
-            email_provider.parse_email_sources("outlook,remail,gptmail,remail"),
-            ["outlook", "remail", "gptmail"],
+            email_provider.parse_email_sources("outlook,remail,icloud,remail"),
+            ["outlook", "remail", "icloud"],
         )
 
     @patch("core.remail_client.pick_account")
@@ -57,20 +57,6 @@ class RemailProviderTests(unittest.TestCase):
             )
         resolve.assert_not_called()
         fetch_latest_otp.assert_called_once_with("registered@outlook.test", after_ts=123.0)
-
-    @patch("core.email_provider._registered_email_source", return_value="cloudmail")
-    @patch("core.gptmail_client.get_account_context", return_value=object())
-    def test_resolve_email_source_prefers_registered_source_over_runtime_context(
-        self,
-        get_gptmail_context,
-        registered_source,
-    ):
-        self.assertEqual(
-            email_provider.resolve_email_source("registered@cloudmail.test"),
-            "cloudmail",
-        )
-        registered_source.assert_called_once_with("registered@cloudmail.test")
-        get_gptmail_context.assert_not_called()
 
     @patch("core.remail_client.release_account")
     @patch("core.email_provider.resolve_email_source", return_value="remail")

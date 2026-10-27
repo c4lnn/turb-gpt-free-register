@@ -490,8 +490,8 @@ def create_app(auth_code: str | None = None) -> Flask:
         from core.email_provider import parse_email_sources
         pool = {"total": 0, **{status: 0 for status in EMAIL_POOL_STATUSES}}
         for src in parse_email_sources(_email_cfg.EMAIL_SOURCE):
-            # GPTMail/MailNest/CloudMail 地址按需生成，不属于本地邮箱池。
-            if src in ("gptmail", "mailnest", "cloudmail", "cloudflare"):
+            # Cloudflare 临时邮箱地址按需生成，不属于本地邮箱池。
+            if src in ("cloudflare",):
                 continue
             one = (
                 db.generic_api_email_pool_summary() if src == "generic_api"
@@ -2805,13 +2805,6 @@ def create_app(auth_code: str | None = None) -> Flask:
                     "ok": False,
                     "error": "mail.com 母号已配置，但别名池没有可用 alias；请等待同步完成或手动触发补齐。",
                 }), 400
-        if "gptmail" in sources:
-            api_key = str(getattr(_email_cfg, "GPTMAIL_API_KEY", "") or "").strip()
-            if not api_key:
-                return jsonify({
-                    "ok": False,
-                    "error": "已选择 gptmail 邮箱来源，请填写 GPTMail API Key（配置 → 邮箱 / OTP）。",
-                }), 400
         if "cloudflare" in sources:
             api_base = str(getattr(_email_cfg, "CLOUDFLARE_API_BASE", "") or "").strip()
             if not api_base:
@@ -2833,32 +2826,6 @@ def create_app(auth_code: str | None = None) -> Flask:
                 validate_random_subdomain_config()
             except CFTempMailError as exc:
                 return jsonify({"ok": False, "error": str(exc)}), 400
-        if "mailnest" in sources:
-            api_key = str(getattr(_email_cfg, "MAIL_NEST_API_KEY", "") or "").strip()
-            project_code = str(getattr(_email_cfg, "MAIL_NEST_PROJECT_CODE", "") or "").strip()
-            if not api_key:
-                return jsonify({
-                    "ok": False,
-                    "error": "已选择 mailnest 邮箱来源，请填写 MailNest API Key（配置 → 邮箱 / OTP）。",
-                }), 400
-            if not project_code:
-                return jsonify({
-                    "ok": False,
-                    "error": "已选择 mailnest 邮箱来源，请填写 MailNest 项目代码（配置 → 邮箱 / OTP）。",
-                }), 400
-        if "cloudmail" in sources:
-            api_base = str(getattr(_email_cfg, "CLOUDMAIL_API_BASE", "") or "").strip()
-            token = str(getattr(_email_cfg, "CLOUDMAIL_AUTH_TOKEN", "") or "").strip()
-            if not api_base:
-                return jsonify({
-                    "ok": False,
-                    "error": "已选择 cloudmail 邮箱来源，请填写 CloudMail API 地址（配置 → 邮箱 / OTP）。",
-                }), 400
-            if not token:
-                return jsonify({
-                    "ok": False,
-                    "error": "已选择 cloudmail 邮箱来源，请填写 CloudMail Token（配置 → 邮箱 / OTP）。",
-                }), 400
         if "remail" in sources:
             api_base = str(getattr(_email_cfg, "REMAIL_API_BASE", "") or "").strip()
             api_key = str(getattr(_email_cfg, "REMAIL_API_KEY", "") or "").strip()
@@ -2893,7 +2860,7 @@ def create_app(auth_code: str | None = None) -> Flask:
                     "ok": False,
                     "error": "Remail 服务模式只能填写 code 或 purchase（配置 → 邮箱 / OTP）。",
                 }), 400
-        if "gptmail" in sources or "mailnest" in sources or "cloudmail" in sources or "remail" in sources or "cloudflare" in sources:
+        if "remail" in sources or "cloudflare" in sources:
             # 临时邮箱在任务开始时动态生成，不需要本地邮箱池容量提示。
             warning = ""
         elif "cloudflare_domain" in sources:
@@ -3137,95 +3104,6 @@ def create_app(auth_code: str | None = None) -> Flask:
         except Exception as exc:
             logger.warning("获取 SMSBower 元数据失败: %s", type(exc).__name__)
             return jsonify({"ok": False, "error": str(exc)}), 400
-
-    @app.post("/api/cloudmail/gen-token")
-    def api_cloudmail_gen_token():
-        """手动生成 CloudMail Authorization Token，并把本次填写的 CloudMail 配置一并写入 .env。"""
-        data = request.get_json(silent=True) or {}
-        try:
-            from core.cloudmail_client import gen_token
-            from config.env_loader import write_env_values
-
-            api_base = (data.get("api_base") or "").strip()
-            admin_email = (data.get("email") or data.get("admin_email") or "").strip()
-            password = (data.get("password") or "").strip()
-            path = (data.get("path") or "/api/public/genToken").strip() or "/api/public/genToken"
-            token = gen_token(
-                email=admin_email,
-                password=password,
-                path=path,
-                base_url=api_base,
-            )
-            updates = {"CLOUDMAIL_AUTH_TOKEN": token}
-            # 生成 Token 时用户通常尚未点“保存配置”；这里同步保存本次填写的字段，
-            # 避免 loadConfig() 后 API 地址/账号/密码被旧 .env 值覆盖。
-            if api_base:
-                updates["CLOUDMAIL_API_BASE"] = api_base
-            if admin_email:
-                updates["CLOUDMAIL_ADMIN_EMAIL"] = admin_email
-            if password:
-                updates["CLOUDMAIL_PASSWORD"] = password
-            if path:
-                updates["CLOUDMAIL_TOKEN_PATH"] = path
-            written = write_env_values(updates)
-            try:
-                import config as _config_pkg
-                _config_pkg.reload_all()
-            except Exception:
-                logger.exception("CloudMail Token 写入后热加载失败")
-            return jsonify({
-                "ok": True,
-                "token": token,
-                "written": written,
-                "message": "CloudMail Token 已生成，且当前 CloudMail 配置已保存",
-            })
-        except Exception as exc:
-            logger.exception("生成 CloudMail Token 失败")
-            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 400
-
-    @app.post("/api/cloudmail/domains")
-    def api_cloudmail_domains():
-        """从 CloudMail 平台获取域名列表，并可写入 .env 作为本地缓存。"""
-        data = request.get_json(silent=True) or {}
-        try:
-            from core.cloudmail_client import fetch_domains
-            from config.env_loader import write_env_values
-
-            updates = {}
-            api_base = (data.get("api_base") or "").strip()
-            admin_email = (data.get("email") or data.get("admin_email") or "").strip()
-            password = (data.get("password") or "").strip()
-            token = (data.get("token") or "").strip()
-            if api_base:
-                updates["CLOUDMAIL_API_BASE"] = api_base
-            if admin_email:
-                updates["CLOUDMAIL_ADMIN_EMAIL"] = admin_email
-            if password:
-                updates["CLOUDMAIL_PASSWORD"] = password
-            if token:
-                updates["CLOUDMAIL_AUTH_TOKEN"] = token
-            if updates:
-                write_env_values(updates)
-                import config as _config_pkg
-                _config_pkg.reload_all()
-
-            domains = fetch_domains(force=True)
-            written = write_env_values({"CLOUDMAIL_DOMAINS": "\n".join(domains)})
-            try:
-                import config as _config_pkg
-                _config_pkg.reload_all()
-            except Exception:
-                logger.exception("CloudMail 域名写入后热加载失败")
-            return jsonify({
-                "ok": True,
-                "domains": domains,
-                "count": len(domains),
-                "written": written,
-                "message": f"已获取 {len(domains)} 个 CloudMail 可用域名并保存",
-            })
-        except Exception as exc:
-            logger.exception("获取 CloudMail 域名失败")
-            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 400
 
     @app.post("/api/config")
     def api_config_set():

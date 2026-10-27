@@ -11,8 +11,8 @@ class EmailProviderCloudflareTests(unittest.TestCase):
 
     def test_parse_email_sources_includes_cloudflare(self):
         self.assertEqual(
-            email_provider.parse_email_sources("cloudflare,gptmail"),
-            ["cloudflare", "gptmail"],
+            email_provider.parse_email_sources("cloudflare"),
+            ["cloudflare"],
         )
 
     def test_resolve_prefers_cf_context_over_domain_suffix(self):
