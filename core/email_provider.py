@@ -262,6 +262,9 @@ def wait_for_otp(
             logger.warning("[EmailProvider] mail.com 别名注册开始时间写入失败: %s", email)
         from core.mailcom_provider import fetch_latest_otp
         return fetch_latest_otp(email, after_ts=after_ts, **extra_kwargs)
+    if source == "remail":
+        from core.remail_client import fetch_latest_otp
+        return fetch_latest_otp(email, after_ts=after_ts, **extra_kwargs)
     from core.outlook_client import fetch_latest_otp
     return fetch_latest_otp(email, after_ts=after_ts, **extra_kwargs)
 
@@ -283,6 +286,9 @@ def release_email(email: str, status: str = "failed", note: str | None = None) -
         release_account(email, status=status, note=note)
     elif source == "mailcom":
         from core.mailcom_provider import release_account
+        release_account(email, status=status, note=note)
+    elif source == "remail":
+        from core.remail_client import release_account
         release_account(email, status=status, note=note)
     else:
         from core.outlook_client import release_account

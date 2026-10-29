@@ -37,7 +37,7 @@ MAC_OS_UA_VERSION = "10_15_7"
 # 必须同步为 146；不能出现 TLS=146、HTTP/JS=149 的跨版本拼接指纹。
 IMPERSONATE = "chrome146"
 
-# BrowserSession 的协议传输后端；不改变 Roxy 等真实浏览器驱动。
+# BrowserSession 的协议传输后端。
 PROTOCOL_HTTP_CLIENT = "curl_cffi"
 CURL_CFFI_IMPERSONATE = "chrome146"
 WREQ_EMULATION = "chrome146"
@@ -89,54 +89,6 @@ CLOUD_PROXY_ORG_KEYWORDS = [
     "data center", "datacenter", "hosting", "host", "server", "cloud",
 ]
 
-# ---------- Roxy/Cloak 浏览器省流量模式 ----------
-# 默认关闭。开启后拦截可选的图片/媒体、明确列出的统计 URL，
-# 并在本地浏览器代理中继层阻断下列下载域名；
-# 不拦截登录所需的 document、核心 script、stylesheet、xhr/fetch、websocket；
-# Playwright 会放行带验证码/challenge 关键词的 URL。
-# 该模式仅应用于 Roxy/Cloak，本地浏览器才需要节省带宽；Browser Use/Skyvern 云端
-# 浏览器不会安装省流量拦截器。Selenium/CDP 只能按 URL 后缀拦截，若验证码异常可关闭。
-BROWSER_DATA_SAVER_MODE: bool = False
-# 代理连接前按目标主机拦截，包含子域名，覆盖启动阶段及后台组件下载。
-# 仅本地浏览器使用计量中继且开启省流量模式时生效；[] 关闭域名拦截。
-BROWSER_DATA_SAVER_BLOCKED_PROXY_HOSTS: list[str] = ["dl.google.com", "gvt1.com"]
-# 注册已经拿到 accessToken 后，阻断不再需要的 ChatGPT 应用壳/遥测资源。
-# 仅在 Roxy/Cloak 注册后阶段生效，不影响邮箱、验证码和登录页面。
-BROWSER_DATA_SAVER_DEEP_MODE: bool = True
-# 每行一个 Playwright resource_type。可选 image/media/font/manifest/texttrack 等；
-# 默认只拦截 image、media；也可配置 stylesheet/font 等资源；Roxy 还会通过 Chromium 启动参数关闭图片加载，
-# 遇到页面布局或验证码异常时可关闭模式。
-BROWSER_DATA_SAVER_BLOCKED_RESOURCE_TYPES: list[str] = ["image", "media"]
-# URL glob 级别的额外拦截。以下是资源明细中确认不参与邮箱密码注册主流程的
-# RUM/广告统计资源；Google GSI 仅用于 Google 登录，不使用 Google 登录时默认拦截。
-# 不要把 ChatGPT/auth.openai 的 CDN chunk 当作候选：即使某个 chunk 只有少量函数
-# 被调用，也可能负责路由、表单切换或懒加载；需经过单变量 A/B 验证后才能加入规则。
-# 不要把 chatgpt/openai 的核心 API 或 sentinel URL 加到这里。
-# `**` 用于匹配 URL 中的任意路径；Roxy/Cloak 的 Playwright/Selenium 会读取这组规则。
-BROWSER_DATA_SAVER_BLOCKED_URL_PATTERNS: list[str] = [
-    "**://auth.openai.com/awe/api/v2/rum**",
-    "**://chatgpt.com/awe/api/v2/rum**",
-    "**://chatgpt.com/ces/statsc/flush**",
-    "**://connect.facebook.net/**",
-    "**://analytics.tiktok.com/**",
-    "**://snap.licdn.com/**",
-    "**://bat.bing.com/**",
-    "**://accounts.google.com/gsi/client**",
-]
-
-# ---------- Roxy/Cloak 浏览器流量明细日志 ----------
-# 默认关闭；开启后在注册结束时仅输出有流量消耗的访问，包含上传/下载/总字节。
-# 按单请求总消耗降序输出；跳过拦截、零字节和本地访问，估算项显式标记。
-# URL 查询参数值会脱敏，不保存请求/响应 body 或完整 Header 内容。
-BROWSER_TRAFFIC_DETAIL_LOG: bool = False
-BROWSER_TRAFFIC_DETAIL_MAX_ENTRIES: int = 2000
-
-# ---------- Roxy/Cloak 浏览器 JS 精确覆盖率 ----------
-# 开启后通过 Chrome DevTools Protocol Profiler 记录本次会话实际执行过的
-# JavaScript 函数/代码范围。只保存函数名、调用计数和 offset，不读取参数、返回值
-# 或源码；Browser Use/Skyvern 云端浏览器不启用该监听；默认关闭，避免给正常注册增加额外开销。
-BROWSER_JS_COVERAGE_LOG: bool = False
-BROWSER_JS_COVERAGE_MAX_ENTRIES: int = 1000
 COUNTRY_LOCALE_PROFILE_MAP = {
     "JP": "jp", "CN": "cn", "HK": "hk", "TW": "tw", "US": "us", "CA": "us",
     "SG": "sg", "GB": "gb", "AU": "gb", "DE": "de", "FR": "fr", "NL": "nl",
@@ -209,7 +161,7 @@ def _locale_profile_key_from_geo(geo: dict | None) -> str:
 def _build_locale_from_geo(geo: dict | None) -> dict:
     key = _locale_profile_key_from_geo(geo)
     resolved_profile = key
-    locale = dict(BROWSER_LOCALE_PROFILES.get(key, BROWSER_LOCALE_PROFILES[BROWSER_LOCALE_PROFILE]))
+    locale = dict(BROWSER_LOCALE_PROFILES.get(key, BROWSER_LOCALE_PROFILES.get(BROWSER_LOCALE_PROFILE, BROWSER_LOCALE_PROFILES["jp"])))
     if geo and AUTO_BROWSER_LOCALE_FROM_IP:
         country = str(geo.get("country") or geo.get("country_code") or "").upper()
         # 专用画像覆盖常见国家；其余已知国家动态生成语言字段。若地理接口
@@ -234,9 +186,14 @@ def _build_locale_from_geo(geo: dict | None) -> dict:
             })
         tz = str(geo.get("timezone") or "").strip()
         if tz:
-            locale["timezone_iana"] = tz
-            locale["timezone_offset_minutes"] = _offset_minutes_for_timezone(tz, int(locale["timezone_offset_minutes"]))
-            locale["timezone_name"] = TIMEZONE_NAME_BY_IANA.get(tz, locale.get("timezone_name", ""))
+            try:
+                ZoneInfo(tz)
+            except Exception:
+                pass
+            else:
+                locale["timezone_iana"] = tz
+                locale["timezone_offset_minutes"] = _offset_minutes_for_timezone(tz, int(locale["timezone_offset_minutes"]))
+                locale["timezone_name"] = TIMEZONE_NAME_BY_IANA.get(tz, locale.get("timezone_name", ""))
     locale["locale_profile"] = resolved_profile
     return locale
 
@@ -417,4 +374,4 @@ def validate_browser_profile(profile: dict) -> list[str]:
     return issues
 
 # ---- .env overrides for WebUI editable fields ----
-apply_env_overrides(globals(), {'PROTOCOL_HTTP_CLIENT': 'str', 'CURL_CFFI_IMPERSONATE': 'str', 'WREQ_EMULATION': 'str', 'BROWSER_LOCALE_PROFILE': 'str', 'AUTO_BROWSER_LOCALE_FROM_IP': 'bool', 'IP_GEO_TIMEOUT': 'float', 'REJECT_CLOUD_PROXY': 'bool', 'BROWSER_DATA_SAVER_MODE': 'bool', 'BROWSER_DATA_SAVER_BLOCKED_PROXY_HOSTS': 'list_str_multiline', 'BROWSER_DATA_SAVER_DEEP_MODE': 'bool', 'BROWSER_DATA_SAVER_BLOCKED_RESOURCE_TYPES': 'list_str_multiline', 'BROWSER_DATA_SAVER_BLOCKED_URL_PATTERNS': 'list_str_multiline', 'BROWSER_TRAFFIC_DETAIL_LOG': 'bool', 'BROWSER_TRAFFIC_DETAIL_MAX_ENTRIES': 'int', 'BROWSER_JS_COVERAGE_LOG': 'bool', 'BROWSER_JS_COVERAGE_MAX_ENTRIES': 'int'})
+apply_env_overrides(globals(), {'PROTOCOL_HTTP_CLIENT': 'str', 'CURL_CFFI_IMPERSONATE': 'str', 'WREQ_EMULATION': 'str', 'BROWSER_LOCALE_PROFILE': 'str', 'AUTO_BROWSER_LOCALE_FROM_IP': 'bool', 'IP_GEO_TIMEOUT': 'float', 'REJECT_CLOUD_PROXY': 'bool'})

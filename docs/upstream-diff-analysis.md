@@ -51,7 +51,6 @@
 | HTTP 诊断 | `core/http_diagnostics.py` | 403 重试 / 2FA 403 日志诊断 |
 | 协议 profiles | `core/protocol_profiles.py` | 协议驱动 profile 管理 |
 | 代理链 | `core/proxy_chain.py`、`core/proxy_utils.py` | 上游代理链（`PROXY_POOL_UPSTREAM_PROXY`、`PLAN_CHECK_UPSTREAM_PROXY`） |
-| Roxy 资源缓存 | `core/roxy_asset_cache.py` | 省流量资源缓存 |
 | 2FA 独立服务 | `core/twofa_service.py` | 并发/队列/代理模式可配置（`TWOFA_WORKERS`/`TWOFA_QUEUE_LIMIT`/`TWOFA_PROXY_MODE`） |
 | wreq 协议驱动 | `core/wreq_session.py` | requirements 新增 `wreq`，纯协议驱动第二实现 |
 | 优惠力度查询 | `webui/templates/promo_details.html` | `chatgpt_plan.py` 解析 `eligible_promo_campaigns` / `discount` |
@@ -76,7 +75,6 @@
 | OTP 操作锁 | `core/otp_operation_lock.py` | 远端无 |
 | 邮箱池状态 / 账号状态契约 | `core/email_pool_status.py`、`core/account_status_contracts.py` | 本地统一状态分类契约 |
 | 提链 providers | `core/extract_link_providers.py` | 远端把逻辑内联进 `extract_link_service.py` |
-| Roxy 2FA | `core/roxy_2fa.py` | 远端改用 `twofa_service.py` |
 | 运维工具 | `tools/{migrate_runtime_storage,runtime_storage_admin,query_chatgpt_plan}.py` | 本地独有 |
 | 凭证明文可追溯日志 | `core/account_export.py` / `core/openai_auth.py` | 本地有意保留的反向决策：密码/完整 TOTP secret/验证码明文写入 job log（上游「验证码已隐藏」） |
 
@@ -119,8 +117,8 @@
 - 本地：删了协议密码注册路径，保留 sentinel 常量 `SENTINEL_SDK_SHA256/URL/FRAME_URL`（远端已删）。
 
 ### 浏览器省流量（`config/browser.py`）
-- 远端：新增 `BROWSER_DATA_SAVER_DEEP_MODE`，删 `SEC_CH_UA_FULL_VERSION`。
-- 本地：保留 `CLOUDFLARE_RANDOM_SUBDOMAIN_*`（远端已删）。
+- 本地：已删除省流量能力（`BROWSER_DATA_SAVER_*` / `BROWSER_TRAFFIC_*` / `BROWSER_JS_COVERAGE_*` 配置，连同 `browser_data_saver` / `browser_traffic` 模块整体移除）。
+- 远端：仍有省流量（`BROWSER_DATA_SAVER_DEEP_MODE`、`core/roxy_asset_cache.py`）。
 
 ---
 
@@ -160,7 +158,7 @@
 > 密码落库/展示      main.py extra.registration_password + db._extract_registration_password + webui 密码字段（2161365）
 > 2FA 重认证        account_export.setup_2fa 完整版（send_email_otp + with_retry + 403/429 分类 + 重发轮）（2161365 + 4bace93~f8709ab）
 > 独立补跑 2FA      twofa_service.py 后台队列 + db totp_setup 四函数 + webui totp-setup 接口 + 前端密码列/开启2FA（2161365）
-> 排除              完整导出（6e9af56，留 A2）；roxy_2fa.py（留阶段 4）
+> 排除              完整导出（6e9af56，留 A2）；roxy_2fa.py（阶段 4 已删）
 > ```
 
 - [x] A1-1 `core/http_diagnostics.py`（纯新增，无依赖）——`response_summary` 是 bootstrap 日志依赖
@@ -174,14 +172,13 @@
   - 2FA 重认证：`account_export.setup_2fa` 完整版（显式 `send_email_otp` + with_retry + 403/429 分类 + 重发轮）（`2161365` + `4bace93`~`f8709ab`）
   - 凭证明文可追溯：密码/完整 TOTP secret/重认证 OTP/激活 TOTP 验证码明文写入任务日志（本地反向决策，不采纳上游「验证码已隐藏」）
   - 独立补跑 2FA + 密码列：`core/twofa_service.py` 后台队列（`enqueue_account_totp_setup` / `queue_settings` / `is_running` / `log_path`）+ `db` 四个 totp_setup 状态函数 + `webui/app.py` 三个 totp-setup 接口 + `webui/templates/index.html`「密码」列 /「开启2FA」按钮 /「复制登录凭据」/「2FA日志」
-  - 排除：账号页「完整导出」（`6e9af56`，留 A2）、`roxy_2fa.py`（留阶段 4）
+  - 排除：账号页「完整导出」（`6e9af56`，留 A2）、`roxy_2fa.py`（阶段 4 已删）
 - [x] A1-连带 session.py 对齐引入的运行时依赖（阶段 3 提前就位）：`core/protocol_profiles.py`、`core/proxy_chain.py`、`core/proxy_utils.py`、`core/wreq_session.py` + `config/browser.py` 三属性（`PROTOCOL_HTTP_CLIENT`/`CURL_CFFI_IMPERSONATE`/`WREQ_EMULATION`）与 `core/sentinel.py` 的 `SENTINEL_SDK_URL`→`SENTINEL_SV` 内联改写
 - [x] A1-验收（第一部分）：跑通协议注册主链路（匿名预热 → 密码注册 → 邮箱 OTP → 拿到 access token）——验证：账号 `3m7fs52r5rr@vgjkjb-mail.yuanxuai.xyz` 落库 id=1515，`access_token_present=True`（length=2001）；Codex 按 `ENABLE_CODEX_AUTO=False` 跳过
 - [x] A1-验收（第二部分，扩 A1）：密码 + 2FA 完整闭环冒烟——账号 id=1516 落库含 `access_token` + `registration_password` + `totp_secret`，账号详情/复制可读回密码，任务日志明文可追溯密码/完整 secret/OTP/TOTP 验证码（对齐 tasks 8.7）
 
 #### A2 — 其余核心好合项
 
-- [ ] `core/browser_traffic.py`：省流量统计、流量明细（1 vs 5）
 - [ ] `core/generic_api_mail_client.py`：通用取码兼容（1 vs 4）
 - [ ] `core/account_export.py`：批量复制凭据、全量导出（远端 9）
 
@@ -189,7 +186,6 @@
 
 - [ ] `core/chatgpt_plan.py`：本地「查询失败原因」vs 远端「优惠力度查询」（6 vs 5）
 - [ ] `core/live_check_service.py`：本地「查活后查套餐」vs 远端「查活协议优化 ×4」（3 vs 6）。**A1 已知遗留**：`account_liveness` 对齐后内部已查套餐（`result["plan_result"]`），本地 `live_check_service` 仍再查一次（`result["plan_check"]`），形成重复查套餐；且未传递 `fingerprint_state`/`email_source`。档 B 对齐时需移除重复逻辑 + 传递指纹状态 + 改 403 代理轮转。
-- [ ] `core/roxy_registration.py`：注册驱动，最乱（4 vs 9）
 - [ ] `core/email_provider.py`：来源集合互斥，决策 icloud vs imap、mailcom 保留/替换（5 vs 4）
 - [ ] `core/db.py`：本地分表 vs 远端统一 `email_pool` + 巡检三表。**最高风险**，单独迁移方案 + 数据兼容测试（15 vs 19）
 - [ ] `webui/app.py`：路由层大面积分歧（18 vs 17）
@@ -204,16 +200,15 @@
 - [ ] IMAP 邮箱：`core/imap_mail_client.py`
 - [ ] MailCode 邮箱：`core/mailcode_client.py`
 - [ ] 西瓜接码：`core/xigua_client.py` + `config/email.py`（`XIGUA_*`）
-- [ ] Roxy 资源缓存：`core/roxy_asset_cache.py`
 - [ ] 优惠力度查询：`webui/templates/promo_details.html` + `chatgpt_plan.py` 解析（若档 B 已合 plan 则并入）
 - [ ] 一键巡检：`core/account_inspection_service.py` + `inspection_lease.py` + 模板（依赖档 B 的 db 表）
 - [ ] 注册性能基准：`tools/benchmark_registration_jobs.py`
 
-### 阶段 4 — 需决策取舍的小冲突（短信 / 2FA）
+### 阶段 4 — 需决策取舍的小冲突（短信）
 
 - [ ] 短信 provider：本地 V1（`smsbower_provider.py`）vs 远端 GET handler_api。决策：采用远端 GET 兼容 / 保留 V1 / 两者共存。
-- [ ] 2FA 驱动：Roxy 驱动 `roxy_2fa.py` 的取舍。决策：替换 or 并行。（注：协议注册同步 `setup_2fa` 与后台补设队列 `twofa_service.py` 已随 A1-6 纳入，`TWOFA_WORKERS`/`TWOFA_QUEUE_LIMIT`/`TWOFA_PROXY_MODE` 已引入；此处仅剩 Roxy 驱动 `roxy_2fa.py` 是否保留/替换的决策。）
-- [ ] 浏览器省流量：引入 `BROWSER_DATA_SAVER_DEEP_MODE`，决定 `SEC_CH_UA_FULL_VERSION` 去留。
+- [x] 2FA 驱动：Roxy 驱动 `roxy_2fa.py` 已删除（协议注册同步 `setup_2fa` 与后台补设队列 `twofa_service.py` 已随 A1-6 纳入，`TWOFA_WORKERS`/`TWOFA_QUEUE_LIMIT`/`TWOFA_PROXY_MODE` 已引入；Roxy 真实浏览器驱动整体移除后无需 Roxy 2FA）。
+- [x] 浏览器省流量：已删除省流量能力（`browser_data_saver` / `browser_traffic` 及 `BROWSER_DATA_SAVER_*` / `BROWSER_TRAFFIC_*` / `BROWSER_JS_COVERAGE_*` 配置整体移除），不引入 `BROWSER_DATA_SAVER_DEEP_MODE`。
 
 ### 阶段 5 — 本地大改、远端小改（远端无可合内容，保留本地，仅记录）
 
@@ -228,6 +223,6 @@
 - [x] 档 A1（协议注册/认证流程升级 + 密码注册/2FA/密码保存闭环：已完成——代码对齐 + 测试套件通过 + 完整闭环冒烟（密码 + 2FA + `totp_secret` 落库 + 明文可追溯日志）+ 独立补跑 2FA 后台队列 + 账号页密码列/「开启2FA」按钮）
 - [ ] 档 A2（其余核心好合项）
 - [ ] 档 B（核心链路大冲突项）
-- [ ] 阶段 3（纯新增；`proxy_chain`/`proxy_utils`/`protocol_profiles`/`wreq_session`/`http_diagnostics` 已随 A1 连带就位，剩余 IMAP/MailCode/西瓜/巡检/资源缓存等）
-- [ ] 阶段 4（短信 / 2FA 决策）
+- [ ] 阶段 3（纯新增；`proxy_chain`/`proxy_utils`/`protocol_profiles`/`wreq_session`/`http_diagnostics` 已随 A1 连带就位，剩余 IMAP/MailCode/西瓜/巡检等；「Roxy 资源缓存」因省流量已删不再需要）
+- [ ] 阶段 4（仅剩短信 provider 决策；2FA 驱动与浏览器省流量已决策删除）
 - [ ] 阶段 5（本地保留项确认）

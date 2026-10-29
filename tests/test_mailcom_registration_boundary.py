@@ -33,10 +33,10 @@ class MailComRegistrationBoundaryTests(unittest.TestCase):
             item.stop()
         self.temp.cleanup()
 
-    def test_direct_registration_records_alias_start_before_driver_selection(self):
-        with patch.object(main._roxy_cfg, "REGISTRATION_DRIVER", "unsupported-driver"):
-            with self.assertRaisesRegex(RuntimeError, "不支持的 REGISTRATION_DRIVER"):
-                main.run_registration("alias@example.com", "Alice Example")
+    def test_direct_registration_records_alias_start_on_protocol_failure(self):
+        with patch.object(main, "network_preflight", side_effect=RuntimeError("preflight failed")):
+            result = main.run_registration("alias@example.com", "Alice Example")
+        self.assertFalse(result["success"])
         alias = db.get_mailcom_alias_internal("alias@example.com")
         self.assertIsNotNone(alias["registration_started_at"])
         self.assertEqual(alias["status"], "failed")

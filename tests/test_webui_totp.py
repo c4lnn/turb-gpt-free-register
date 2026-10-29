@@ -130,12 +130,14 @@ process.stdout.write(JSON.stringify(rows.map(_twofaCell)));
 
         self.assertEqual(rendered[0].count('data-account-totp-code="1"'), 1)
         self.assertIn(">已启用</button>", rendered[0])
-        for html, label in zip(rendered[1:], ("已存在", "失败", "未启用", "未设置", "已启用")):
-            self.assertIn(label, html)
+        # 非启用状态一律不渲染「生成验证码」按钮；已存在单独成 pill，其余无 token 时统一「无Token」。
+        for html in rendered[1:]:
             self.assertNotIn("data-account-totp-code", html)
+        self.assertIn("已存在", rendered[1])
         self.assertIn("远端已启用 TOTP，但本地未保存 Secret", rendered[1])
         self.assertIn("reauth · already_enabled", rendered[1])
-        self.assertIn("activate · totp_activate_failed", rendered[2])
+        for html in rendered[2:]:
+            self.assertIn("无Token", html)
 
     def test_totp_click_contract_supports_refresh_and_failure_recovery(self):
         start = self.template.index("const totpButton =")

@@ -1357,23 +1357,6 @@ def run_codex_oauth(
     if not email:
         return _codex_result(status="skipped", message="email 为空")
 
-    # Codex OAuth 支持多种驱动：
-    # protocol：原纯协议；roxy：用真实浏览器跑页面并捕获 localhost callback。
-    try:
-        from config import codex as _codex_cfg
-        from config import roxybrowser as _roxy_cfg
-        oauth_driver = str(getattr(_codex_cfg, "CODEX_OAUTH_DRIVER", "protocol") or "protocol").strip().lower()
-        if oauth_driver == "same_as_registration":
-            oauth_driver = str(getattr(_roxy_cfg, "REGISTRATION_DRIVER", "protocol") or "protocol").strip().lower()
-        if oauth_driver in ("roxy", "roxybrowser", "fingerprint", "browser"):
-            from core.roxy_codex_oauth import run_roxy_codex_oauth
-            return run_roxy_codex_oauth(email, otp_provider=otp_provider, proxy=proxy, force=True)
-        if oauth_driver not in ("protocol", "api", "http"):
-            raise RuntimeError(f"[Codex] 不支持的 CODEX_OAUTH_DRIVER={oauth_driver!r}，可选 protocol / roxy / same_as_registration")
-    except ImportError:
-        # 没装 selenium / 未提供 roxy 配置时继续走协议模式，保持旧行为。
-        pass
-
     if otp_provider is None:
         from core.email_provider import wait_for_otp as otp_provider
 

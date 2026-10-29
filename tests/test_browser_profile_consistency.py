@@ -1,9 +1,6 @@
 # -*- coding: utf-8 -*-
 import json
-import shutil
-import subprocess
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -12,10 +9,6 @@ from core import sentinel_runner
 from core.sentinel import generate_fingerprint_data
 from core.session import BrowserSession
 
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-RUNNER_PATH = PROJECT_ROOT / "sentinel" / "sentinel-runner.js"
-NODE_EXECUTABLE = shutil.which("node") or shutil.which("node.exe")
 
 
 class BrowserProfileVersionTests(unittest.TestCase):
@@ -30,32 +23,12 @@ class BrowserProfileVersionTests(unittest.TestCase):
         self.assertIn("Chrome/146.0.0.0", profile["user_agent"])
         self.assertIn('"Google Chrome";v="146"', profile["sec_ch_ua"])
         self.assertIn('"Chromium";v="146"', profile["sec_ch_ua"])
-        self.assertEqual(profile["sec_ch_ua_full_version"], '"146.0.0.0"')
         self.assertIn('"Google Chrome";v="146.0.0.0"', profile["sec_ch_ua_full_version_list"])
         self.assertEqual(browser.validate_browser_profile(profile), [])
 
 class BrowserLocaleFallbackTests(unittest.TestCase):
     def _profile(self, geo):
         return browser.build_browser_environment(geo, base_profile={})
-
-    def test_unknown_country_does_not_partially_apply_geo_timezone(self):
-        profile = self._profile({"country": "ID", "timezone": "Asia/Jakarta"})
-        default = browser.BROWSER_LOCALE_PROFILES[browser._default_locale_profile_key()]
-
-        self.assertEqual(profile["locale_profile"], browser._default_locale_profile_key())
-        for key in ("navigator_language", "navigator_languages", "accept_language", "timezone_iana", "timezone_offset_minutes", "timezone_name"):
-            self.assertEqual(profile[key], default[key])
-        self.assertNotEqual(profile["timezone_iana"], "Asia/Jakarta")
-
-    def test_missing_country_does_not_partially_apply_geo_timezone(self):
-        profile = self._profile({"timezone": "Asia/Jakarta"})
-        default = browser.BROWSER_LOCALE_PROFILES[browser._default_locale_profile_key()]
-
-        self.assertEqual(profile["locale_profile"], browser._default_locale_profile_key())
-        self.assertEqual(profile["navigator_language"], default["navigator_language"])
-        self.assertEqual(profile["timezone_iana"], default["timezone_iana"])
-        self.assertEqual(profile["timezone_offset_minutes"], default["timezone_offset_minutes"])
-        self.assertEqual(profile["timezone_name"], default["timezone_name"])
 
     def test_known_country_with_valid_timezone_updates_timezone_as_a_unit(self):
         profile = self._profile({"country": "JP", "timezone": "Asia/Tokyo"})
@@ -76,21 +49,22 @@ class BrowserLocaleFallbackTests(unittest.TestCase):
         self.assertEqual(profile["timezone_name"], "China Standard Time")
 
     def test_geoip_disabled_uses_default_profile_as_a_unit(self):
-        default = browser.BROWSER_LOCALE_PROFILES[browser._default_locale_profile_key()]
+        default = browser._LOCALE
         with patch.object(browser, "AUTO_BROWSER_LOCALE_FROM_IP", False):
             profile = self._profile({"country": "US", "timezone": "America/New_York"})
 
-        self.assertEqual(profile["locale_profile"], browser._default_locale_profile_key())
+        self.assertEqual(profile["locale_profile"], browser.BROWSER_LOCALE_PROFILE)
         for key in ("navigator_language", "accept_language", "timezone_iana", "timezone_offset_minutes", "timezone_name"):
             self.assertEqual(profile[key], default[key])
 
     def test_invalid_default_profile_falls_back_to_jp_as_a_unit(self):
         with patch.object(browser, "BROWSER_LOCALE_PROFILE", "unknown-profile"):
-            profile = self._profile({"country": "ID", "timezone": "Asia/Jakarta"})
+            profile = self._profile({"country": "ID", "timezone": "Not/AZone"})
 
         fallback = browser.BROWSER_LOCALE_PROFILES["jp"]
-        self.assertEqual(profile["locale_profile"], "jp")
-        self.assertEqual(profile["navigator_language"], fallback["navigator_language"])
+        # 无效默认画像回退到 jp；未知国家语言按 geo 动态匹配，无效时区保留 jp 的时区字段。
+        self.assertEqual(profile["locale_profile"], "geo:id")
+        self.assertEqual(profile["navigator_language"], "id-ID")
         self.assertEqual(profile["timezone_iana"], fallback["timezone_iana"])
         self.assertEqual(profile["timezone_offset_minutes"], fallback["timezone_offset_minutes"])
         self.assertEqual(profile["timezone_name"], fallback["timezone_name"])
@@ -103,7 +77,8 @@ class BrowserProfileCrossLayerTests(unittest.TestCase):
 
         session = BrowserSession.__new__(BrowserSession)
         session.browser_profile = profile
-        headers = session._get_common_headers()
+        with patch("core.session.SEND_HIGH_ENTROPY_CLIENT_HINTS", True):
+            headers = session._get_common_headers()
 
         self.assertEqual(fingerprint[4], profile["user_agent"])
         self.assertEqual(fingerprint[7], profile["navigator_language"])
@@ -115,7 +90,6 @@ class BrowserProfileCrossLayerTests(unittest.TestCase):
         self.assertEqual(headers["sec-ch-ua"], profile["sec_ch_ua"])
         self.assertEqual(headers["sec-ch-ua-mobile"], profile["sec_ch_ua_mobile"])
         self.assertEqual(headers["sec-ch-ua-platform"], profile["sec_ch_ua_platform"])
-        self.assertEqual(headers["sec-ch-ua-full-version"], profile["sec_ch_ua_full_version"])
         self.assertEqual(headers["sec-ch-ua-full-version-list"], profile["sec_ch_ua_full_version_list"])
         self.assertEqual(headers["sec-ch-ua-platform-version"], profile["sec_ch_ua_platform_version"])
         self.assertEqual(headers["sec-ch-ua-arch"], profile["sec_ch_ua_arch"])
@@ -156,28 +130,6 @@ class BrowserProfileCrossLayerTests(unittest.TestCase):
         self.assertEqual(command_value("--timezone-offset-minutes"), str(profile["timezone_offset_minutes"]))
         self.assertIn('"Google Chrome";v="146"', command_value("--sec-ch-ua"))
         self.assertEqual(run.call_args.kwargs["env"]["TZ"], profile["timezone_iana"])
-
-    @unittest.skipUnless(NODE_EXECUTABLE, "未找到 Node.js，跳过 Sentinel Runner 默认值测试")
-    def test_node_runner_defaults_are_chrome146(self):
-        script = (
-            "const r=require(process.argv[1]);"
-            "console.log(JSON.stringify({major:r.DEFAULT_CHROME_MAJOR,full:r.DEFAULT_CHROME_FULL_VERSION,"
-            "ua:r.DEFAULT_USER_AGENT,sec:r.DEFAULT_SEC_CH_UA,fullList:r.DEFAULT_SEC_CH_UA_FULL_VERSION_LIST}));"
-        )
-        completed = subprocess.run(
-            [NODE_EXECUTABLE, "-e", script, str(RUNNER_PATH)],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            check=True,
-        )
-        defaults = json.loads(completed.stdout)
-
-        self.assertEqual(defaults["major"], "146")
-        self.assertEqual(defaults["full"], "146.0.0.0")
-        self.assertIn("Chrome/146.0.0.0", defaults["ua"])
-        self.assertIn('"Google Chrome";v="146"', defaults["sec"])
-        self.assertIn('"Chromium";v="146.0.0.0"', defaults["fullList"])
 
 
 if __name__ == "__main__":

@@ -3242,19 +3242,6 @@ def create_app(auth_code: str | None = None) -> Flask:
         })
 
     # ----------------------------------------------------------
-    # RoxyBrowser 辅助接口
-    # ----------------------------------------------------------
-    @app.get("/api/roxy/workspaces")
-    def api_roxy_workspaces():
-        try:
-            from core.roxybrowser_client import RoxyBrowserClient
-            result = RoxyBrowserClient().list_workspaces()
-            return jsonify(result)
-        except Exception as exc:
-            logger.exception("获取 Roxy 团队/工作区失败")
-            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 500
-
-    # ----------------------------------------------------------
     # 配置读写
     # ----------------------------------------------------------
     @app.get("/api/config")

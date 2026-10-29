@@ -45,14 +45,6 @@ from config.browser import (
     IP_GEO_ENDPOINTS,
     REJECT_CLOUD_PROXY,
     CLOUD_PROXY_ORG_KEYWORDS,
-    BROWSER_DATA_SAVER_MODE,
-    BROWSER_DATA_SAVER_DEEP_MODE,
-    BROWSER_DATA_SAVER_BLOCKED_RESOURCE_TYPES,
-    BROWSER_DATA_SAVER_BLOCKED_URL_PATTERNS,
-    BROWSER_TRAFFIC_DETAIL_LOG,
-    BROWSER_TRAFFIC_DETAIL_MAX_ENTRIES,
-    BROWSER_JS_COVERAGE_LOG,
-    BROWSER_JS_COVERAGE_MAX_ENTRIES,
     COUNTRY_LOCALE_PROFILE_MAP,
     NAVIGATOR_LANGUAGE,
     NAVIGATOR_LANGUAGES,
@@ -200,7 +192,6 @@ _RELOADABLE_SUBMODULES = (
     "config.register",
     "config.email",
     "config.twofa",
-    "config.roxybrowser",
     "config.flow_trigger",
     "config.codex",
     "config.extract_link",
@@ -235,9 +226,9 @@ def reload_all() -> list[str]:
 def _refresh_top_level_constants() -> None:
     """把刚 reload 的子模块的常量重新拷一份到 config 包顶层。"""
     import config as _self
-    from config import browser, openai_protocol, proxy as _proxy, checkout_session, register, email, twofa, roxybrowser, codex, extract_link, sub2api, humanize, flow_trigger
+    from config import browser, openai_protocol, proxy as _proxy, checkout_session, register, email, twofa, codex, extract_link, sub2api, humanize, flow_trigger
     # 简单粗暴：枚举一遍重要常量，覆盖到 _self
-    for src in (browser, openai_protocol, _proxy, checkout_session, register, email, twofa, roxybrowser, codex, extract_link, sub2api, humanize, flow_trigger):
+    for src in (browser, openai_protocol, _proxy, checkout_session, register, email, twofa, codex, extract_link, sub2api, humanize, flow_trigger):
         for k in dir(src):
             if k.isupper() or k in ("pick_proxy", "pick_browser_profile", "build_browser_environment", "validate_browser_profile"):
                 setattr(_self, k, getattr(src, k))
@@ -251,7 +242,7 @@ __all__ = [
     "SEC_CH_UA_FULL_VERSION_LIST", "SEC_CH_UA_PLATFORM_VERSION",
     "SEC_CH_UA_ARCH", "SEC_CH_UA_BITNESS", "SEC_CH_UA_MODEL",
     "SEND_HIGH_ENTROPY_CLIENT_HINTS", "ACCEPT_LANGUAGE", "BROWSER_LOCALE_PROFILE", "BROWSER_LOCALE_PROFILES",
-    "AUTO_BROWSER_LOCALE_FROM_IP", "IP_GEO_TIMEOUT", "IP_GEO_ENDPOINTS", "REJECT_CLOUD_PROXY", "CLOUD_PROXY_ORG_KEYWORDS", "BROWSER_DATA_SAVER_MODE", "BROWSER_DATA_SAVER_DEEP_MODE", "BROWSER_DATA_SAVER_BLOCKED_RESOURCE_TYPES", "BROWSER_DATA_SAVER_BLOCKED_URL_PATTERNS", "BROWSER_TRAFFIC_DETAIL_LOG", "BROWSER_TRAFFIC_DETAIL_MAX_ENTRIES", "BROWSER_JS_COVERAGE_LOG", "BROWSER_JS_COVERAGE_MAX_ENTRIES", "COUNTRY_LOCALE_PROFILE_MAP",
+    "AUTO_BROWSER_LOCALE_FROM_IP", "IP_GEO_TIMEOUT", "IP_GEO_ENDPOINTS", "REJECT_CLOUD_PROXY", "CLOUD_PROXY_ORG_KEYWORDS", "COUNTRY_LOCALE_PROFILE_MAP",
     "NAVIGATOR_LANGUAGE", "NAVIGATOR_LANGUAGES",
     "TIMEZONE_IANA", "TIMEZONE_OFFSET_MINUTES", "TIMEZONE_NAME", "SCREEN_WIDTH", "SCREEN_HEIGHT",
     "HARDWARE_CONCURRENCY", "JS_HEAP_SIZE_LIMIT", "DEVICE_MEMORY",

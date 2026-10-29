@@ -15,7 +15,7 @@ class CheckoutSessionTemplateTests(unittest.TestCase):
         table_end = self.template.index("</table>", table_start)
         table = self.template[table_start:table_end]
         self.assertLess(table.index('<th class="col-plan">套餐</th>'), table.index('<th class="col-checkout">'))
-        self.assertIn('<col class="col-token"><col class="col-plan"><col class="col-checkout">', table)
+        self.assertIn('<col class="col-token"><col class="col-password"><col class="col-plan"><col class="col-checkout">', table)
         self.assertIn(".accounts-table-v2 .col-checkout { width: 190px; min-width: 190px; }", self.template)
         self.assertIn('colspan="14"', self.template)
 

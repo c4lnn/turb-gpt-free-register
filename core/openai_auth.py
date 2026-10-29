@@ -240,7 +240,7 @@ def network_preflight(session: BrowserSession) -> None:
     这样真正会“烧邮箱”的 authorize 重定向发生前，已经确认当前代理、TLS
     impersonate、ChatGPT/Auth/Sentinel 三段链路都可达。
     """
-    # 成功 Roxy 链路在 OAuth authorize 前只访问 ChatGPT 登录页；提前直打
+    # 成功链路在 OAuth authorize 前只访问 ChatGPT 登录页；提前直打
     # auth/log-in 和 Sentinel frame 会制造浏览器中不存在的跨站访问序列。
     timeout = max(1.0, float(getattr(_protocol_cfg, "OPENAI_PREFLIGHT_TIMEOUT", 12.0)))
     checks = [
@@ -550,7 +550,7 @@ def build_sentinel_header(session: BrowserSession, sentinel_resp: dict, flow: st
 
 
 def generate_registration_password(length: int = 14) -> str:
-    """生成与 Roxy 注册一致的强密码；配置 REGISTER_PASSWORD 时优先使用。"""
+    """生成强密码；配置 REGISTER_PASSWORD 时优先使用。"""
     try:
         from config import register as register_cfg
         configured = str(getattr(register_cfg, "REGISTER_PASSWORD", "") or "").strip()
@@ -607,7 +607,7 @@ def register_user(
     sentinel_header: str,
     so_header: str | None = None,
 ) -> dict:
-    """按成功 Roxy 样本提交邮箱和密码，返回 OTP 发送导航地址。"""
+    """按成功样本提交邮箱和密码，返回 OTP 发送导航地址。"""
     url = "https://auth.openai.com/api/accounts/user/register"
     headers = session.get_auth_headers(referer="https://auth.openai.com/create-account/password")
     headers["openai-sentinel-token"] = sentinel_header
@@ -769,7 +769,10 @@ def validate_email_otp(session: BrowserSession, code: str, sentinel_header: str 
 
     body = json.dumps({"code": code})
 
-    logger.info(f"[步骤10] 提交邮箱验证码: {code}")
+    logger.info(
+        "[步骤10] 提交邮箱验证码: present=%s length=%s",
+        bool(code), len(code) if code else 0,
+    )
     resp = session.post(url, headers=headers, data=body)
 
     if resp.status_code != 200:

@@ -1,9 +1,6 @@
 # Turb GPT Free Register
 
-ChatGPT / OpenAI 账号自动注册与 Codex OAuth 授权工具。当前项目支持两套注册驱动：
-
-- **protocol**：原纯协议注册，基于 `curl_cffi` + Sentinel/PoW。
-- **roxy**：RoxyBrowser 指纹浏览器 + Selenium 自动化注册，兼容新版页面流，例如 `create-account/password`、`about-you` 年龄/生日表单、地区本地化页面等。
+ChatGPT / OpenAI 账号自动注册与 Codex OAuth 授权工具。基于 `curl_cffi` + Sentinel/PoW 的纯协议注册。
 
 项目提供 **CLI** 和 **本地 WebUI** 两种使用方式。日常推荐使用 WebUI。
 
@@ -20,18 +17,6 @@ ChatGPT / OpenAI 账号自动注册与 Codex OAuth 授权工具。当前项目�
 ### 注册
 
 - 批量注册 ChatGPT 账号。
-- 支持注册驱动切换：
-  - `REGISTRATION_DRIVER = "protocol"`
-  - `REGISTRATION_DRIVER = "roxy"`
-- 支持 RoxyBrowser 一号一环境：自动创建、打开、关闭、删除 Roxy Profile。
-- 支持 Roxy 无头启动：`ROXY_OPEN_HEADLESS=True`。
-- Roxy 浏览器注册已兼容：
-  - 填邮箱后直接进入邮箱验证码页；
-  - 填邮箱后先进入 `create-account/password`，自动设置密码再继续；
-  - `about-you/profile` 页面直接输入年龄数字；
-  - `about-you/profile` 页面输入年月日生日；
-  - React Aria birthday select / spinbutton 年月日控件；
-  - 不同出口 IP / 不同页面语言下按钮顺序变化导致的三方登录误点问题。
 
 ### 邮箱来源
 
@@ -51,10 +36,6 @@ EMAIL_SOURCE = "outlook,generic_api"
 ### Codex OAuth
 
 - 注册成功后可自动跑 Codex OAuth。
-- Codex 授权驱动可选：
-  - `CODEX_OAUTH_DRIVER = "protocol"`
-  - `CODEX_OAUTH_DRIVER = "roxy"`
-  - `CODEX_OAUTH_DRIVER = "same_as_registration"`
 - 支持 CPA 管理接口生成授权 URL，并提交 OAuth callback。
 - 支持接码平台：
   - GrizzlySMS
@@ -70,9 +51,7 @@ EMAIL_SOURCE = "outlook,generic_api"
 - 动态调整注册线程数，提交后新任务立即使用最新值。
 - 批量补跑 Codex，补跑线程数每次提交即时生效。
 - 管理账号、邮箱池、Codex 凭证；账号页支持复制全部/选中整行，邮箱池列表展示导入时间、已用时间和状态。
-- Roxy 浏览器注册完成后统计整个浏览器会话的上传、下载和总流量，任务列表与账号扩展信息均会保存结果。
 - 配置页支持热加载，保存后无需重启。
-- Roxy 团队/项目可在配置页获取并保存。
 
 ### 提链路由与 Masi CDK 池
 
@@ -112,83 +91,13 @@ Masi CDK 使用「可选池」和「已用完池」两个业务池。可在 WebU
 
 `EXTRACT_LINK_POLL_INTERVAL`、`EXTRACT_LINK_POLL_MAX_ERRORS`、`MASI_CDK_QUERY_MAX_ATTEMPTS`、`MASI_CDK_QUERY_RETRY_DELAY` 和 `MASI_CDK_SELECTION_TIMEOUT` 可在配置页调整。大多数配置会热加载，但 `EXTRACT_LINK_WORKERS` 在进程启动时创建线程池，修改后必须重启 WebUI。
 
-### 浏览器网络流量统计
-
-浏览器驱动会从打开注册页开始统计，到注册后停留结束、浏览器关闭前完成汇总。结果包含：
-
-- 上传字节、下载字节、总字节数；
-- HTTP 请求数、失败/未完成请求数；
-- WebSocket 帧 payload 字节（如流程使用 WebSocket）。
-
-现代/Legacy WebUI 的注册任务列表会显示总流量，完整结构保存在任务记录的 `network_traffic` 和成功账号的 `extra_json` 中。统计为浏览器侧可观测的请求/响应流量，不包含 TLS/IP/代理隧道额外开销，也不包含邮箱 API、Roxy API 或 CDP 控制通道流量。
-
-#### 省流量模式
-
-在 WebUI「浏览器画像」中开启「本地浏览器省流量模式」，或在 `.env` 设置（仅 Roxy 生效）：
-
-```dotenv
-BROWSER_DATA_SAVER_MODE=True
-BROWSER_DATA_SAVER_BLOCKED_RESOURCE_TYPES=["image", "media"]
-# URL glob 列表；WebUI 中则是一行一条
-BROWSER_DATA_SAVER_BLOCKED_URL_PATTERNS='["**://auth.openai.com/awe/api/v2/rum**", "**://chatgpt.com/ces/statsc/flush**", "**://connect.facebook.net/**", "**://analytics.tiktok.com/**", "**://snap.licdn.com/**", "**://bat.bing.com/**", "**://accounts.google.com/gsi/client**"]'
-```
-
-Roxy/Selenium 会在启动参数中关闭图片加载，并使用 Chrome CDP 拦截常见图片、媒体等 URL 后缀及配置的 URL glob（因此也能覆盖无扩展名资源）。默认只拦截 `image`、`media`，以及配置中列出的 RUM/广告统计 URL，不会按类型拦截登录所需的核心脚本、接口和 WebSocket。Roxy 的 Chromium 图片开关和 CDP URL 黑名单无法提供 URL 例外规则，若页面出现验证码或布局异常，关闭该模式后重试。
-
-Job 208 的明细显示，当前规则实际拦截了 5 个第三方脚本（Google GSI、Facebook、TikTok、LinkedIn、Bing）以及 380 次 RUM 请求；邮箱/密码注册成功。注册侧下载约 9.92 MiB，其中脚本约 8.90 MiB，主要来自 ChatGPT 核心 CDN chunk。
-
-当前默认规则只包含 RUM/广告统计和 Google GSI。邮箱/密码注册不使用 Google 登录，因此可以保留 GSI 规则；如果将来启用 Google 登录，需从「省流量 URL 屏蔽规则」中移除以下行：
-
-```text
-**://accounts.google.com/gsi/client**
-```
-
-疑似 CES 遥测的 `**://chatgpt.com/ces/v1/rgstr` 约 277 KiB/轮，也可在单独验证注册成功率后加入。
-
-不要屏蔽 `chatgpt.com/cdn/assets/*.js`、`auth-cdn.oaistatic.com/assets/*.js`、`sentinel.openai.com`、`chatgpt.com/backend-api/sentinel/*`、`ab.chatgpt.com/v1/initialize`、`chatgpt.com/realtime/wm` 和注册/OTP/session API。Job 207 屏蔽 `7aaae702-*.js` 后出现 OTP 输入框缺失；Job 208 放行该 chunk 后完整成功，因此不能仅凭低函数执行比例屏蔽 CDN chunk。URL 规则填写 `[]` 可恢复为仅按资源类型拦截，空白则使用内置默认规则。
-
-如需拦截 CSS，可加入 `stylesheet`：
-
-```dotenv
-BROWSER_DATA_SAVER_BLOCKED_RESOURCE_TYPES=["image", "media", "stylesheet"]
-```
-
-CSS 通常不是注册接口必需，但会影响隐藏元素、布局和可见性判断，建议先单独测试；出现元素找不到或点击异常时移除 `stylesheet`。
-
-#### 资源明细日志
-
-需要分析注册流程中哪些资源占流量时，开启：
-
-```dotenv
-BROWSER_TRAFFIC_DETAIL_LOG=True
-BROWSER_TRAFFIC_DETAIL_MAX_ENTRIES=2000
-```
-
-启用统计的 Roxy 注册任务结束后，日志会输出 `[资源明细]` 行，包含资源 URL、类型、HTTP 方法、状态码、上传大小、下载大小、响应 body/header 大小，以及 `failed`、`blocked`、`unfinished`、`cache` 状态；明细按单请求总字节从大到小排列。`ws_upload/ws_download` 表示 WebSocket 帧 payload。Selenium/CDP 能识别缓存命中时显示 `hit` 或 `miss`。URL 查询参数值、data/blob URL 内容不会写入日志。
-
-把一轮注册的 `[资源明细]` 日志发回后，可以按域名、路径、资源类型和实际字节量判断下一步是否适合继续拦截；`stylesheet`、`font` 等类型需要结合注册是否受影响再启用。
-
-#### JS 执行函数覆盖率
-
-需要确认某个 CDN chunk 是否在 Roxy 注册流程中真正执行时，开启：
-
-```dotenv
-BROWSER_JS_COVERAGE_LOG=True
-BROWSER_JS_COVERAGE_MAX_ENTRIES=1000
-```
-
-Roxy/Selenium 会在当前 Chrome target 上启用 CDP `Profiler.startPreciseCoverage`。任务结束时日志包含：`[JS执行汇总]`、每个脚本的 `[JS脚本]`、实际执行函数的 `[JS执行]`（函数名、调用次数、`startOffset-endOffset:count`）以及“本次未观察到执行范围”的 `[JS候选]`。`network_traffic.js_coverage` 会保存脚本级摘要和候选 URL，逐函数 offset 只写日志，不保存源码、参数或返回值。
-
-`[JS候选]` 仅表示该轮覆盖率没有观察到执行代码，不能单独证明可以屏蔽：先用一轮未屏蔽核心脚本的成功注册作为基线，再一次只屏蔽一个候选并对比 OTP、session、资料页和成功率。脚本若来自 `data:`/`blob:`/扩展页不会列为 URL 屏蔽候选；跨 popup/多 target 的 Selenium 页面只覆盖当前 CDP target。若 CDP Profiler 不受当前指纹浏览器支持，日志会标记 `supported=False`，不会影响注册流程。
-
 ---
 
 ## 环境要求
 
 - Python 3.10+
 - Node.js 18+
-- 可用代理、系统代理/VPN，或 RoxyBrowser 代理环境
-- 如使用 Roxy 注册：需要本机 RoxyBrowser API 可访问
+- 可用代理、系统代理/VPN
 - 如启用 Codex 自动授权：需要接码平台配置
 
 安装依赖：
@@ -204,15 +113,12 @@ node --version
 
 ```bash
 cp .env.example .env
-# 编辑 .env，例如：
-# ROXY_API_TOKEN=...
 ```
 
 当前支持从 `.env` 读取的密钥：
 
 - `WEBUI_AUTH_CODE`（WebUI 登录授权码）
 - `WEBUI_SESSION_SECRET`（可选，Session Cookie 签名密钥）
-- `ROXY_API_TOKEN`
 - `QQ_IMAP_PASSWORD`
 - `CLOUDFLARE_API_KEY` / `CLOUDFLARE_CUSTOM_AUTH`（`EMAIL_SOURCE=cloudflare` 时）
 - `REMAIL_API_KEY`（`EMAIL_SOURCE=remail` 时）
@@ -363,41 +269,7 @@ REMAIL_SUPPLY_POLICY=public_only
 
 ---
 
-### 2. 配置注册驱动
-
-编辑 `config/roxybrowser.py`，或直接在 WebUI「配置」页修改。
-
-#### 使用 RoxyBrowser 注册
-
-```python
-REGISTRATION_DRIVER = "roxy"  # 可选 protocol / roxy
-ROXY_API_BASE = "http://127.0.0.1:50100"
-ROXY_API_TOKEN = "你的Roxy API Key"
-ROXY_WORKSPACE_ID = "你的workspaceId"
-ROXY_PROJECT_ID = "你的projectId"
-ROXY_ONE_PROFILE_PER_ACCOUNT = True
-ROXY_DELETE_PROFILE_AFTER_RUN = True
-ROXY_CREATE_USE_PROXY_POOL = True
-```
-
-如要无头：
-
-```python
-ROXY_OPEN_HEADLESS = True
-```
-
-
-#### 使用协议注册
-
-```python
-REGISTRATION_DRIVER = "protocol"
-```
-
-协议注册会使用 `curl_cffi`、Sentinel/PoW、代理池等配置。
-
----
-
-### 3. 配置代理
+### 2. 配置代理
 
 编辑 `config/proxy.py`：
 
@@ -407,11 +279,9 @@ PROXY_POOL = [
 ]
 ```
 
-Roxy 一号一环境开启 `ROXY_CREATE_USE_PROXY_POOL=True` 时，会从这里随机取代理写入 Roxy Profile。
-
 ---
 
-### 4. 配置 Codex OAuth
+### 3. 配置 Codex OAuth
 
 如不需要 Codex，关闭：
 
@@ -423,8 +293,6 @@ ENABLE_CODEX_AUTO = False
 
 ```python
 ENABLE_CODEX_AUTO = True
-# config/codex.py
-CODEX_OAUTH_DRIVER = "roxy"  # 可选 protocol / roxy / same_as_registration
 ```
 
 接码配置在 `config/codex.py`：
@@ -529,7 +397,7 @@ WebUI 页面说明：
 | 账号 | 查看账号、复制 token、补跑 Codex、批量删除账号 |
 | Codex 授权 | 查看/下载/删除 `codex_accounts/` 凭证 |
 | 邮箱池 | 导入邮箱、筛选来源、标记可用/失败、删除邮箱 |
-| 配置 | 修改运行配置并热加载，含 Roxy、Codex、邮箱、代理、人工节奏等 |
+| 配置 | 修改运行配置并热加载，含 Codex、邮箱、代理、人工节奏等 |
 
 ### 线程数说明
 
@@ -597,7 +465,7 @@ python tools/test_codex_oauth.py --email <已注册邮箱> --verbose
 
 ## 注册密码说明
 
-Roxy 注册如果遇到新版流程：
+注册如果遇到新版流程：
 
 ```text
 /create-account/password
@@ -628,18 +496,17 @@ REGISTER_PASSWORD = "你的固定密码"
 
 | 文件 | 说明 |
 |---|---|
-| `config/roxybrowser.py` | 注册驱动、Roxy API、Roxy 环境生命周期 |
-| `config/codex.py` | Codex OAuth、授权驱动、CPA 管理接口、接码平台 |
+| `config/codex.py` | Codex OAuth、CPA 管理接口、接码平台 |
 | `config/email.py` | 邮箱来源、OTP 轮询、QQ IMAP、域名邮箱、Cloudflare Worker 临时邮箱 |
 | `config/proxy.py` | 代理池 |
 | `config/register.py` | 默认邮箱、密码、显示名 |
-| `config/twofa.py` | 2FA 开关；协议和 Roxy 分别使用各自会话上下文 |
+| `config/twofa.py` | 2FA 开关 |
 | `config/humanize.py` | 随机停顿/人工节奏 |
 | `config/flow_trigger.py` | 注册成功后触发 Flow |
 | `config/browser.py` | 协议模式浏览器指纹 |
 | `config/openai_protocol.py` | OpenAI OAuth/Sentinel 参数 |
 
-WebUI 配置页保存后会调用热加载；Roxy、Codex、邮箱、代理、人工节奏等常用项可立即生效。
+WebUI 配置页保存后会调用热加载；Codex、邮箱、代理、人工节奏等常用项可立即生效。
 
 ---
 
@@ -694,58 +561,6 @@ accounts/20260709-10个-3线程/
 
 ---
 
-## 当前主流程
-
-### Roxy 注册流程
-
-```text
-创建/打开 Roxy Profile
-  ↓
-打开 chatgpt.com/auth/login
-  ↓
-按 DOM 技术属性定位邮箱输入框，避免误点 Google/Apple/Microsoft
-  ↓
-提交邮箱表单
-  ↓
-如进入 create-account/password：设置密码并提交
-  ↓
-等待邮箱验证码页
-  ↓
-读取邮箱 OTP 并提交
-  ↓
-如进入 about-you/profile：填写姓名 + 年龄或生日
-  ↓
-进入 ChatGPT，读取 /api/auth/session accessToken
-  ↓
-可选 2FA：Roxy 在当前 Selenium Profile 内重新认证、取第二封邮箱 OTP、enroll/activate TOTP
-  ↓
-可选 Codex OAuth
-  ↓
-保存账号与批次归档
-  ↓
-关闭/删除 Roxy Profile
-```
-
-### Codex Roxy 授权流程
-
-```text
-获取 Codex 授权地址（CPA 或 local PKCE）
-  ↓
-Roxy 打开授权页
-  ↓
-邮箱登录 + 邮箱 OTP
-  ↓
-手机号验证：取号 → 填号 → 发送 → 等短信 → 填 OTP
-  ↓
-等待 consent/workspace/callback
-  ↓
-提交 callback 给 CPA 或本地换 token
-  ↓
-保存 codex_accounts/codex-邮箱*.json
-```
-
----
-
 ## 常见问题
 
 ### 配置保存后没生效？
@@ -754,19 +569,9 @@ WebUI 配置页保存后会热加载。Codex 补跑线程启动前也会重新�
 
 如果你直接手改 `config/*.py`，CLI 进程需要重启；WebUI 建议在配置页修改。
 
-### Roxy 无头保存后仍弹窗口？
-
-检查：
-
-```python
-ROXY_OPEN_HEADLESS = True
-```
-
-并确认 Roxy 版本支持 `/browser/open` 的 `headless` 参数。日志会打印实际传入的 `headless`。
-
 ### 出口 IP 不是日本时点到 Google 登录？
 
-当前 Roxy 注册邮箱入口已改为只按 DOM 技术属性定位，并排除三方登录按钮。不会再靠按钮文字匹配“Continue”。
+注册邮箱入口已改为只按 DOM 技术属性定位，并排除三方登录按钮。不会再靠按钮文字匹配“Continue”。
 
 ### Codex 显示 `Check your phone` 被误判失败？
 
@@ -808,20 +613,14 @@ ENABLE_CODEX_AUTO = False
 ├── main.py                         # CLI 入口
 ├── web.py                          # WebUI 入口
 ├── config/                         # 配置
-│   ├── roxybrowser.py              # RoxyBrowser 注册/Codex 驱动
-│   ├── codex.py                    # Codex OAuth / 授权驱动 / CPA / 接码
+│   ├── codex.py                    # Codex OAuth / CPA / 接码
 │   ├── email.py                    # 邮箱来源/OTP
 │   ├── proxy.py                    # 代理池
 │   ├── register.py                 # 默认注册信息
 │   └── ...
 ├── core/
-│   ├── browser_data_saver.py       # Roxy 本地浏览器省流量资源拦截
-│   ├── browser_traffic.py          # 浏览器注册 HTTP/WebSocket 流量统计
-│   ├── roxy_registration.py        # Roxy / 浏览器注册页面流程
-│   ├── roxy_codex_oauth.py         # Roxy 浏览器 Codex OAuth 页面流程
-│   ├── roxybrowser_client.py       # Roxy API 客户端
 │   ├── registration_service.py     # WebUI 注册线程池
-│   ├── codex_oauth.py              # Codex 协议/Roxy 调度
+│   ├── codex_oauth.py              # Codex 协议授权
 │   ├── email_provider.py           # 邮箱来源调度
 │   ├── cf_temp_mail_client.py      # Cloudflare Worker 临时邮箱
 │   ├── sms_provider.py             # 接码平台
@@ -846,22 +645,12 @@ ENABLE_CODEX_AUTO = False
 
 - 日常批量使用 WebUI，不建议直接同时开多个 CLI 进程。
 - 注册线程数建议不超过可用代理数。
-- Roxy 一号一环境建议保持开启，降低环境污染。
-- 调试页面问题时可临时设置：
-
-```python
-ROXY_KEEP_BROWSER_OPEN = True
-ROXY_OPEN_HEADLESS = False
-```
-
-- 调试完再改回自动关闭/删除环境。
 
 ---
 
 ## 🙏 致谢
 
 - [LINUX DO](https://linux.do) — 社区交流与用户反馈
-- [RoxyBrowser](https://roxybrowser.cn/invite/NvH4Jx) — 免费提供 5 个窗口
 - [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) — Codex OAuth 凭证格式参考
 - [curl_cffi](https://github.com/yifeikong/curl_cffi) — 底层 HTTP 库，提供 TLS 指纹 impersonate 能力
 

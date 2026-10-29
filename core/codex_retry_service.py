@@ -236,13 +236,7 @@ def run_worker(
             import config as config_pkg
             config_pkg.reload_all()
             from config import codex as codex_cfg
-            from config import roxybrowser as roxy_cfg
-            logger.info(
-                "[Codex 补跑] 已热加载配置：CODEX_OAUTH_DRIVER=%s ROXY_OPEN_HEADLESS=%s ROXY_KEEP_BROWSER_OPEN=%s",
-                getattr(codex_cfg, "CODEX_OAUTH_DRIVER", ""),
-                getattr(roxy_cfg, "ROXY_OPEN_HEADLESS", ""),
-                getattr(roxy_cfg, "ROXY_KEEP_BROWSER_OPEN", ""),
-            )
+            logger.info("[Codex 补跑] 已热加载配置：ENABLE_CODEX_AUTO=%s", getattr(codex_cfg, "ENABLE_CODEX_AUTO", ""))
         except Exception as exc:
             logger.warning("[Codex 补跑] 配置热加载失败，将继续使用当前内存配置：%s: %s", type(exc).__name__, exc)
 

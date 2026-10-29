@@ -41,7 +41,7 @@ STATSIG_SDK_TYPE = "javascript-client"
 AB_CLIENT_KEY = "client-tN5GMyzpIPKXd3KNv7ANIfiqjRSvNNTTWbZdbdabF58"
 AB_SDK_VERSION = "3.32.7"
 
-# 2026-09-14 Roxy 成功样本中 email-otp/validate 同时携带 Sentinel 与 SO。
+# 2026-09-14 成功样本中 email-otp/validate 同时携带 Sentinel 与 SO。
 SEND_SENTINEL_ON_EMAIL_OTP_VALIDATE = True
 
 # 是否补齐 HAR 中 ChatGPT Web 首屏 bootstrap 预热链路。

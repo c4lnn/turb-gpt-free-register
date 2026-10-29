@@ -14,7 +14,6 @@ from config import REGISTER_EMAIL, REGISTER_NAME  # 这两个一般不在 WebUI 
 # 可热改的，按模块属性方式读
 from config import twofa as _twofa_cfg
 from config import email as _email_cfg
-from config import roxybrowser as _roxy_cfg
 from config import openai_protocol as _protocol_cfg
 from core.session import BrowserSession
 from core.chatgpt_auth import get_providers, get_csrf_token, signin_openai
@@ -202,14 +201,6 @@ def _prepare_persisted_email_registration(email: str) -> bool:
     return False
 
 
-def _release_persisted_email_after_entry_failure(email: str, reason: str) -> None:
-    """直接注册入口在驱动选择/初始化失败时也落失败终态。"""
-    try:
-        release_email_if_unconsumed(email, note=f"注册入口失败: {reason[:220]}")
-    except Exception:
-        logger.exception("[邮箱] 注册入口失败后的终态写入失败: %s", email)
-
-
 def run_registration(
     email: str | None,
     name: str,
@@ -237,28 +228,6 @@ def run_registration(
     # 别名一旦交给注册流程，就先固定本次任务的时间下界。WebUI 任务入口
     # 也会做同样的记录；存储层只保留首次时间，因此不会被后续重试放宽。
     persisted_email = _prepare_persisted_email_registration(email)
-
-    # 可选注册驱动：
-    #   protocol     = 原有纯协议（curl_cffi）
-    #   roxy         = RoxyBrowser 指纹浏览器 + Selenium
-    driver_mode = str(getattr(_roxy_cfg, "REGISTRATION_DRIVER", "protocol") or "protocol").strip().lower()
-    if driver_mode in ("roxy", "roxybrowser", "fingerprint", "browser"):
-        from core.roxy_registration import run_roxy_registration
-        return run_roxy_registration(
-            email=email,
-            name=name,
-            birthday=birthday or generate_random_birthday(),
-            proxy=proxy,
-            otp_code=otp_code,
-            batch_dir=batch_dir,
-            on_email_acquired=on_email_acquired,
-        )
-    if driver_mode not in ("protocol", "api", "http"):
-        if persisted_email:
-            _release_persisted_email_after_entry_failure(email, f"不支持的 REGISTRATION_DRIVER={driver_mode!r}")
-        raise RuntimeError(
-            f"不支持的 REGISTRATION_DRIVER={driver_mode!r}，可选 protocol / roxy"
-        )
 
     # 纯协议驱动没有“邮箱输入框”可等待，因此在创建 BrowserSession 前领取。
     if not str(email or "").strip():

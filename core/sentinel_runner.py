@@ -83,6 +83,21 @@ def _ensure_runner_environment() -> None:
         raise FileNotFoundError(f"找不到 sdk.js: {_SDK_PATH}")
 
 
+def _redact_command(command: list[str]) -> str:
+    """隐藏 runner 命令中的 Cookie 和临时 challenge 路径。"""
+    redacted = []
+    redact_next = False
+    for item in command:
+        if redact_next:
+            redacted.append("<redacted>")
+            redact_next = False
+            continue
+        redacted.append(item)
+        if item in {"--cookie", "--challenge-file"}:
+            redact_next = True
+    return " ".join(redacted)
+
+
 def generate_sentinel_token(
     challenge: dict,
     flow: str,
@@ -250,7 +265,7 @@ def generate_sentinel_token(
         ]
 
         logger.info(f"[SentinelRunner] 调用 Node 生成 token, flow={flow}")
-        logger.debug(f"[SentinelRunner] 命令: {' '.join(cmd)}")
+        logger.debug("[SentinelRunner] 命令: %s", _redact_command(cmd))
 
         # 关键：禁用 sentinel.config.json 自动发现（避免外部配置干扰）
         env = os.environ.copy()

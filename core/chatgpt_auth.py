@@ -14,7 +14,7 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
-# 2026-09-14 Roxy 成功样本：signin 不再主动携带 passkey capabilities；
+# 2026-09-14 成功样本：signin 不再主动携带 passkey capabilities；
 # authorize 使用两个 ccaps，并明确返回 ChatGPT 首页。
 _CC_CAPS = "login_methods chatgpt_login_finalizer_v1"
 
