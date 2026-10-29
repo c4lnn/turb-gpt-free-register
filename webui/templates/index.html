@@ -200,8 +200,8 @@
       width: 100%; max-width: 100%; min-width: 0;
       max-height: 320px; overflow: auto; line-height: 1.5;
     }
-    #logPanel, #retryLogPanel, #liveLogPanel, #qrPanel { min-width: 0; max-width: 100%; overflow-x: hidden; }
-    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #liveLogPanel:not(.hidden), #qrPanel:not(.hidden) {
+    #logPanel, #retryLogPanel, #liveLogPanel, #totpLogPanel, #qrPanel { min-width: 0; max-width: 100%; overflow-x: hidden; }
+    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #liveLogPanel:not(.hidden), #totpLogPanel:not(.hidden), #qrPanel:not(.hidden) {
       position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
       z-index: 1000; display: block; width: min(1100px, calc(100vw - 48px));
       max-height: min(760px, calc(100vh - 48px)); overflow: hidden;
@@ -209,9 +209,9 @@
       background: var(--surface); box-shadow: 0 0 0 9999px rgba(15,23,42,.45), 0 24px 70px rgba(15,23,42,.34);
     }
     #qrPanel:not(.hidden) { width: min(520px, calc(100vw - 48px)); text-align: center; }
-    #logPanel h3, #retryLogPanel h3, #liveLogPanel h3, #qrPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
-    #logPanel h3 .btn, #retryLogPanel h3 .btn, #liveLogPanel h3 .btn, #qrPanel h3 .btn { margin-left:auto; float:none !important; }
-    #logPanel .log, #retryLogPanel .log, #liveLogPanel .log { max-height: calc(min(760px, calc(100vh - 48px)) - 74px); margin-top:0; }
+    #logPanel h3, #retryLogPanel h3, #liveLogPanel h3, #totpLogPanel h3, #qrPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+    #logPanel h3 .btn, #retryLogPanel h3 .btn, #liveLogPanel h3 .btn, #totpLogPanel h3 .btn, #qrPanel h3 .btn { margin-left:auto; float:none !important; }
+    #logPanel .log, #retryLogPanel .log, #liveLogPanel .log, #totpLogPanel .log { max-height: calc(min(760px, calc(100vh - 48px)) - 74px); margin-top:0; }
     #qrPanel img { display:block; max-width:min(360px, calc(100vw - 96px)); max-height:420px; margin:12px auto; border:1px solid var(--line); border-radius:10px; background:#fff; }
     #qrPanel .qr-link { display:block; word-break:break-all; white-space:normal; font-size:12px; color:var(--muted); margin-top:8px; }
     .hidden { display: none !important; }
@@ -785,6 +785,7 @@
     .accounts-table-v2 .col-email { width: 240px; }
     .accounts-table-v2 .col-source { width: 90px; }
     .accounts-table-v2 .col-token { width: 100px; }
+    .accounts-table-v2 .col-password { width: 120px; min-width: 120px; }
     .accounts-table-v2 .col-checkout { width: 190px; min-width: 190px; }
     .accounts-table-v2 .col-plan { width: 240px; min-width: 240px; }
     .accounts-table-v2 .col-extract-link { width: 240px; min-width: 240px; }
@@ -908,6 +909,18 @@
     .accounts-table-v2 .twofa-code-btn.is-code {
       color: #166534; border-color: #9ee0d6; background: #e7fcf8;
       font-family: ui-monospace, Consolas, monospace; font-weight: 600;
+    }
+    .accounts-table-v2 .acc-v2-twofa-btn {
+      height: 26px; min-height: 26px; padding: 0 8px; border-radius: 4px;
+      border: 1px solid #c6e2ff; background: #ecf5ff; color: #377DFF;
+      font: inherit; font-size: 13px; font-weight: 500; line-height: 1;
+      cursor: pointer; text-align: center; white-space: nowrap;
+    }
+    .accounts-table-v2 .acc-v2-twofa-btn:hover:not(:disabled) {
+      background: #d9ecff; border-color: #79bbff;
+    }
+    .accounts-table-v2 .acc-v2-twofa-btn:disabled {
+      opacity: .55; cursor: not-allowed;
     }
     .accounts-table-v2 .pill.status-running {
       color: #fa8c16; background: #fff7e6; border-color: #ffd591;
@@ -2652,7 +2665,7 @@
         <table class="accounts-table-v2">
           <colgroup>
             <col class="col-check"><col class="col-id"><col class="col-email"><col class="col-source">
-            <col class="col-token"><col class="col-plan"><col class="col-checkout"><col class="col-extract-link"><col class="col-small"><col class="col-status">
+            <col class="col-token"><col class="col-password"><col class="col-plan"><col class="col-checkout"><col class="col-extract-link"><col class="col-small"><col class="col-status">
             <col class="col-note"><col class="col-time"><col class="col-actions">
           </colgroup>
           <thead>
@@ -2662,6 +2675,7 @@
               <th class="col-email">邮箱</th>
               <th class="col-source">来源</th>
               <th class="col-token">AT</th>
+              <th class="col-password">密码</th>
               <th class="col-plan">套餐</th>
               <th class="col-checkout">Checkout类型</th>
               <th class="col-extract-link">提链</th>
@@ -2688,6 +2702,12 @@
         <button class="btn" id="btnCloseLiveLog" style="float:right;min-height:28px;">关闭</button>
       </h3>
       <div class="log" id="liveLogContent">加载中…</div>
+    </div>
+    <div class="body hidden" id="totpLogPanel">
+      <h3>2FA 日志：<span id="totpLogEmail" style="font-size:13px;font-weight:400;color:var(--muted);"></span>
+        <button class="btn" id="btnCloseTotpLog" style="float:right;min-height:28px;">关闭</button>
+      </h3>
+      <div class="log" id="totpLogContent">加载中…</div>
     </div>
   </div>
 
@@ -4275,20 +4295,21 @@ function _twofaCell(r) {
   if (r.totp_enabled) {
     return `<div class="twofa-cell"><button type="button" class="twofa-code-btn" data-account-totp-code="${esc(r.id)}" title="点击生成验证码" aria-live="polite" aria-busy="false">已启用</button></div>`;
   }
-  let statusHtml;
-  if (status === 'enabled') {
-    statusHtml = `<span class="pill status-success" title="${esc(detail || 'TOTP 已启用')}">已启用</span>`;
-  } else if (status === 'already_enabled') {
-    const alreadyTitle = ['远端已启用 TOTP，但本地未保存 Secret', detail].filter(Boolean).join(' · ');
-    statusHtml = `<span class="pill status-used" title="${esc(alreadyTitle)}">已存在</span>`;
-  } else if (status === 'failed') {
-    statusHtml = `<span class="pill status-failed" title="${esc(detail || 'Roxy 2FA 设置失败')}">失败</span>`;
-  } else if (status === 'disabled') {
-    statusHtml = `<span class="acc-v2-muted" title="未执行 2FA">未启用</span>`;
-  } else {
-    statusHtml = '<span class="acc-v2-muted">未设置</span>';
+  const setupStatus = String(r.totp_setup_status || '').toLowerCase();
+  if (setupStatus === 'queued' || setupStatus === 'running') {
+    const label = setupStatus === 'queued' ? '排队中' : '开启中';
+    const setupDetail = [r.totp_setup_message, r.totp_setup_error].filter(Boolean).join(' · ');
+    return `<div class="twofa-cell"><span class="pill status-running" title="${esc(setupDetail || label)}">${label}</span></div>`;
   }
-  return `<div class="twofa-cell">${statusHtml}</div>`;
+  if (status === 'already_enabled') {
+    const alreadyTitle = ['远端已启用 TOTP，但本地未保存 Secret', detail].filter(Boolean).join(' · ');
+    return `<div class="twofa-cell"><span class="pill status-used" title="${esc(alreadyTitle)}">已存在</span></div>`;
+  }
+  const setupTitle = detail ? `${detail}；点击补跑 2FA` : '为该账号开启 2FA，并把 TOTP 密钥写回账号信息';
+  const setupBtn = r.has_access_token
+    ? `<button type="button" class="acc-v2-twofa-btn" data-account-totp-setup="${esc(r.id)}" title="${esc(setupTitle)}">开启2FA</button>`
+    : '<span class="acc-v2-muted">无Token</span>';
+  return `<div class="twofa-cell">${setupBtn}</div>`;
 }
 function _accountsV2MoreMenu(r) {
   const liveCapabilities = r.live_check_capabilities || {};
@@ -4297,6 +4318,7 @@ function _accountsV2MoreMenu(r) {
     : `<button type="button" disabled title="${liveCapabilities.is_running === true ? '查活正在执行' : '查活状态未知或当前不可执行'}">${liveCapabilities.is_running === true ? '查活中…' : '不可查活'}</button>`;
   const parts = [
     `<button type="button" data-account-copy-format="true" data-account-id="${esc(r.id)}" title="按当前选择的格式复制该账号">复制整行</button>`,
+    `<button type="button" data-account-copy-secret="login_credentials" data-account-id="${esc(r.id)}" title="复制邮箱、注册密码和 2FA 密钥">复制登录凭据</button>`,
     `<button type="button" data-account-note="${esc(r.id)}" title="设置/清空该账号备注">备注</button>`,
     liveAction,
     `<button type="button" data-account-live-log="${esc(r.email)}" title="查看该账号最近一次查活日志">查活日志</button>`,
@@ -4305,6 +4327,7 @@ function _accountsV2MoreMenu(r) {
     _extractLinkAction(r),
     _codexAction(r),
     `<button type="button" data-codex-log="${esc(r.email)}" title="查看该账号最近一次 Codex 补跑日志">补跑日志</button>`,
+    `<button type="button" data-account-totp-log="${esc(r.email)}" title="查看该账号最近一次 2FA 设置日志">2FA日志</button>`,
     `<button type="button" data-account-archive="${esc(r.id)}" data-archived="${r.archived ? '0' : '1'}" title="${r.archived ? '恢复到默认账号列表' : '归档后默认账号列表不再显示'}">${r.archived ? '恢复' : '归档'}</button>`,
   ].filter(html => String(html || '').trim());
   return parts.join('');
@@ -4344,6 +4367,7 @@ function renderAccounts() {
       </td>
       <td class="col-source" title="${esc(r.email_source || 'unknown')}">${esc(_statusLabel('emailSource', r.email_source))}</td>
       <td class="col-token">${_tokenCellV2(r)}</td>
+      <td class="col-password">${r.password ? `<span class="mono" title="${esc(r.password)}">${esc(short(r.password, 18))}</span>` : '<span class="acc-v2-muted">-</span>'}</td>
       <td class="col-plan">${_planCell(r)}</td>
       <td class="col-checkout">${_checkoutSessionCell(r)}</td>
       <td class="col-extract-link" data-label="提链">${_extractLinkCell(r) || '<span class="acc-v2-muted">-</span>'}</td>
@@ -4478,6 +4502,65 @@ async function pollLiveLog() {
 }
 $('#btnCloseLiveLog').addEventListener('click', closeLiveLogModal);
 
+// ---------- 2FA 设置日志面板 ----------
+let totpLogEmail = null, totpLogTimer = null;
+
+function openTotpLog(email) {
+  totpLogEmail = email;
+  $('#totpLogEmail').textContent = email;
+  $('#totpLogPanel').classList.remove('hidden');
+  updateModalScrollLock();
+  $('#totpLogContent').textContent = '加载中…';
+  pollTotpLog();
+  clearInterval(totpLogTimer);
+  totpLogTimer = setInterval(pollTotpLog, 5000);
+}
+async function pollTotpLog() {
+  if (!totpLogEmail) return;
+  try {
+    const r = await api(`/api/accounts/totp-setup-log?email=${encodeURIComponent(totpLogEmail)}`);
+    const c = $('#totpLogContent');
+    const atBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 30;
+    c.textContent = r.log || '(暂无日志，等待任务写入…)';
+    if (atBottom) c.scrollTop = c.scrollHeight;
+    if (!r.running) {
+      clearInterval(totpLogTimer);
+      loadAccounts();
+    }
+  } catch(e) {}
+}
+function closeTotpLogModal() {
+  $('#totpLogPanel').classList.add('hidden');
+  updateModalScrollLock();
+  clearInterval(totpLogTimer);
+  totpLogTimer = null;
+  totpLogEmail = null;
+}
+$('#btnCloseTotpLog').addEventListener('click', closeTotpLogModal);
+
+// 为单个账号开启 2FA（独立补跑）
+async function setupAccountTotp(id, btn) {
+  const acc = ACCOUNTS.find(a => Number(a.id) === Number(id));
+  const email = acc?.email || '';
+  if (!confirm(`确定为该账号开启 2FA？\n\n${email}\n\n完成后会把 TOTP 密钥写回账号信息。`)) return;
+  if (btn) btn.disabled = true;
+  try {
+    const r = await api(`/api/accounts/${encodeURIComponent(id)}/totp-setup`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({}),
+    });
+    showToast(r.message || '2FA 已开始开启');
+    planStatusRevision = '';
+    await loadAccounts();
+    await pollAccountPlanStatuses();
+  } catch (err) {
+    showToast('开启 2FA 失败: ' + err.message);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 // 账号操作按钮（事件委托）
 async function onAccountsBodyClick(e) {
   const totpButton = e.target.closest('[data-account-totp-code]');
@@ -4530,6 +4613,18 @@ async function onAccountsBodyClick(e) {
   if (e.target.closest('.acc-v2-more-menu')) {
     // 点菜单项后收起，再继续走下面的动作处理
     closeAccountsV2MoreMenus();
+  }
+
+  const totpSetupBtn = e.target.closest('[data-account-totp-setup]');
+  if (totpSetupBtn) {
+    await setupAccountTotp(Number(totpSetupBtn.dataset.accountTotpSetup), totpSetupBtn);
+    return;
+  }
+
+  const totpLogBtn = e.target.closest('[data-account-totp-log]');
+  if (totpLogBtn) {
+    openTotpLog(totpLogBtn.dataset.accountTotpLog);
+    return;
   }
 
   const copySecretBtn = e.target.closest('[data-account-copy-secret], [data-account-copy-format]');

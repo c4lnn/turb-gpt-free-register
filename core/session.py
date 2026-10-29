@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-curl_cffi Session 封装
+可选 curl_cffi / wreq 的协议 Session 封装
 统一管理 Cookie、请求头和 TLS 指纹
 """
 import logging
+import hashlib
 import random
+import re
 import threading
 import time
 import uuid
@@ -13,10 +15,11 @@ from curl_cffi.requests import Session
 
 from config import (
     USER_AGENT, SEC_CH_UA, SEC_CH_UA_PLATFORM, SEC_CH_UA_MOBILE,
-    SEC_CH_UA_FULL_VERSION, SEC_CH_UA_FULL_VERSION_LIST, SEC_CH_UA_PLATFORM_VERSION, SEC_CH_UA_ARCH,
+    SEC_CH_UA_FULL_VERSION_LIST, SEC_CH_UA_PLATFORM_VERSION, SEC_CH_UA_ARCH,
     SEC_CH_UA_BITNESS, SEC_CH_UA_MODEL, SEND_HIGH_ENTROPY_CLIENT_HINTS,
     ACCEPT_LANGUAGE, IMPERSONATE, OAI_CLIENT_BUILD_NUMBER, OAI_CLIENT_VERSION,
     REQUEST_TIMEOUT, pick_proxy, pick_browser_profile, validate_browser_profile,
+    BROWSER_PROFILE_POOL, build_browser_environment,
 )
 
 
@@ -24,15 +27,70 @@ logger = logging.getLogger(__name__)
 _GEO_CACHE: dict[str, dict] = {}
 _GEO_CACHE_LOCK = threading.Lock()
 _CF_COOKIE_NAMES = ("cf_clearance", "__cf_bm", "__cfseq", "cf_chl_rc_i", "cf_chl_rc_ni", "cf_chl_rc_m")
+_COUNTRY_NAME_TO_CODE = {
+    "JAPAN": "JP", "CHINA": "CN", "UNITED STATES": "US", "UNITED STATES OF AMERICA": "US",
+    "UNITED KINGDOM": "GB", "GREAT BRITAIN": "GB", "VIETNAM": "VN", "VIET NAM": "VN",
+    "THAILAND": "TH", "SINGAPORE": "SG", "HONG KONG": "HK", "TAIWAN": "TW",
+    "SOUTH KOREA": "KR", "REPUBLIC OF KOREA": "KR", "INDONESIA": "ID", "MALAYSIA": "MY",
+    "PHILIPPINES": "PH", "INDIA": "IN", "AUSTRALIA": "AU", "CANADA": "CA",
+    "GERMANY": "DE", "FRANCE": "FR", "NETHERLANDS": "NL", "BRAZIL": "BR",
+}
+
+
+def close_browser_session(session) -> None:
+    """Close a BrowserSession while retaining compatibility with test doubles."""
+    if session is None:
+        return
+    close = getattr(type(session), "close", None)
+    if callable(close):
+        close(session)
+        return
+    raw_session = getattr(session, "session", None)
+    if raw_session is not None:
+        raw_session.close()
+
+
+def _seed_uuid(seed: str, salt: str) -> str:
+    text = f"{salt}:{seed}".strip()
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, text))
+
+
+def _seed_int(seed: str, salt: str, *, bits: int = 63) -> int:
+    digest = hashlib.sha256(f"{salt}:{seed}".encode("utf-8")).digest()
+    nbytes = max(1, (bits + 7) // 8)
+    value = int.from_bytes(digest[:nbytes], "big")
+    mask = (1 << bits) - 1
+    return value & mask
+
+
+def _seeded_browser_profile(seed: str, geo: dict | None = None) -> dict:
+    if not seed:
+        return pick_browser_profile(geo)
+    pool = list(BROWSER_PROFILE_POOL or [])
+    if not pool:
+        return pick_browser_profile(geo)
+    idx = _seed_int(seed, "browser_profile_index", bits=32) % len(pool)
+    return build_browser_environment(geo, base_profile=pool[idx])
 
 
 class BrowserSession:
     """
     模拟 Chrome 浏览器的 HTTP 会话管理器。
-    使用 curl_cffi 的 impersonate 功能绕过 Cloudflare TLS 指纹检测。
+    通过 curl_cffi / wreq 模拟浏览器 TLS 指纹，不负责执行交互式挑战。
     """
 
-    def __init__(self, proxy: str = None, *, detect_exit_geo: bool = True):
+    def __init__(
+        self,
+        proxy: str = None,
+        *,
+        detect_exit_geo: bool = True,
+        device_id: str | None = None,
+        auth_session_logging_id: str | None = None,
+        oai_session_id: str | None = None,
+        sentinel_sid: str | None = None,
+        browser_profile: dict | None = None,
+        fingerprint_seed: str | None = None,
+    ):
         """
         初始化会话。
 
@@ -43,44 +101,110 @@ class BrowserSession:
             detect_exit_geo: 是否探测出口 IP 并自动选择语言/时区画像。
                              套餐查询等短请求可关闭，避免额外网络等待。
         """
-        # proxy=None  → 从池里随机抽（默认行为）
+        # proxy=None  → 从池里随机抽（默认行为），并按代理池上游配置决定是否链式
         # proxy=""    → 禁用代理（直连）
-        # proxy="..." → 使用指定代理
+        # proxy="..." → 使用指定代理，不套用代理池上游
+        self._proxy_pool_relay = None
         if proxy is None:
             self.proxy = pick_proxy()
+            self.proxy_target = self.proxy
+            if self.proxy:
+                from core.proxy_chain import open_proxy_pool_proxy
+                transport_proxy, self._proxy_pool_relay = open_proxy_pool_proxy(self.proxy)
+            else:
+                transport_proxy = ""
         else:
             self.proxy = proxy
+            self.proxy_target = proxy
+            transport_proxy = proxy
 
-        # 生成设备ID（oai-did），整个注册流程复用
-        self.device_id = str(uuid.uuid4())
+        self.fingerprint_seed = str(fingerprint_seed or "").strip()
+
+        # 生成/复用设备ID（oai-did），整个任务周期复用。
+        if device_id:
+            self.device_id = str(device_id)
+        elif self.fingerprint_seed:
+            self.device_id = _seed_uuid(self.fingerprint_seed, "device_id")
+        else:
+            self.device_id = str(uuid.uuid4())
 
         # 生成 auth_session_logging_id
-        self.auth_session_logging_id = str(uuid.uuid4())
+        if auth_session_logging_id:
+            self.auth_session_logging_id = str(auth_session_logging_id)
+        elif self.fingerprint_seed:
+            self.auth_session_logging_id = _seed_uuid(self.fingerprint_seed, "auth_session_logging_id")
+        else:
+            self.auth_session_logging_id = str(uuid.uuid4())
+
+        # Auth Web 在同一份 document 内复用该 ID；真正发生页面导航时再轮换。
+        self.document_navigation_id = str(uuid.uuid4())
 
         # ChatGPT 前端会话 ID：CES / Statsig / API 链路内保持稳定。
-        self.oai_session_id = str(uuid.uuid4())
+        if oai_session_id:
+            self.oai_session_id = str(oai_session_id)
+        elif self.fingerprint_seed:
+            self.oai_session_id = _seed_uuid(self.fingerprint_seed, "oai_session_id")
+        else:
+            self.oai_session_id = str(uuid.uuid4())
 
         # Datadog/RUM 关联 ID：每个 BrowserSession 独立生成，禁止跨账号复用。
-        # 只作为前端同形态诊断头，贯穿本会话内所有 auth/chatgpt/sentinel API 调用。
-        self.datadog_trace_id = str(random.getrandbits(63))
-        self.datadog_parent_id = str(random.getrandbits(63))
+        # 同一账号的运行时环境尽量保持固定，避免同账号多次操作指纹漂移。
+        if self.fingerprint_seed:
+            self.datadog_trace_id = str(_seed_int(self.fingerprint_seed, "datadog_trace_id"))
+            self.datadog_parent_id = str(_seed_int(self.fingerprint_seed, "datadog_parent_id"))
+        else:
+            self.datadog_trace_id = str(random.getrandbits(63))
+            self.datadog_parent_id = str(random.getrandbits(63))
         self.datadog_origin = "rum"
+        # 先使用配置默认值，加载真实 ChatGPT 登录页后从 data-build/data-seq
+        # 动态同步，避免滚动发布期间继续发送过期的前端版本头。
+        self.client_build_number = str(OAI_CLIENT_BUILD_NUMBER)
+        self.client_version = str(OAI_CLIENT_VERSION)
 
         # Sentinel SDK 内部 sid：真实 SDK 会单独生成一个 UUID，和 oai-did 不是同一个值。
         # Python 初始 p 与 Node Runner 最终 token 都复用这个 sid，保持同一 SDK 实例语义。
-        self.sentinel_sid = str(uuid.uuid4())
-        self.react_listening_key = "_reactListening" + uuid.uuid4().hex[:12]
-        self.react_container_key = "__reactContainer$" + uuid.uuid4().hex[:11]
+        if sentinel_sid:
+            self.sentinel_sid = str(sentinel_sid)
+        elif self.fingerprint_seed:
+            self.sentinel_sid = _seed_uuid(self.fingerprint_seed, "sentinel_sid")
+        else:
+            self.sentinel_sid = str(uuid.uuid4())
+        # 密码注册 iframe 与顶层 Auth 页是两个独立 Sentinel SDK 实例。
+        if self.fingerprint_seed:
+            self.sentinel_iframe_sid = _seed_uuid(self.fingerprint_seed, "sentinel_iframe_sid")
+        else:
+            self.sentinel_iframe_sid = str(uuid.uuid4())
+        if self.fingerprint_seed:
+            self.react_listening_key = "_reactListening" + _seed_uuid(self.fingerprint_seed, "react_listening_key").replace("-", "")[:12]
+            self.react_container_key = "__reactContainer$" + _seed_uuid(self.fingerprint_seed, "react_container_key").replace("-", "")[:11]
+        else:
+            self.react_listening_key = "_reactListening" + uuid.uuid4().hex[:12]
+            self.react_container_key = "__reactContainer$" + uuid.uuid4().hex[:11]
         self.react_resources_key = "__reactResources$" + self.react_container_key.split("$", 1)[1]
 
-        # 创建 curl_cffi 会话
-        self.session = Session(impersonate=IMPERSONATE)
+        # 每个会话固定后端；Web 配置热更新只影响后续新会话。
+        from config import browser as browser_cfg
+        self.http_client = str(browser_cfg.PROTOCOL_HTTP_CLIENT).strip().lower()
+        from core.protocol_profiles import validate_protocol_profile, align_browser_profile
+        self.impersonate = (browser_cfg.CURL_CFFI_IMPERSONATE if self.http_client == "curl_cffi"
+                            else browser_cfg.WREQ_EMULATION)
+        self.impersonate = validate_protocol_profile(self.http_client, str(self.impersonate).strip())
+        if self.http_client == "curl_cffi":
+            self.session = Session(impersonate=self.impersonate)
+        elif self.http_client == "wreq":
+            from core.wreq_session import WreqSession
+            self.session = WreqSession(impersonate=self.impersonate)
+        else:
+            raise ValueError(f"未知协议 HTTP 客户端: {self.http_client}")
+        logger.info("[协议会话] HTTP 客户端=%s 指纹=%s 实际实现=%s.%s",
+                    self.http_client, self.impersonate,
+                    type(self.session).__module__, type(self.session).__name__)
 
         # 设置代理
-        if self.proxy:
+        if transport_proxy:
             self.session.proxies = {
-                "http": self.proxy,
-                "https": self.proxy,
+                "http": transport_proxy,
+                "https": transport_proxy,
             }
 
         # 设置超时
@@ -90,14 +214,15 @@ class BrowserSession:
         self.blocked_until = 0.0
         self.blocked_reason = ""
 
-        # Auth 页面导航关联 ID 只属于当前 BrowserSession，不跨会话/账号复用。
-        self.auth_document_navigation_id = ""
-
         # 先用当前代理检测出口 IP 地理信息，再为本会话挑一份稳定浏览器画像。
         # 这样 Accept-Language / navigator.language / timezone 可自动跟随出口地区。
         self.exit_geo = self._detect_exit_geo() if detect_exit_geo else {}
         self._enforce_proxy_quality()
-        self.browser_profile = pick_browser_profile(self.exit_geo)
+        if browser_profile:
+            self.browser_profile = dict(browser_profile)
+        else:
+            self.browser_profile = dict(_seeded_browser_profile(self.fingerprint_seed, self.exit_geo))
+        self.browser_profile = align_browser_profile(self.browser_profile, self.impersonate)
         self.browser_profile["react_listening_key"] = self.react_listening_key
         self.browser_profile["react_container_key"] = self.react_container_key
         self.browser_profile["react_resources_key"] = self.react_resources_key
@@ -108,11 +233,27 @@ class BrowserSession:
         # 让 HTTP Cookie、OAuth 参数 ext-oai-did、Sentinel 里的 id 三者一致。
         # 浏览器里 oai-did 通常会作为一方 Cookie 存在；协议层主动补齐可减少同一会话内
         # “头部/参数/JS 指纹有设备 ID，但 Cookie Jar 为空”的不一致。
-        for domain in ("chatgpt.com", "auth.openai.com", "sentinel.openai.com"):
-            self.session.cookies.set("oai-did", self.device_id, domain=domain, path="/")
+        # 注意：预检阶段（chatgpt.com/auth/login）若携带主动补齐的 oai-did/oai-locale
+        # Cookie，会被 Cloudflare 判定异常返回 403（低信誉出口地区尤其明显）。因此这里
+        # 只记录待补齐状态，等 network_preflight 通过后再由 seed_oai_cookies() 写入 Jar。
+        self._oai_cookies_seeded = False
 
         # Cloudflare 状态只能来自真实响应 Set-Cookie；这里仅记录变化，不主动伪造/覆盖。
         self._cf_cookie_seen = self.cf_cookie_snapshot()
+
+    def seed_oai_cookies(self) -> None:
+        """预检通过后补齐 oai-did/oai-locale 一方 Cookie（幂等）。
+
+        预检阶段带这些主动 Cookie 会触发 Cloudflare 403；等 chatgpt.com 连通性建立
+        后再写入，既保持 OAuth/Sentinel 的设备 ID 一致性，又不污染预检。
+        """
+        if getattr(self, "_oai_cookies_seeded", False):
+            return
+        self._oai_cookies_seeded = True
+        locale = self.navigator_language()
+        for domain in ("chatgpt.com", "auth.openai.com", "sentinel.openai.com"):
+            self.session.cookies.set("oai-did", self.device_id, domain=domain, path="/")
+            self.session.cookies.set("oai-locale", locale, domain=domain, path="/")
 
     def cf_cookie_snapshot(self) -> dict:
         """返回当前 CookieJar 中的 Cloudflare 关键 Cookie 摘要，便于确认同 IP/同会话连续性。"""
@@ -125,6 +266,21 @@ class BrowserSession:
         except Exception:
             pass
         return out
+
+    def close(self) -> None:
+        """Close the HTTP session and any proxy-pool relay owned by this session."""
+        try:
+            self.session.close()
+        finally:
+            relay, self._proxy_pool_relay = self._proxy_pool_relay, None
+            if relay is not None:
+                relay.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
 
     @staticmethod
     def _short_value(value: object, limit: int = 80) -> str:
@@ -198,7 +354,7 @@ class BrowserSession:
     def _observe_cf_cookie_changes(self, url: str) -> None:
         current = self.cf_cookie_snapshot()
         if current != getattr(self, "_cf_cookie_seen", {}):
-            logger.info("[CF] Cookie 状态更新 url=%s keys=%s", self._url_label(url), sorted(current.keys()))
+            logger.info("[CF] Cookie 状态更新 url=%s keys=%s", url, sorted(current.keys()))
             self._cf_cookie_seen = current
 
     def _enforce_proxy_quality(self) -> None:
@@ -242,10 +398,25 @@ class BrowserSession:
         return "; ".join(pairs)
 
     def auth_cookie_header(self) -> str:
-        return self._cookie_header_for_domain("auth.openai.com") or f"oai-did={self.device_id}"
+        return self._cookie_header_with_device("auth.openai.com")
 
     def chatgpt_cookie_header(self) -> str:
-        return self._cookie_header_for_domain("chatgpt.com") or f"oai-did={self.device_id}"
+        return self._cookie_header_with_device("chatgpt.com")
+
+    def _cookie_header_with_device(self, domain: str) -> str:
+        """导出 Cookie，并确保设备/语言 cookie 不会因 Jar 合并而丢失。"""
+        existing = self._cookie_header_for_domain(domain)
+        pairs = [p.strip() for p in existing.split(";") if p.strip()]
+        names = {p.split("=", 1)[0].strip() for p in pairs if "=" in p}
+        if "oai-did" not in names:
+            pairs.append(f"oai-did={self.device_id}")
+        if "oai-locale" not in names:
+            pairs.append(f"oai-locale={self.navigator_language()}")
+        return "; ".join(pairs)
+
+    def chatgpt_cookie_header_with_device(self) -> str:
+        """兼容提链项目的显式 API，供需要手工 Cookie 头的调用点使用。"""
+        return self._cookie_header_with_device("chatgpt.com")
 
     def _detect_exit_geo(self) -> dict:
         """通过当前代理检测出口 IP 地理信息；失败返回空 dict 并回退到默认地区画像。"""
@@ -289,6 +460,13 @@ class BrowserSession:
         return {}
 
     @staticmethod
+    def _normalize_country_code(value: object) -> str:
+        text = str(value or "").strip().upper().replace("_", " ")
+        if len(text) == 2 and text.isalpha():
+            return text
+        return _COUNTRY_NAME_TO_CODE.get(text, text if len(text) == 2 else "")
+
+    @staticmethod
     def _normalize_geo_response(data: dict) -> dict:
         """兼容 ipinfo / ipapi / ipwho.is 等常见 JSON 字段。"""
         if not isinstance(data, dict):
@@ -296,9 +474,18 @@ class BrowserSession:
         timezone = data.get("timezone")
         if isinstance(timezone, dict):
             timezone = timezone.get("id") or timezone.get("name")
+        # ipwho.is 的 country="Japan"、country_code="JP"；旧逻辑优先 country
+        # 会得到伪代码 JAPAN，随后语言画像错误回落 en-US。始终优先 ISO 字段。
+        raw_country = data.get("country_code") or data.get("countryCode")
+        if not raw_country:
+            country_obj = data.get("country")
+            if isinstance(country_obj, dict):
+                raw_country = country_obj.get("code") or country_obj.get("iso_code") or country_obj.get("name")
+            else:
+                raw_country = country_obj
         return {
             "ip": data.get("ip") or data.get("query"),
-            "country": (data.get("country") or data.get("country_code") or data.get("countryCode") or "").upper(),
+            "country": BrowserSession._normalize_country_code(raw_country),
             "region": data.get("region") or data.get("regionName"),
             "city": data.get("city"),
             "timezone": timezone or "",
@@ -324,7 +511,6 @@ class BrowserSession:
                 headers["sec-ch-ua-platform"] = str(profile.get("sec_ch_ua_platform") or SEC_CH_UA_PLATFORM)
             if SEND_HIGH_ENTROPY_CLIENT_HINTS:
                 headers.update({
-                    "sec-ch-ua-full-version": str(profile.get("sec_ch_ua_full_version") or SEC_CH_UA_FULL_VERSION),
                     "sec-ch-ua-full-version-list": str(profile.get("sec_ch_ua_full_version_list") or SEC_CH_UA_FULL_VERSION_LIST),
                     "sec-ch-ua-platform-version": str(profile.get("sec_ch_ua_platform_version") or SEC_CH_UA_PLATFORM_VERSION),
                     "sec-ch-ua-arch": str(profile.get("sec_ch_ua_arch") or SEC_CH_UA_ARCH),
@@ -368,10 +554,18 @@ class BrowserSession:
 
     def _attach_auth_rum_headers(self, headers: dict) -> dict:
         """Auth Web JSON 接口头：HAR 中只出现 RUM/trace/access-flow，不带 oai-client-*。"""
+        # 浏览器每个 fetch 都创建新的 span，而不是整个登录链复用同一 trace。
+        self.datadog_trace_id = str(random.getrandbits(64) or 1)
+        self.datadog_parent_id = str(random.getrandbits(64) or 1)
         headers.update(self.get_trace_context_headers())
         headers["x-access-flow-invocation-id"] = str(uuid.uuid4())
+        headers["x-openai-document-navigation-id"] = self.document_navigation_id
         headers.update(self.get_datadog_headers())
         return headers
+
+    def rotate_document_navigation_id(self) -> str:
+        self.document_navigation_id = str(uuid.uuid4())
+        return self.document_navigation_id
 
     def js_timezone_offset_min(self) -> int:
         """返回 JS Date.getTimezoneOffset() 语义：UTC-local，东八区为 -480。"""
@@ -385,12 +579,34 @@ class BrowserSession:
 
     def _attach_oai_context_headers(self, headers: dict) -> dict:
         """补齐同一设备上下文头，和 oai-did Cookie / OAuth ext-oai-did 保持一致。"""
-        headers["oai-client-build-number"] = OAI_CLIENT_BUILD_NUMBER
-        headers["oai-client-version"] = OAI_CLIENT_VERSION
+        headers["oai-client-build-number"] = str(getattr(self, "client_build_number", OAI_CLIENT_BUILD_NUMBER))
+        headers["oai-client-version"] = str(getattr(self, "client_version", OAI_CLIENT_VERSION))
         headers["oai-device-id"] = self.device_id
         headers["oai-language"] = self.navigator_language()
         headers["oai-session-id"] = self.oai_session_id
         return headers
+
+    def observe_chatgpt_document(self, response) -> None:
+        """从本次真实登录页 HTML 同步 ChatGPT 前端 build 元数据。"""
+        try:
+            final_url = str(getattr(response, "url", "") or "")
+            if urlparse(final_url).hostname != "chatgpt.com":
+                return
+            html = str(getattr(response, "text", "") or "")
+            build = re.search(r'\bdata-build=["\']([^"\']+)', html[:200000])
+            seq = re.search(r'\bdata-seq=["\']([^"\']+)', html[:200000])
+            if build:
+                self.client_version = build.group(1)
+                self.browser_profile["build_id"] = self.client_version
+            if seq:
+                self.client_build_number = seq.group(1)
+            if build or seq:
+                logger.info(
+                    "[指纹] 已从 ChatGPT 登录页同步前端版本：build=%s seq=%s",
+                    self.client_version, self.client_build_number,
+                )
+        except Exception as exc:
+            logger.debug("[指纹] 解析 ChatGPT 登录页 build 失败：%s", exc)
 
     def _attach_frontend_api_headers(self, headers: dict) -> dict:
         """前端 API 统一头：BrowserProfile + oai 上下文 + Datadog。"""
@@ -447,19 +663,6 @@ class BrowserSession:
         })
         return self._attach_auth_rum_headers(headers)
 
-    def reset_auth_document_navigation_context(self) -> None:
-        """清空当前会话的 Auth 页面导航关联 ID。"""
-        self.auth_document_navigation_id = ""
-
-    def attach_auth_document_navigation_header(self, headers: dict) -> dict:
-        """仅在 Auth 上游真实提供时透传页面导航关联 ID。"""
-        value = str(getattr(self, "auth_document_navigation_id", "") or "").strip()
-        if value:
-            headers["x-openai-document-navigation-id"] = value
-        else:
-            logger.debug("[Auth] x-openai-document-navigation-id present=False")
-        return headers
-
     def get_auth_navigate_headers(self, referer: str = "https://chatgpt.com/", user_initiated: bool = True, target_origin: str = "https://auth.openai.com") -> dict:
         """
         获取 auth.openai.com 导航请求头（用于GET页面请求）。
@@ -471,13 +674,16 @@ class BrowserSession:
             "sec-fetch-site": self._sec_fetch_site_for(target_origin, referer),
             "sec-fetch-mode": "navigate",
             "sec-fetch-dest": "document",
-            "referer": referer,
             "priority": "u=0, i",
             "upgrade-insecure-requests": "1",
         })
+        if referer:
+            headers["referer"] = referer
         if user_initiated:
             headers["sec-fetch-user"] = "?1"
-        return self._attach_datadog_headers(headers)
+        # document 导航由浏览器网络栈发出，不携带 fetch/XHR 使用的
+        # x-datadog-* 自定义头；跨站 OAuth 导航尤其需要保持原生头集合。
+        return headers
 
     def get_chatgpt_navigate_headers(self, referer: str = "https://chatgpt.com/", user_initiated: bool = True) -> dict:
         """获取 chatgpt.com 页面导航请求头，用于预热登录页 / 回到应用页。"""
@@ -487,32 +693,51 @@ class BrowserSession:
             "sec-fetch-site": self._sec_fetch_site_for("https://chatgpt.com", referer),
             "sec-fetch-mode": "navigate",
             "sec-fetch-dest": "document",
-            "referer": referer,
             "priority": "u=0, i",
             "upgrade-insecure-requests": "1",
         })
+        if referer:
+            headers["referer"] = referer
         if user_initiated:
             headers["sec-fetch-user"] = "?1"
-        return self._attach_datadog_headers(headers)
+        return headers
 
     def get_sentinel_headers(self) -> dict:
         """
         获取 sentinel.openai.com 的请求头。
         用于步骤6、9、11。
         """
-        from config import SENTINEL_FRAME_URL
+        from config import SENTINEL_SV
         headers = self._get_common_headers()
         headers.update({
             "accept": "*/*",
             "content-type": "text/plain;charset=UTF-8",
             "origin": "https://sentinel.openai.com",
-            "referer": SENTINEL_FRAME_URL,
+            "referer": f"https://sentinel.openai.com/backend-api/sentinel/frame.html?sv={SENTINEL_SV}",
             "sec-fetch-site": "same-origin",
             "sec-fetch-mode": "cors",
             "sec-fetch-dest": "empty",
             "priority": "u=1, i",
         })
-        return self._attach_frontend_api_headers(headers)
+        # 成功浏览器样本的 Sentinel iframe fetch 不带 oai-client-* 或
+        # x-datadog-*，只保留标准 CORS 请求头。
+        return headers
+
+    def get_sentinel_frame_headers(self, user_initiated: bool = False) -> dict:
+        """Sentinel SDK iframe 的同站文档导航头。"""
+        headers = self._get_common_headers()
+        headers.update({
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "referer": "https://auth.openai.com/",
+            "sec-fetch-site": "same-site",
+            "sec-fetch-mode": "navigate",
+            "sec-fetch-dest": "iframe",
+            "priority": "u=0, i",
+            "upgrade-insecure-requests": "1",
+        })
+        if user_initiated:
+            headers["sec-fetch-user"] = "?1"
+        return headers
 
 
     @staticmethod
@@ -557,6 +782,15 @@ class BrowserSession:
             remain = max(0, int(self.blocked_until - time.time()))
             raise RuntimeError(f"当前 BrowserSession 已熔断冷却（剩余 {remain}s）：{self.blocked_reason}")
 
+    def reset_circuit_breaker(self) -> None:
+        """清理一次可选预热产生的本地熔断状态。
+
+        某些 best-effort bootstrap 接口返回 403 时，不代表后续正式认证接口
+        不可用；调用方完成错误隔离后可显式恢复本会话继续执行。
+        """
+        self.blocked_until = 0.0
+        self.blocked_reason = ""
+
     @staticmethod
     def _parse_retry_after(value: str | None) -> int:
         if not value:
@@ -569,52 +803,14 @@ class BrowserSession:
     def _observe_response_for_circuit_breaker(self, resp, url: str):
         status = int(getattr(resp, "status_code", 0) or 0)
         self._observe_cf_cookie_changes(url)
-        self._observe_auth_document_navigation_id(resp, url)
         if status not in (403, 429):
             return resp
         retry_after = self._parse_retry_after(getattr(resp, "headers", {}).get("retry-after") if getattr(resp, "headers", None) else None)
         cool_down = retry_after if retry_after > 0 else (300 if status == 429 else 900)
         self.blocked_until = max(self.blocked_until, time.time() + min(cool_down, 3600))
-        url_label = self._url_label(url)
-        self.blocked_reason = f"HTTP {status} from {url_label}"
-        logger.warning("[熔断] 当前会话收到 HTTP %s，进入冷却 %ss，停止后续请求：%s", status, min(cool_down, 3600), url_label)
+        self.blocked_reason = f"HTTP {status} from {url}"
+        logger.warning("[熔断] 当前会话收到 HTTP %s，进入冷却 %ss，停止后续请求：%s", status, min(cool_down, 3600), url)
         return resp
-
-    @staticmethod
-    def _header_value(headers, name: str) -> str:
-        wanted = str(name or "").lower()
-        for key, value in (headers or {}).items():
-            if str(key).lower() == wanted:
-                return str(value or "").strip()
-        return ""
-
-    def _observe_auth_document_navigation_id(self, resp, url: str) -> None:
-        """从 Auth 响应及重定向历史中保存真实导航关联 ID。"""
-        responses = list(getattr(resp, "history", []) or [])
-        responses.append(resp)
-        for candidate in responses:
-            candidate_url = str(getattr(candidate, "url", "") or url)
-            try:
-                host = (urlparse(candidate_url).hostname or "").lower()
-            except Exception:
-                host = ""
-            if host != "auth.openai.com":
-                continue
-            value = self._header_value(
-                getattr(candidate, "headers", {}) or {},
-                "x-openai-document-navigation-id",
-            )
-            if value:
-                self.auth_document_navigation_id = value
-
-    @staticmethod
-    def _url_label(url: str) -> str:
-        """仅保留 URL 的 origin/path，避免日志泄露 query 中的认证上下文。"""
-        try:
-            parsed = urlparse(str(url or ""))
-            return f"{parsed.scheme}://{parsed.netloc}{parsed.path}" or str(url or "")
-        except Exception:
-            return "<invalid-url>"
 
     def get(self, url: str, headers: dict = None, **kwargs):
         """发送 GET 请求"""

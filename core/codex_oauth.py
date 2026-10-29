@@ -26,6 +26,8 @@ import logging
 import random
 import secrets
 import time
+
+import pyotp
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlencode, urlparse, parse_qs, quote
@@ -45,6 +47,7 @@ from core.openai_auth import (
     build_sentinel_header,
     network_preflight,
 )
+from core import db
 from core import sms_provider
 from curl_cffi import requests as curl_requests
 
@@ -104,6 +107,42 @@ def _codex_result(
         "callback_url": callback_url,
         "message": message,
     }
+
+
+def _account_registration_password(email: str) -> str:
+    """读取账号的注册密码；不存在则返回空字符串。"""
+    try:
+        acc = db.get_account_by_email(email)
+        if not acc:
+            return ""
+        extra_raw = acc.get("extra_json")
+        extra = {}
+        if isinstance(extra_raw, str) and extra_raw.strip():
+            try:
+                extra = json.loads(extra_raw)
+            except Exception:
+                extra = {}
+        elif isinstance(extra_raw, dict):
+            extra = extra_raw
+        return str(extra.get("registration_password") or acc.get("registration_password") or "").strip()
+    except Exception:
+        return ""
+
+
+def _account_totp_secret(email: str) -> str:
+    """读取账号已开启的 2FA 密钥；不存在则返回空字符串。"""
+    try:
+        acc = db.get_account_by_email(email)
+        if not acc:
+            return ""
+        return str(acc.get("totp_secret") or "").strip()
+    except Exception:
+        return ""
+
+
+def _account_totp_code(email: str) -> str:
+    secret = _account_totp_secret(email)
+    return pyotp.TOTP(secret).now() if secret else ""
 
 
 # ============================================================

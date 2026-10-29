@@ -10,7 +10,6 @@ Sentinel Runner 适配层
 3. 调用 node sentinel-runner.js --challenge-file <临时文件> ...
 4. 捕获 stdout 即为 openai-sentinel-token 的 value
 """
-import hashlib
 import json
 import logging
 import os
@@ -41,8 +40,6 @@ from config import (
     JS_HEAP_SIZE_LIMIT,
     DEVICE_MEMORY,
     SENTINEL_SV,
-    SENTINEL_SDK_SHA256,
-    SENTINEL_SDK_URL,
     OPENAI_BUILD_ID,
 )
 
@@ -58,6 +55,7 @@ _SDK_PATH = _SENTINEL_DIR / "sdk.js"
 # 各 flow 对应的 page-url（与浏览器实际页面一致，影响 sdk.js 指纹生成）
 _FLOW_PAGE_URL = {
     "username_password_create": "https://auth.openai.com/create-account/password",
+    "email_otp_validate": "https://auth.openai.com/email-verification",
     "authorize_continue": "https://auth.openai.com/email-verification",
     "oauth_create_account": "https://auth.openai.com/about-you",
 }
@@ -77,66 +75,12 @@ def _resolve_node_executable() -> str:
     return "node.exe" if sys.platform.startswith("win") else "node"
 
 
-def _runner_output_summary(value: str) -> str:
-    """只返回 runner 输出的字段/长度摘要，避免错误路径泄露 token。"""
-    text = str(value or "")
-    try:
-        parsed = json.loads(text)
-    except Exception:
-        return f"text_length={len(text)}"
-    if isinstance(parsed, dict):
-        fields = {
-            key: len(item) if isinstance(item, str) else type(item).__name__
-            for key, item in parsed.items()
-        }
-        return f"json_fields={fields}"
-    return f"json_type={type(parsed).__name__}"
-
-
-def _redact_command(command: list[str]) -> str:
-    """隐藏 runner 命令中的 Cookie 和临时 challenge 路径。"""
-    redacted = []
-    redact_next = False
-    for item in command:
-        if redact_next:
-            redacted.append("<redacted>")
-            redact_next = False
-            continue
-        redacted.append(item)
-        if item in {"--cookie", "--challenge-file"}:
-            redact_next = True
-    return " ".join(redacted)
-
-
-def _sdk_sha256() -> str:
-    """按仓库规范化的 LF 内容计算 SDK 哈希，兼容 Windows checkout 换行。"""
-    content = _SDK_PATH.read_bytes().replace(b"\r\n", b"\n")
-    return hashlib.sha256(content).hexdigest()
-
-
 def _ensure_runner_environment() -> None:
-    """启动前检查 runner/SDK 存在，并确认 SDK 与版本配置配对。"""
+    """启动前的强制检查：runner.js / sdk.js 必须存在。"""
     if not _RUNNER_PATH.exists():
         raise FileNotFoundError(f"找不到 sentinel-runner.js: {_RUNNER_PATH}")
     if not _SDK_PATH.exists():
         raise FileNotFoundError(f"找不到 sdk.js: {_SDK_PATH}")
-    expected_url = f"https://sentinel.openai.com/sentinel/{SENTINEL_SV}/sdk.js"
-    if SENTINEL_SDK_URL != expected_url:
-        raise RuntimeError(
-            f"Sentinel 版本配置不一致: sv={SENTINEL_SV}, sdk_url={SENTINEL_SDK_URL}"
-        )
-    actual_sha256 = _sdk_sha256()
-    if SENTINEL_SDK_SHA256 and actual_sha256.lower() != SENTINEL_SDK_SHA256.lower():
-        raise RuntimeError(
-            "Sentinel SDK 资源版本不一致: "
-            f"sv={SENTINEL_SV}, expected_sha256={SENTINEL_SDK_SHA256}, "
-            f"actual_sha256={actual_sha256}"
-        )
-
-
-def validate_sentinel_resource_consistency() -> None:
-    """在注册请求前校验 Sentinel 版本、SDK 资源和 runner 入口。"""
-    _ensure_runner_environment()
 
 
 def generate_sentinel_token(
@@ -186,6 +130,15 @@ def generate_sentinel_token(
     js_heap_size_limit = int(profile.get("js_heap_size_limit", JS_HEAP_SIZE_LIMIT))
     device_memory = int(profile.get("device_memory", DEVICE_MEMORY))
     device_pixel_ratio = float(profile.get("device_pixel_ratio", 2))
+    screen_avail_width = int(profile.get("screen_avail_width", screen_width))
+    screen_avail_height = int(profile.get("screen_avail_height", max(0, screen_height - 25)))
+    outer_width = int(profile.get("outer_width", screen_avail_width))
+    outer_height = int(profile.get("outer_height", screen_avail_height))
+    inner_width = int(profile.get("inner_width", profile.get("viewport_width", outer_width)))
+    inner_height = int(profile.get(
+        "inner_height", profile.get("viewport_height", max(0, outer_height - 87))
+    ))
+    color_depth = int(profile.get("color_depth", 24))
     navigator_language = str(profile.get("navigator_language", NAVIGATOR_LANGUAGE))
     navigator_languages = list(profile.get("navigator_languages", NAVIGATOR_LANGUAGES))
     chrome_major = str(profile.get("chrome_major", CHROME_MAJOR))
@@ -203,7 +156,9 @@ def generate_sentinel_token(
     build_id = str(profile.get("build_id", OPENAI_BUILD_ID))
     # Auth 页面 Sentinel token 的 documentElement 通常没有 data-build；
     # ChatGPT 页面 prepare/finalize 的 p 才带前端 build。
-    runner_build_id = "" if page_url is None and flow in {"authorize_continue", "oauth_create_account", "username_password_create"} else build_id
+    runner_build_id = "" if page_url is None and flow in {
+        "email_otp_validate", "authorize_continue", "oauth_create_account", "username_password_create"
+    } else build_id
     timezone_iana = str(profile.get("timezone_iana", TIMEZONE_IANA))
     timezone_name = str(profile.get("timezone_name", TIMEZONE_NAME))
     timezone_offset_minutes = int(profile.get("timezone_offset_minutes", TIMEZONE_OFFSET_MINUTES))
@@ -211,6 +166,14 @@ def generate_sentinel_token(
 
     page = page_url or _FLOW_PAGE_URL.get(
         flow, "https://auth.openai.com/create-account/password"
+    )
+
+    # dx 是用发起 sentinel/req 时的 p 混淆的。该 proof 只在本地传给 runner，
+    # 不应作为 challenge 的额外字段暴露给 SDK。
+    challenge_proof = str(challenge.get("_request_p") or "") if isinstance(challenge, dict) else ""
+    challenge_payload = (
+        {k: v for k, v in challenge.items() if k != "_request_p"}
+        if isinstance(challenge, dict) else challenge
     )
 
     # 把 challenge 写入临时文件，避免命令行长度 / 转义问题
@@ -222,7 +185,7 @@ def generate_sentinel_token(
         encoding="utf-8",
     )
     try:
-        json.dump(challenge, tmp, ensure_ascii=False)
+        json.dump(challenge_payload, tmp, ensure_ascii=False)
         tmp.flush()
         tmp.close()
 
@@ -233,6 +196,7 @@ def generate_sentinel_token(
             "--flow", flow,
             "--device-id", device_id,
             "--sentinel-sid", sentinel_sid or "",
+            "--challenge-proof", challenge_proof,
             "--react-listening-key", react_listening_key or "",
             "--react-container-key", react_container_key or str(profile.get("react_container_key") or ""),
             "--react-resources-key", react_resources_key or str(profile.get("react_resources_key") or ""),
@@ -244,11 +208,24 @@ def generate_sentinel_token(
             "--user-agent-data-platform", user_agent_data_platform,
             "--request-idle-callback", "1" if request_idle_callback else "0",
             "--sdk", str(_SDK_PATH),
-            "--script-src", SENTINEL_SDK_URL,
+            # challenge 请求的初始 p[5] 都来自版本化 SDK；最终提交头则由
+            # Auth 页包装 SDK 生成：密码/资料页为 backend-api，OTP 页为版本化地址。
+            "--script-src", (
+                f"https://sentinel.openai.com/sentinel/{SENTINEL_SV}/sdk.js"
+                if flow == "email_otp_validate"
+                else "https://sentinel.openai.com/backend-api/sentinel/sdk.js"
+            ),
             "--build-id", runner_build_id,
             # 与 config.browser / core.sentinel.py 中的指纹默认值保持一致
             "--width", str(screen_width),
             "--height", str(screen_height),
+            "--avail-width", str(screen_avail_width),
+            "--avail-height", str(screen_avail_height),
+            "--outer-width", str(outer_width),
+            "--outer-height", str(outer_height),
+            "--inner-width", str(inner_width),
+            "--inner-height", str(inner_height),
+            "--color-depth", str(color_depth),
             "--cores", str(hardware_concurrency),
             "--language", navigator_language,
             "--languages", ",".join(navigator_languages),
@@ -267,18 +244,18 @@ def generate_sentinel_token(
             "--sec-ch-ua-arch", sec_ch_ua_arch,
             "--sec-ch-ua-bitness", sec_ch_ua_bitness,
             "--sec-ch-ua-model", sec_ch_ua_model,
+            "--webgl-vendor", str(profile.get("webgl_vendor") or ""),
+            "--webgl-renderer", str(profile.get("webgl_renderer") or ""),
             "--cookie", runner_cookie,
         ]
 
         logger.info(f"[SentinelRunner] 调用 Node 生成 token, flow={flow}")
-        logger.debug("[SentinelRunner] 命令: %s", _redact_command(cmd))
+        logger.debug(f"[SentinelRunner] 命令: {' '.join(cmd)}")
 
         # 关键：禁用 sentinel.config.json 自动发现（避免外部配置干扰）
         env = os.environ.copy()
         env.pop("SENTINEL_CONFIG", None)
         env["SENTINEL_CONFIG"] = "__none__"  # 故意指向不存在的文件，跳过 fallback 列表
-        env["SENTINEL_SV"] = SENTINEL_SV
-        env["SENTINEL_SCRIPT_SRC"] = SENTINEL_SDK_URL
         env["TZ"] = timezone_iana  # 让 Node VM 里的 Date.toString() 与 Python p 指纹时区一致
 
         try:
@@ -306,15 +283,14 @@ def generate_sentinel_token(
             stdout = (proc.stdout or "").strip()
             raise RuntimeError(
                 f"sentinel-runner.js 退出码 {proc.returncode}\n"
-                f"stderr_summary: {_runner_output_summary(stderr)}\n"
-                f"stdout_summary: {_runner_output_summary(stdout)}"
+                f"stderr: {stderr}\n"
+                f"stdout: {stdout}"
             )
 
         token_text = (proc.stdout or "").strip()
         if not token_text:
             raise RuntimeError(
-                "sentinel-runner.js 输出为空, "
-                f"stderr_summary: {_runner_output_summary(proc.stderr or '')}"
+                f"sentinel-runner.js 输出为空, stderr: {(proc.stderr or '').strip()}"
             )
 
         # 简单合法性校验：必须是合法 JSON 且包含关键字段
@@ -322,15 +298,13 @@ def generate_sentinel_token(
             parsed = json.loads(token_text)
         except json.JSONDecodeError as exc:
             raise RuntimeError(
-                "runner 输出不是合法 JSON: "
-                f"output_summary={_runner_output_summary(token_text)}"
+                f"runner 输出不是合法 JSON: {token_text[:200]}"
             ) from exc
 
         for required_key in ("p", "c", "id", "flow"):
             if required_key not in parsed:
                 raise RuntimeError(
-                    f"runner 输出缺少字段 {required_key}: "
-                    f"output_summary={_runner_output_summary(token_text)}"
+                    f"runner 输出缺少字段 {required_key}: {token_text[:200]}"
                 )
 
         # 详细诊断：打印输出 JSON 的所有顶层字段名 + 值长度
@@ -341,7 +315,7 @@ def generate_sentinel_token(
         logger.info(
             f"[SentinelRunner] token 生成成功, flow={flow}, "
             f"包含 turnstile={'t' in parsed and bool(parsed.get('t'))}, "
-            f"包含 so={bool(parsed.get('so'))}, "
+            f"包含 so={bool(parsed.get('_so') or parsed.get('so'))}, "
             f"字段: {field_summary}"
         )
         return token_text

@@ -13,7 +13,6 @@ navigator/screen/timezone/client hints 不能互相打架。
 from __future__ import annotations
 
 from config.env_loader import apply_env_overrides
-from config.openai_protocol import SENTINEL_SDK_URL
 
 import random
 import re
@@ -22,20 +21,26 @@ from zoneinfo import ZoneInfo
 
 
 def _latest_chrome_major(default: str = "146") -> str:
-    """兼容旧模块导入；当前 native curl_cffi target 使用 Chrome 146。"""
+    """兼容旧模块导入；必须与 curl_cffi 实际 TLS impersonate 版本一致。"""
     return default
 
 
-CHROME_MAJOR = _latest_chrome_major()
-CHROME_FULL_VERSION = f"{CHROME_MAJOR}.0.0.0"
+CHROME_MAJOR = "146"
+CHROME_FULL_VERSION = "146.0.0.0"
 
 SAFARI_VERSION = ""
 SAFARI_WEBKIT_VERSION = "537.36"
 MAC_OS_UA_VERSION = "10_15_7"
 
 # ---------- curl_cffi 模拟浏览器 ----------
-# curl_cffi 当前可用的 native target 与 HTTP/JS 画像统一为 Chrome 146。
-IMPERSONATE = f"chrome{CHROME_MAJOR}"
+# curl_cffi 0.15 当前最高内置到 chrome146。UA、Client Hints、JS navigator
+# 必须同步为 146；不能出现 TLS=146、HTTP/JS=149 的跨版本拼接指纹。
+IMPERSONATE = "chrome146"
+
+# BrowserSession 的协议传输后端；不改变 Roxy 等真实浏览器驱动。
+PROTOCOL_HTTP_CLIENT = "curl_cffi"
+CURL_CFFI_IMPERSONATE = "chrome146"
+WREQ_EMULATION = "chrome146"
 
 # ---------- 桌面 Chrome 画像 ----------
 BROWSER_FAMILY = "chrome"
@@ -50,9 +55,11 @@ USER_AGENT = (
     f"Chrome/{CHROME_FULL_VERSION} Safari/{SAFARI_WEBKIT_VERSION}"
 )
 
-SEC_CH_UA = f'"Google Chrome";v="{CHROME_MAJOR}", "Chromium";v="{CHROME_MAJOR}", "Not)A;Brand";v="24"'
-SEC_CH_UA_FULL_VERSION = f'"{CHROME_FULL_VERSION}"'
-SEC_CH_UA_FULL_VERSION_LIST = f'"Google Chrome";v="{CHROME_FULL_VERSION}", "Chromium";v="{CHROME_FULL_VERSION}", "Not)A;Brand";v="24.0.0.0"'
+# 必须与 curl_cffi chrome146 实际发出的品牌顺序和 GREASE 品牌完全一致。
+# 旧值使用 HAR 中 Chrome149 的 Google Chrome/Chromium/Not)A;Brand 顺序，
+# 但 TLS impersonate 已切到 chrome146，造成网络栈与显式 Client Hints 冲突。
+SEC_CH_UA = '"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"'
+SEC_CH_UA_FULL_VERSION_LIST = '"Chromium";v="146.0.0.0", "Not-A.Brand";v="24.0.0.0", "Google Chrome";v="146.0.0.0"'
 SEC_CH_UA_PLATFORM = '"macOS"'
 SEC_CH_UA_PLATFORM_VERSION = '"15.7.0"'
 SEC_CH_UA_MOBILE = "?0"
@@ -60,9 +67,7 @@ SEC_CH_UA_ARCH = '"arm"'
 SEC_CH_UA_BITNESS = '"64"'
 SEC_CH_UA_MODEL = '""'
 SEND_CLIENT_HINTS = True
-# 注册链路按 SAZ 的请求字段集合发送完整 Chromium Client Hints。
-# 具体值始终取当前 BrowserSession 的画像，不复用捕获样本的 Edge/Windows 值。
-SEND_HIGH_ENTROPY_CLIENT_HINTS = True
+SEND_HIGH_ENTROPY_CLIENT_HINTS = False
 
 # ---------- 语言 / 时区 ----------
 BROWSER_LOCALE_PROFILE = "jp"
@@ -84,12 +89,21 @@ CLOUD_PROXY_ORG_KEYWORDS = [
     "data center", "datacenter", "hosting", "host", "server", "cloud",
 ]
 
-# ---------- Roxy 浏览器省流量模式 ----------
-# 默认关闭。开启后只拦截可选的图片/媒体，以及下面明确列出的统计/第三方 URL；
-# 不拦截登录所需的 document、核心 script、stylesheet、xhr/fetch、websocket。
-# 该模式仅应用于 Roxy 本地浏览器；Selenium/CDP 只能按 URL 后缀拦截，若验证码异常可关闭。
+# ---------- Roxy/Cloak 浏览器省流量模式 ----------
+# 默认关闭。开启后拦截可选的图片/媒体、明确列出的统计 URL，
+# 并在本地浏览器代理中继层阻断下列下载域名；
+# 不拦截登录所需的 document、核心 script、stylesheet、xhr/fetch、websocket；
+# Playwright 会放行带验证码/challenge 关键词的 URL。
+# 该模式仅应用于 Roxy/Cloak，本地浏览器才需要节省带宽；Browser Use/Skyvern 云端
+# 浏览器不会安装省流量拦截器。Selenium/CDP 只能按 URL 后缀拦截，若验证码异常可关闭。
 BROWSER_DATA_SAVER_MODE: bool = False
-# 每行一个 resource_type。可选 image/media/font/manifest/texttrack 等；
+# 代理连接前按目标主机拦截，包含子域名，覆盖启动阶段及后台组件下载。
+# 仅本地浏览器使用计量中继且开启省流量模式时生效；[] 关闭域名拦截。
+BROWSER_DATA_SAVER_BLOCKED_PROXY_HOSTS: list[str] = ["dl.google.com", "gvt1.com"]
+# 注册已经拿到 accessToken 后，阻断不再需要的 ChatGPT 应用壳/遥测资源。
+# 仅在 Roxy/Cloak 注册后阶段生效，不影响邮箱、验证码和登录页面。
+BROWSER_DATA_SAVER_DEEP_MODE: bool = True
+# 每行一个 Playwright resource_type。可选 image/media/font/manifest/texttrack 等；
 # 默认只拦截 image、media；也可配置 stylesheet/font 等资源；Roxy 还会通过 Chromium 启动参数关闭图片加载，
 # 遇到页面布局或验证码异常时可关闭模式。
 BROWSER_DATA_SAVER_BLOCKED_RESOURCE_TYPES: list[str] = ["image", "media"]
@@ -98,9 +112,10 @@ BROWSER_DATA_SAVER_BLOCKED_RESOURCE_TYPES: list[str] = ["image", "media"]
 # 不要把 ChatGPT/auth.openai 的 CDN chunk 当作候选：即使某个 chunk 只有少量函数
 # 被调用，也可能负责路由、表单切换或懒加载；需经过单变量 A/B 验证后才能加入规则。
 # 不要把 chatgpt/openai 的核心 API 或 sentinel URL 加到这里。
-# `**` 用于匹配 URL 中的任意路径；Roxy 的 Selenium 会读取这组规则。
+# `**` 用于匹配 URL 中的任意路径；Roxy/Cloak 的 Playwright/Selenium 会读取这组规则。
 BROWSER_DATA_SAVER_BLOCKED_URL_PATTERNS: list[str] = [
     "**://auth.openai.com/awe/api/v2/rum**",
+    "**://chatgpt.com/awe/api/v2/rum**",
     "**://chatgpt.com/ces/statsc/flush**",
     "**://connect.facebook.net/**",
     "**://analytics.tiktok.com/**",
@@ -109,21 +124,36 @@ BROWSER_DATA_SAVER_BLOCKED_URL_PATTERNS: list[str] = [
     "**://accounts.google.com/gsi/client**",
 ]
 
-# ---------- Roxy 浏览器流量明细日志 ----------
-# 默认关闭；开启后在每次注册结束时按单请求总字节降序输出资源 URL、类型、状态和大小。
+# ---------- Roxy/Cloak 浏览器流量明细日志 ----------
+# 默认关闭；开启后在注册结束时仅输出有流量消耗的访问，包含上传/下载/总字节。
+# 按单请求总消耗降序输出；跳过拦截、零字节和本地访问，估算项显式标记。
 # URL 查询参数值会脱敏，不保存请求/响应 body 或完整 Header 内容。
 BROWSER_TRAFFIC_DETAIL_LOG: bool = False
 BROWSER_TRAFFIC_DETAIL_MAX_ENTRIES: int = 2000
 
-# ---------- Roxy 浏览器 JS 精确覆盖率 ----------
+# ---------- Roxy/Cloak 浏览器 JS 精确覆盖率 ----------
 # 开启后通过 Chrome DevTools Protocol Profiler 记录本次会话实际执行过的
 # JavaScript 函数/代码范围。只保存函数名、调用计数和 offset，不读取参数、返回值
-# 或源码；默认关闭，避免给正常注册增加额外开销。
+# 或源码；Browser Use/Skyvern 云端浏览器不启用该监听；默认关闭，避免给正常注册增加额外开销。
 BROWSER_JS_COVERAGE_LOG: bool = False
 BROWSER_JS_COVERAGE_MAX_ENTRIES: int = 1000
 COUNTRY_LOCALE_PROFILE_MAP = {
     "JP": "jp", "CN": "cn", "HK": "hk", "TW": "tw", "US": "us", "CA": "us",
     "SG": "sg", "GB": "gb", "AU": "gb", "DE": "de", "FR": "fr", "NL": "nl",
+    "VN": "vn",
+}
+
+# 没有专用完整画像的出口国家，至少自动匹配浏览器语言。时区仍直接采用 IP
+# 地理接口返回值；这样切换代理国家时不会退回固定的 ja-JP/Asia-Tokyo。
+COUNTRY_LANGUAGE_TAG_MAP = {
+    "TH": "th-TH", "ID": "id-ID", "MY": "ms-MY", "PH": "en-PH",
+    "KR": "ko-KR", "IN": "en-IN", "BR": "pt-BR", "MX": "es-MX",
+    "ES": "es-ES", "IT": "it-IT", "PT": "pt-PT", "PL": "pl-PL",
+    "RU": "ru-RU", "TR": "tr-TR", "AE": "ar-AE", "SA": "ar-SA",
+    "ZA": "en-ZA", "NZ": "en-NZ", "IE": "en-IE", "AT": "de-AT",
+    "CH": "de-CH", "BE": "nl-BE", "SE": "sv-SE", "NO": "nb-NO",
+    "DK": "da-DK", "FI": "fi-FI", "CZ": "cs-CZ", "RO": "ro-RO",
+    "HU": "hu-HU", "GR": "el-GR", "IL": "he-IL", "UA": "uk-UA",
 }
 
 BROWSER_LOCALE_PROFILES = {
@@ -137,6 +167,7 @@ BROWSER_LOCALE_PROFILES = {
     "de": {"navigator_language": "de-DE", "navigator_languages": ["de-DE"], "accept_language": "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7", "timezone_iana": "Europe/Berlin", "timezone_offset_minutes": 2 * 60, "timezone_name": "Central European Summer Time"},
     "fr": {"navigator_language": "fr-FR", "navigator_languages": ["fr-FR"], "accept_language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7", "timezone_iana": "Europe/Paris", "timezone_offset_minutes": 2 * 60, "timezone_name": "Central European Summer Time"},
     "nl": {"navigator_language": "nl-NL", "navigator_languages": ["nl-NL"], "accept_language": "nl-NL,nl;q=0.9,en-US;q=0.8,en;q=0.7", "timezone_iana": "Europe/Amsterdam", "timezone_offset_minutes": 2 * 60, "timezone_name": "Central European Summer Time"},
+    "vn": {"navigator_language": "vi-VN", "navigator_languages": ["vi-VN", "vi", "en-US", "en"], "accept_language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7", "timezone_iana": "Asia/Ho_Chi_Minh", "timezone_offset_minutes": 7 * 60, "timezone_name": "Indochina Time"},
 }
 
 TIMEZONE_NAME_BY_IANA = {
@@ -153,6 +184,8 @@ TIMEZONE_NAME_BY_IANA = {
     "Europe/Berlin": "Central European Summer Time",
     "Europe/Paris": "Central European Summer Time",
     "Europe/Amsterdam": "Central European Summer Time",
+    "Asia/Ho_Chi_Minh": "Indochina Time",
+    "Asia/Bangkok": "Indochina Time",
 }
 
 
@@ -166,59 +199,49 @@ def _offset_minutes_for_timezone(tz_name: str, default: int) -> int:
     return int(default)
 
 
-def _default_locale_profile_key() -> str:
-    """返回有效的默认地区画像 key；配置无效时使用内置 jp 画像。"""
-    configured = str(BROWSER_LOCALE_PROFILE or "").strip().lower()
-    return configured if configured in BROWSER_LOCALE_PROFILES else "jp"
-
-
-def _geo_country(geo: dict | None) -> str:
-    if not isinstance(geo, dict):
-        return ""
-    return str(geo.get("country") or geo.get("country_code") or "").strip().upper()
-
-
-def _mapped_locale_profile_key(geo: dict | None) -> str | None:
-    """返回已命中的地区画像 key；未知国家不返回仅凭时区推断的结果。"""
-    if not isinstance(geo, dict) or not AUTO_BROWSER_LOCALE_FROM_IP:
-        return None
-    mapped = str(COUNTRY_LOCALE_PROFILE_MAP.get(_geo_country(geo)) or "").strip().lower()
-    return mapped if mapped in BROWSER_LOCALE_PROFILES else None
-
-
 def _locale_profile_key_from_geo(geo: dict | None) -> str:
-    return _mapped_locale_profile_key(geo) or _default_locale_profile_key()
+    if not geo or not AUTO_BROWSER_LOCALE_FROM_IP:
+        return BROWSER_LOCALE_PROFILE
+    country = str(geo.get("country") or geo.get("country_code") or "").upper()
+    return COUNTRY_LOCALE_PROFILE_MAP.get(country, BROWSER_LOCALE_PROFILE)
 
 
 def _build_locale_from_geo(geo: dict | None) -> dict:
     key = _locale_profile_key_from_geo(geo)
-    locale = dict(BROWSER_LOCALE_PROFILES[key])
-
-    # GeoIP 时区只有在国家已命中、IANA 值有效且名称完整时才整体覆盖；
-    # 未知国家的时区不能脱离语言画像单独生效。
-    if _mapped_locale_profile_key(geo):
-        tz = str(geo.get("timezone") or "").strip()
-        tz_name = TIMEZONE_NAME_BY_IANA.get(tz, "")
-        if tz and tz_name:
-            try:
-                ZoneInfo(tz)
-            except Exception:
-                pass
+    resolved_profile = key
+    locale = dict(BROWSER_LOCALE_PROFILES.get(key, BROWSER_LOCALE_PROFILES[BROWSER_LOCALE_PROFILE]))
+    if geo and AUTO_BROWSER_LOCALE_FROM_IP:
+        country = str(geo.get("country") or geo.get("country_code") or "").upper()
+        # 专用画像覆盖常见国家；其余已知国家动态生成语言字段。若地理接口
+        # 返回了未知国家，也使用中性的 en-US，而不是泄漏本机默认日语画像。
+        if country not in COUNTRY_LOCALE_PROFILE_MAP:
+            language_tag = COUNTRY_LANGUAGE_TAG_MAP.get(country, "en-US")
+            resolved_profile = f"geo:{country.lower() or 'unknown'}"
+            base_language = language_tag.split("-", 1)[0]
+            languages = [language_tag]
+            if base_language != language_tag:
+                languages.append(base_language)
+            if base_language != "en":
+                languages.extend(["en-US", "en"])
+                accept_language = f"{language_tag},{base_language};q=0.9,en-US;q=0.8,en;q=0.7"
             else:
-                locale.update({
-                    "timezone_iana": tz,
-                    "timezone_offset_minutes": _offset_minutes_for_timezone(tz, int(locale["timezone_offset_minutes"])),
-                    "timezone_name": tz_name,
-                })
-    locale["locale_profile"] = key
+                languages.append("en")
+                accept_language = f"{language_tag},en;q=0.9"
+            locale.update({
+                "navigator_language": language_tag,
+                "navigator_languages": list(dict.fromkeys(languages)),
+                "accept_language": accept_language,
+            })
+        tz = str(geo.get("timezone") or "").strip()
+        if tz:
+            locale["timezone_iana"] = tz
+            locale["timezone_offset_minutes"] = _offset_minutes_for_timezone(tz, int(locale["timezone_offset_minutes"]))
+            locale["timezone_name"] = TIMEZONE_NAME_BY_IANA.get(tz, locale.get("timezone_name", ""))
+    locale["locale_profile"] = resolved_profile
     return locale
 
 
-# Apply overrides before deriving module-level locale constants so direct imports
-# and BrowserSession fallback behavior observe the same configured profile.
-apply_env_overrides(globals(), {'BROWSER_LOCALE_PROFILE': 'str', 'AUTO_BROWSER_LOCALE_FROM_IP': 'bool', 'IP_GEO_TIMEOUT': 'float', 'REJECT_CLOUD_PROXY': 'bool'})
-
-_LOCALE = BROWSER_LOCALE_PROFILES[_default_locale_profile_key()]
+_LOCALE = BROWSER_LOCALE_PROFILES.get(BROWSER_LOCALE_PROFILE, BROWSER_LOCALE_PROFILES["jp"])
 NAVIGATOR_LANGUAGE = _LOCALE["navigator_language"]
 NAVIGATOR_LANGUAGES = list(_LOCALE["navigator_languages"])
 ACCEPT_LANGUAGE = _LOCALE["accept_language"]
@@ -266,7 +289,7 @@ WINDOW_KEY_SAMPLES = [
 SCRIPT_SRC_SAMPLES = [
     "https://accounts.google.com/gsi/client",
     "https://chatgpt.com/cdn-cgi/challenge-platform/scripts/jsd/api.js?onload=jsdOnload",
-    SENTINEL_SDK_URL,
+    "https://sentinel.openai.com/sentinel/20260810913b/sdk.js",
 ]
 
 WINDOW_FEATURE_FLAGS = {
@@ -324,7 +347,6 @@ def build_browser_environment(geo: dict | None = None, base_profile: dict | None
         "user_agent": USER_AGENT,
         "send_client_hints": SEND_CLIENT_HINTS,
         "sec_ch_ua": SEC_CH_UA,
-        "sec_ch_ua_full_version": SEC_CH_UA_FULL_VERSION,
         "sec_ch_ua_platform": SEC_CH_UA_PLATFORM,
         "sec_ch_ua_platform_version": SEC_CH_UA_PLATFORM_VERSION,
         "sec_ch_ua_arch": SEC_CH_UA_ARCH,
@@ -339,6 +361,23 @@ def build_browser_environment(geo: dict | None = None, base_profile: dict | None
         "window_feature_flags": dict(WINDOW_FEATURE_FLAGS),
         "build_id": __import__("config.openai_protocol", fromlist=["OPENAI_BUILD_ID"]).OPENAI_BUILD_ID,
     })
+    # Sentinel VM 与 HTTP 指纹必须使用同一组 screen/window/viewport/GPU 画像。
+    screen_width = int(profile.get("screen_width", 1680))
+    screen_height = int(profile.get("screen_height", 1050))
+    profile.setdefault("screen_avail_width", screen_width)
+    profile.setdefault("screen_avail_height", max(0, screen_height - 25))
+    profile.setdefault("color_depth", 24)
+    profile.setdefault("outer_width", int(profile["screen_avail_width"]))
+    profile.setdefault("outer_height", int(profile["screen_avail_height"]))
+    profile.setdefault("viewport_width", int(profile["outer_width"]))
+    profile.setdefault("viewport_height", max(0, int(profile["outer_height"]) - 87))
+    cores = int(profile.get("hardware_concurrency", 8))
+    chip = "Apple M2 Max" if cores >= 12 else "Apple M2 Pro" if cores >= 10 else "Apple M2"
+    profile.setdefault("webgl_vendor", "Google Inc. (Apple)")
+    profile.setdefault(
+        "webgl_renderer",
+        f"ANGLE (Apple, ANGLE Metal Renderer: {chip}, Unspecified Version)",
+    )
     return profile
 
 
@@ -357,22 +396,11 @@ def validate_browser_profile(profile: dict) -> list[str]:
             issues.append("Safari UA 不一致")
         if profile.get("send_client_hints"):
             issues.append("Safari 不应发送 Chromium Client Hints")
+    elif family == "firefox":
+        if "Firefox/" not in ua or profile.get("send_client_hints"):
+            issues.append("Firefox UA / Client Hints 不一致")
     elif f"Chrome/{profile.get('chrome_full_version')}" not in ua:
         issues.append("UA 与 chrome_full_version 不一致")
-    if family != "safari":
-        chrome_major = str(profile.get("chrome_major") or "")
-        chrome_full_version = str(profile.get("chrome_full_version") or "")
-        sec_ch_ua = str(profile.get("sec_ch_ua") or "")
-        sec_ch_ua_full_version = str(profile.get("sec_ch_ua_full_version") or "")
-        sec_ch_ua_full = str(profile.get("sec_ch_ua_full_version_list") or "")
-        if chrome_major and f'v="{chrome_major}"' not in sec_ch_ua:
-            issues.append("sec-ch-ua 与 chrome_major 不一致")
-        if chrome_full_version and f'v="{chrome_full_version}"' not in sec_ch_ua_full:
-            issues.append("sec-ch-ua-full-version-list 与 chrome_full_version 不一致")
-        if chrome_full_version and sec_ch_ua_full_version != f'"{chrome_full_version}"':
-            issues.append("sec-ch-ua-full-version 与 chrome_full_version 不一致")
-        if chrome_major and IMPERSONATE != f"chrome{chrome_major}":
-            issues.append("curl_cffi impersonate 与 chrome_major 不一致")
     if profile.get("browser_os") == "macOS":
         if "Macintosh; Intel Mac OS X" not in ua:
             issues.append("macOS 画像但 UA 不是 Macintosh")
@@ -387,3 +415,6 @@ def validate_browser_profile(profile: dict) -> list[str]:
         issues.append("navigator.language 不在 navigator.languages 中")
     # requestIdleCallback 是否暴露由画像决定。
     return issues
+
+# ---- .env overrides for WebUI editable fields ----
+apply_env_overrides(globals(), {'PROTOCOL_HTTP_CLIENT': 'str', 'CURL_CFFI_IMPERSONATE': 'str', 'WREQ_EMULATION': 'str', 'BROWSER_LOCALE_PROFILE': 'str', 'AUTO_BROWSER_LOCALE_FROM_IP': 'bool', 'IP_GEO_TIMEOUT': 'float', 'REJECT_CLOUD_PROXY': 'bool', 'BROWSER_DATA_SAVER_MODE': 'bool', 'BROWSER_DATA_SAVER_BLOCKED_PROXY_HOSTS': 'list_str_multiline', 'BROWSER_DATA_SAVER_DEEP_MODE': 'bool', 'BROWSER_DATA_SAVER_BLOCKED_RESOURCE_TYPES': 'list_str_multiline', 'BROWSER_DATA_SAVER_BLOCKED_URL_PATTERNS': 'list_str_multiline', 'BROWSER_TRAFFIC_DETAIL_LOG': 'bool', 'BROWSER_TRAFFIC_DETAIL_MAX_ENTRIES': 'int', 'BROWSER_JS_COVERAGE_LOG': 'bool', 'BROWSER_JS_COVERAGE_MAX_ENTRIES': 'int'})

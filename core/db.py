@@ -959,11 +959,34 @@ def _generic_api_email_line(row: dict) -> str:
     ])
 
 
+def _extract_registration_password(row: dict) -> str:
+    """从账号记录提取 ChatGPT 登录密码（registration_password）。
+
+    优先从 extra_json.registration_password 读取，回退到顶层 registration_password；
+    读取失败或未设置时返回空字符串。
+    """
+    extra_raw = row.get("extra_json")
+    if isinstance(extra_raw, str) and extra_raw.strip():
+        try:
+            extra = json.loads(extra_raw)
+        except Exception:
+            extra = {}
+    elif isinstance(extra_raw, dict):
+        extra = extra_raw
+    else:
+        extra = {}
+    return str(extra.get("registration_password") or row.get("registration_password") or "").strip()
+
+
 def _account_line(row: dict) -> str:
     base = row.get("original_email_line") or row.get("email") or ""
     token = row.get("access_token") or ""
+    gpt_password = _extract_registration_password(row) or "未设置"
     totp = row.get("totp_secret") or ""
-    return f"{base}----{token}----{totp}" if totp else f"{base}----{token}"
+    parts = [base, token, gpt_password]
+    if totp:
+        parts.append(totp)
+    return "----".join(parts)
 
 
 def _registered_email_line(row: dict) -> str:
@@ -2114,6 +2137,99 @@ def update_account_plan_check(acc_id: int | None = None, email: str | None = Non
         else:
             _save_accounts(accounts)
         return True
+
+
+def claim_account_totp_setup(acc_id: int, trigger: str = "manual") -> bool:
+    """原子占用账号 2FA 设置任务；已有未超时任务时返回 False。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None:
+            return False
+        current_status = row.get("totp_setup_status")
+        if current_status in {"queued", "running"}:
+            try:
+                stamp_key = "totp_setup_queued_at" if current_status == "queued" else "totp_setup_started_at"
+                stale_after = _PLAN_CHECK_QUEUE_STALE_SECONDS if current_status == "queued" else _PLAN_CHECK_STALE_SECONDS
+                started_at = datetime.fromisoformat(str(row.get(stamp_key) or ""))
+                if (datetime.now() - started_at).total_seconds() < stale_after:
+                    return False
+            except (TypeError, ValueError):
+                pass
+        now = _now()
+        row["totp_setup_status"] = "queued"
+        row["totp_setup_ok"] = False
+        row["totp_setup_trigger"] = str(trigger or "manual")
+        row["totp_setup_queued_at"] = now
+        row["totp_setup_started_at"] = None
+        row["totp_setup_completed_at"] = None
+        row["totp_setup_error"] = None
+        row["updated_at"] = now
+        _save_accounts(accounts)
+        return True
+
+
+def mark_account_totp_setup_running(acc_id: int) -> bool:
+    """把 2FA 设置任务标记为运行中。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None or row.get("totp_setup_status") not in {"queued", "running"}:
+            return False
+        now = _now()
+        row["totp_setup_status"] = "running"
+        row["totp_setup_started_at"] = now
+        row["totp_setup_error"] = None
+        row["updated_at"] = now
+        _save_accounts(accounts)
+        return True
+
+
+def update_account_totp_secret(acc_id: int, result: dict | None = None) -> bool:
+    """更新账号 2FA/TOTP 设置结果。"""
+    result = result or {}
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None:
+            return False
+        status = str(result.get("status") or ("success" if result.get("ok") else "failed"))
+        ok = bool(result.get("ok")) and status == "success"
+        row["totp_setup_status"] = status
+        row["totp_setup_ok"] = ok
+        row["totp_setup_checked_at"] = result.get("checked_at") or _now()
+        if status in {"success", "failed", "stopped"}:
+            row["totp_setup_completed_at"] = _now()
+        row["totp_setup_error"] = None if ok or status == "running" else result.get("error")
+        secret = str(result.get("totp_secret") or "").strip()
+        if ok and secret:
+            row["totp_secret"] = secret
+        if result.get("message") is not None:
+            row["totp_setup_message"] = result.get("message")
+        row["copy_line"] = _account_line(row)
+        row["updated_at"] = _now()
+        _save_accounts(accounts)
+        return True
+
+
+def recover_interrupted_totp_setups() -> int:
+    """服务启动时恢复上次进程中断的 2FA 设置状态。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        recovered = 0
+        now = _now()
+        for row in accounts:
+            if row.get("totp_setup_status") not in {"queued", "running"}:
+                continue
+            row["totp_setup_status"] = "failed"
+            row["totp_setup_ok"] = False
+            row["totp_setup_error"] = "WebUI 重启导致 2FA 设置中断，请重新开启"
+            row["totp_setup_completed_at"] = now
+            row["updated_at"] = now
+            recovered += 1
+        if recovered:
+            _save_accounts(accounts)
+        return recovered
 
 
 def claim_account_checkout_session(acc_id: int, trigger: str = "manual") -> bool:
