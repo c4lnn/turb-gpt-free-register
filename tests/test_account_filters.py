@@ -131,13 +131,13 @@ class AccountFilterTests(unittest.TestCase):
     def test_email_source_filter_runs_before_pagination_and_preserves_raw_values(self):
         self.accounts_path.write_text(json.dumps([
             {"id": 1, "email": "outlook@example.invalid", "email_source": "outlook"},
-            {"id": 2, "email": "mailcom-one@example.invalid", "email_source": "mailcom"},
+            {"id": 2, "email": "icloud-one@example.invalid", "email_source": "icloud"},
             {"id": 3, "email": "missing@example.invalid"},
             {"id": 4, "email": "legacy@example.invalid", "email_source": "legacy_mail"},
-            {"id": 5, "email": "mailcom-two@example.invalid", "email_source": "mailcom"},
+            {"id": 5, "email": "icloud-two@example.invalid", "email_source": "icloud"},
         ]), encoding="utf-8")
 
-        page = db.list_accounts_page(limit=1, offset=1, email_source_filter="mailcom")
+        page = db.list_accounts_page(limit=1, offset=1, email_source_filter="icloud")
         unknown = db.list_accounts_page(email_source_filter="unknown")
 
         self.assertEqual(page["total"], 2)
@@ -148,15 +148,15 @@ class AccountFilterTests(unittest.TestCase):
     def test_email_source_filter_is_shared_by_status_snapshot(self):
         self.accounts_path.write_text(json.dumps([
             {"id": 1, "email": "outlook@example.invalid", "email_source": "outlook"},
-            {"id": 2, "email": "mailcom@example.invalid", "email_source": "mailcom"},
+            {"id": 2, "email": "icloud@example.invalid", "email_source": "icloud"},
         ]), encoding="utf-8")
 
         snapshot = db.list_account_plan_check_statuses(
-            limit=20, email_source_filter="mailcom"
+            limit=20, email_source_filter="icloud"
         )
 
         self.assertEqual(snapshot["total"], 1)
-        self.assertEqual(snapshot["items"][0]["email_source"], "mailcom")
+        self.assertEqual(snapshot["items"][0]["email_source"], "icloud")
 
     def test_status_snapshot_applies_date_filter_before_pagination(self):
         self.accounts_path.write_text(json.dumps([
@@ -198,7 +198,7 @@ class AccountFilterTests(unittest.TestCase):
                 client = app.test_client()
                 response = client.get(
                     "/api/accounts/plan-check-status?page=2&page_size=3&archived=all"
-                    "&email_source=mailcom&plan_category=paid&codex_auth_status=failed"
+                    "&email_source=icloud&plan_category=paid&codex_auth_status=failed"
                     "&codex_operation_status=running&live_check_status=live"
                     "&checkout_type=cs_live&q=needle&date_from=2026-08-01&date_to=2026-08-02",
                     headers={"X-Auth-Code": "test-auth"},
@@ -207,7 +207,7 @@ class AccountFilterTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 200)
                 kwargs = web_app.db.list_account_plan_check_statuses.call_args.kwargs
                 self.assertEqual(kwargs["archived"], "all")
-                self.assertEqual(kwargs["email_source_filter"], "mailcom")
+                self.assertEqual(kwargs["email_source_filter"], "icloud")
                 self.assertEqual(kwargs["plan_filter"], "paid")
                 self.assertEqual(kwargs["codex_auth_status_filter"], "failed")
                 self.assertEqual(kwargs["codex_operation_status_filter"], "running")

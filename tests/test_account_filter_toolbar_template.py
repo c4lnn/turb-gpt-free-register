@@ -59,7 +59,6 @@ class AccountFilterToolbarTemplateTests(unittest.TestCase):
             "pending", "live", "deactivated", "none",
             "oaics", "cs_live", "other_cs",
             "outlook", "generic_api", "cloudflare_domain", "icloud", "cloudflare",
-            "mailcom",
         ):
             self.assertIn(code, metadata)
         self.assertIn("labelOverrides: Object.freeze({none: '未检测'})", metadata)

@@ -351,7 +351,6 @@ def parse_accounts_check(data: dict, *, token: str = "") -> dict:
         and plus_campaign_shape_valid
     )
     # 未拿到完整的促销字段时，必须保留未知态，不能把它压成普通 False。
-    # 后续 mail.com 别名清理只接受明确的 JSON false。
     plus_trial_eligible = (
         bool(
             is_free

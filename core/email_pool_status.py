@@ -21,7 +21,7 @@ CLAIMABLE_EMAIL_POOL_STATUS = "available"
 TERMINAL_EMAIL_POOL_STATUSES = frozenset({"used", "failed", "disabled"})
 MANUAL_RESTORABLE_EMAIL_POOL_STATUSES = frozenset({"disabled", "failed", "used"})
 
-# mail.com 别名和旧接口曾经公开过这些值；读取时允许兼容，写入时只保存规范值。
+# 旧接口曾经公开过这些值；读取时允许兼容，写入时只保存规范值。
 LEGACY_EMAIL_POOL_STATUS_MAP = {
     "leased": "registering",
     "registered": "used",

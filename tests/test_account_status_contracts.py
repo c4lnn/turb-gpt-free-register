@@ -349,13 +349,13 @@ class AccountStatusContractTests(unittest.TestCase):
     def test_explicit_status_filter_dimensions_are_preserved(self):
         app = Flask(__name__)
         with app.test_request_context(
-            "/?plan_category=paid&email_source=mailcom&codex_auth_status=failed"
+            "/?plan_category=paid&email_source=icloud&codex_auth_status=failed"
             "&codex_operation_status=success&live_check_status=live"
         ):
             filters, error = _account_status_filter_args()
         self.assertIsNone(error)
         self.assertEqual(filters["plan_filter"], "paid")
-        self.assertEqual(filters["email_source_filter"], "mailcom")
+        self.assertEqual(filters["email_source_filter"], "icloud")
         self.assertEqual(filters["codex_auth_status_filter"], "failed")
         self.assertEqual(filters["codex_operation_status_filter"], "success")
         self.assertEqual(filters["live_check_status_filter"], "live")

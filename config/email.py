@@ -21,7 +21,6 @@ USE_EMAIL_SERVICE = False
 #   "icloud" — 导入 iCloud 隐私邮箱（转发到 QQ 邮箱），通过 IMAP 取信
 #   "cloudflare" — Cloudflare Worker 临时邮箱（cloudflare_temp_email），API 创建并取码
 #   "generic_api"       — 通用 API 取码邮箱池（邮箱----取码地址）
-#   "mailcom"           — mail.com 账号池（WebUI 导入 email----password，复用 mailbox AT）
 EMAIL_SOURCE = "generic_api"
 
 
@@ -50,27 +49,6 @@ OTP_MAX_WAIT = 90
 
 # Outlook 双协议取件：抓到一封 OTP 后再多等多少秒看是否有更晚到达的邮件。
 OTP_SETTLE_SECONDS = 5
-
-
-# ============================================================
-# mail.com 账号池（账密在运行时邮箱池保存，不写入 .env）
-# ============================================================
-
-# 单次 mail.com 协议请求超时；登录、列表、邮件头和正文读取都使用该值。
-MAILCOM_REQUEST_TIMEOUT = 30
-
-# 收件箱每页扫描条数与最大页数。列表请求固定按 INTERNALDATE DESC。
-MAILCOM_PAGE_SIZE = 50
-MAILCOM_MAX_PAGES = 200
-
-# mail.com 母号历史别名容量快照。普通列表只读本地快照；创建前/临界时按此
-# TTL 重新读取全量地址。负数配置会在启动时回退到默认值。
-MAILCOM_LIFETIME_SNAPSHOT_TTL_SECONDS = 12 * 60 * 60
-MAILCOM_LIFETIME_NEAR_LIMIT = 9
-
-# 注册成功后，只有套餐查询明确确认没有 Plus 试用资格时才删除对应别名。
-# 查询失败、字段缺失和删除失败均保留别名；默认关闭。
-MAILCOM_DELETE_ALIAS_IF_NO_TRIAL = False
 
 
 # ============================================================
@@ -161,10 +139,4 @@ REMAIL_ORDER_WAIT_SECONDS = 30
 REMAIL_REQUEST_TIMEOUT = 20
 
 # ---- .env overrides for WebUI editable fields ----
-apply_env_overrides(globals(), {'USE_EMAIL_SERVICE': 'bool', 'OTP_MAX_WAIT': 'int', 'OTP_POLL_INTERVAL': 'int', 'EMAIL_SOURCE': 'str', 'EMAIL_DOMAIN': 'str', 'QQ_EMAIL': 'str', 'QQ_IMAP_PASSWORD': 'str', 'QQ_IMAP_TIMEOUT': 'int', 'OUTLOOK_FETCH_MODE': 'str', 'MAILCOM_REQUEST_TIMEOUT': 'int', 'MAILCOM_PAGE_SIZE': 'int', 'MAILCOM_MAX_PAGES': 'int', 'MAILCOM_LIFETIME_SNAPSHOT_TTL_SECONDS': 'int', 'MAILCOM_LIFETIME_NEAR_LIMIT': 'int', 'MAILCOM_DELETE_ALIAS_IF_NO_TRIAL': 'bool', 'CLOUDFLARE_API_BASE': 'str', 'CLOUDFLARE_API_KEY': 'str', 'CLOUDFLARE_AUTH_MODE': 'str', 'CLOUDFLARE_CUSTOM_AUTH': 'str', 'CLOUDFLARE_PATH_DOMAINS': 'str', 'CLOUDFLARE_PATH_ACCOUNTS': 'str', 'CLOUDFLARE_PATH_TOKEN': 'str', 'CLOUDFLARE_PATH_MESSAGES': 'str', 'CLOUDFLARE_DEFAULT_DOMAINS': 'list_str_multiline', 'CLOUDFLARE_REQUEST_TIMEOUT': 'int', 'CLOUDFLARE_NAME_LENGTH': 'int', 'CLOUDFLARE_RANDOM_SUBDOMAIN_ENABLED': 'bool', 'CLOUDFLARE_RANDOM_SUBDOMAIN_LENGTH': 'int', 'CLOUDFLARE_RANDOM_SUBDOMAIN_SUFFIX': 'str'})
-
-# 配置文件可能来自旧版本，确保策略值不会因误填负数而产生无限期缓存。
-if MAILCOM_LIFETIME_SNAPSHOT_TTL_SECONDS < 0:
-    MAILCOM_LIFETIME_SNAPSHOT_TTL_SECONDS = 12 * 60 * 60
-if MAILCOM_LIFETIME_NEAR_LIMIT < 0:
-    MAILCOM_LIFETIME_NEAR_LIMIT = 9
+apply_env_overrides(globals(), {'USE_EMAIL_SERVICE': 'bool', 'OTP_MAX_WAIT': 'int', 'OTP_POLL_INTERVAL': 'int', 'EMAIL_SOURCE': 'str', 'EMAIL_DOMAIN': 'str', 'QQ_EMAIL': 'str', 'QQ_IMAP_PASSWORD': 'str', 'QQ_IMAP_TIMEOUT': 'int', 'OUTLOOK_FETCH_MODE': 'str', 'CLOUDFLARE_API_BASE': 'str', 'CLOUDFLARE_API_KEY': 'str', 'CLOUDFLARE_AUTH_MODE': 'str', 'CLOUDFLARE_CUSTOM_AUTH': 'str', 'CLOUDFLARE_PATH_DOMAINS': 'str', 'CLOUDFLARE_PATH_ACCOUNTS': 'str', 'CLOUDFLARE_PATH_TOKEN': 'str', 'CLOUDFLARE_PATH_MESSAGES': 'str', 'CLOUDFLARE_DEFAULT_DOMAINS': 'list_str_multiline', 'CLOUDFLARE_REQUEST_TIMEOUT': 'int', 'CLOUDFLARE_NAME_LENGTH': 'int', 'CLOUDFLARE_RANDOM_SUBDOMAIN_ENABLED': 'bool', 'CLOUDFLARE_RANDOM_SUBDOMAIN_LENGTH': 'int', 'CLOUDFLARE_RANDOM_SUBDOMAIN_SUFFIX': 'str'})

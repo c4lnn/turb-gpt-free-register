@@ -29,7 +29,6 @@ _EMAIL_SOURCE_LABELS = {
     "icloud": "iCloud 隐私邮箱",
     "cloudflare": "Cloudflare 临时邮箱",
     "remail": "Remail 动态邮箱",
-    "mailcom": "mail.com 账号池",
 }
 EMAIL_SOURCE_OPTIONS = tuple(
     {"value": source, "label": _EMAIL_SOURCE_LABELS[source]}
@@ -109,31 +108,6 @@ EDITABLE_FIELDS = [
         "key": "EMAIL_SOURCE", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
         "label": "邮箱来源", "help": "选择一个或多个来源；第一个为主来源，后续来源按顺序兜底。",
         "control": "ordered_multi_select", "options": EMAIL_SOURCE_OPTIONS,
-    },
-    {
-        "key": "MAILCOM_REQUEST_TIMEOUT", "file": "email.py", "type": "int", "group": "邮箱 / OTP",
-        "label": "mail.com 请求超时(秒)", "help": "mail.com 登录、token、列表和正文读取的单次网络超时",
-    },
-    {
-        "key": "MAILCOM_PAGE_SIZE", "file": "email.py", "type": "int", "group": "邮箱 / OTP",
-        "label": "mail.com 每页邮件数", "help": "收件箱按 INTERNALDATE DESC 扫描的每页数量",
-    },
-    {
-        "key": "MAILCOM_MAX_PAGES", "file": "email.py", "type": "int", "group": "邮箱 / OTP",
-        "label": "mail.com 最大扫描页数", "help": "避免异常收件箱响应导致无限分页",
-    },
-    {
-        "key": "MAILCOM_LIFETIME_SNAPSHOT_TTL_SECONDS", "file": "email.py", "type": "int", "group": "邮箱 / OTP",
-        "label": "mail.com 历史快照 TTL(秒)", "help": "创建前历史容量快照缓存时长；默认 43200 秒（12 小时）",
-    },
-    {
-        "key": "MAILCOM_LIFETIME_NEAR_LIMIT", "file": "email.py", "type": "int", "group": "邮箱 / OTP",
-        "label": "mail.com 接近上限阈值", "help": "生命周期剩余不超过该数量时创建前强制刷新；默认 9",
-    },
-    {
-        "key": "MAILCOM_DELETE_ALIAS_IF_NO_TRIAL", "file": "email.py", "type": "bool", "group": "邮箱 / OTP",
-        "label": "明确无试用资格后删除 mail.com 别名",
-        "help": "仅在套餐查询成功、资格字段完整且明确无 Plus 试用资格时删除；查询失败或字段不完整会保留别名",
     },
     {
         "key": "CLOUDFLARE_API_BASE", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
@@ -904,8 +878,6 @@ def update_config(updates: dict) -> dict:
         if field is None:
             ignored.append(key)
             continue
-        if key == "MAILCOM_DELETE_ALIAS_IF_NO_TRIAL" and not isinstance(value, bool):
-            raise ValueError("MAILCOM_DELETE_ALIAS_IF_NO_TRIAL 必须是 JSON 布尔值 true 或 false")
         if key == "EMAIL_SOURCE":
             formatted = normalize_email_source_value(value)
         else:

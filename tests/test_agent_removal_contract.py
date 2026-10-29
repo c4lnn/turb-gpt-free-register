@@ -55,10 +55,8 @@ class RemovedAgentContractTests(unittest.TestCase):
             "recover_interrupted_checkout_sessions",
             "recover_interrupted_extract_links",
             "recover_interrupted_live_checks",
-            "recover_interrupted_mailcom_state",
         ):
-            result = {"sync": 0, "lease": 0} if name.endswith("mailcom_state") else 0
-            self.stack.enter_context(patch.object(db, name, return_value=result))
+            self.stack.enter_context(patch.object(db, name, return_value=0))
         self.client = web_app.create_app(auth_code="test-auth").test_client()
         self.headers = {"X-Auth-Code": "test-auth"}
 

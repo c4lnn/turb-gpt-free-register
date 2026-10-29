@@ -180,17 +180,6 @@ def checkout_capabilities(status: Any, *, has_access_token: bool = True) -> dict
     }
 
 
-def mailcom_cleanup_capabilities(status: Any, *, plan_category: str = "unknown") -> dict[str, bool]:
-    value = _text(status) or "pending"
-    running = value == "cleanup_running"
-    return {
-        "is_running": running,
-        "is_terminal": value in {"not_eligible", "not_requested", "deleted", "cleanup_pending"},
-        "can_cleanup": plan_category == "free_no_trial" and value in {"pending", "not_requested"},
-        "can_retry": value == "cleanup_pending",
-    }
-
-
 def normalize_extract_link_status(raw: Any) -> str:
     value = _text(raw)
     aliases = {"cancelled": "canceled", "stopped": "canceled", "": "pending"}
@@ -292,5 +281,4 @@ __all__ = [
     "normalize_codex_operation_status", "normalize_extract_link_status",
     "normalize_live_check_status", "normalize_plan_query_status", "plan_capabilities",
     "live_check_capabilities", "checkout_capabilities", "normalize_checkout_query_status",
-    "mailcom_cleanup_capabilities",
 ]

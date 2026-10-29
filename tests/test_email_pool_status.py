@@ -72,8 +72,6 @@ class EmailPoolProviderStatusTests(unittest.TestCase):
             "_GENERIC_API_EMAIL_TXT": "generic.txt",
             "_DOMAIN_EMAIL_JSON": "domain.json",
             "_ICLOUD_EMAIL_JSON": "icloud.json",
-            "_MAILCOM_EMAIL_JSON": "parents.json",
-            "_MAILCOM_ALIAS_JSON": "aliases.json",
             "_ACCOUNTS_JSON": "accounts.json",
             "_ACCOUNTS_TXT": "accounts.txt",
             "_TOKENS_TXT": "tokens.txt",
@@ -112,42 +110,11 @@ class EmailPoolProviderStatusTests(unittest.TestCase):
         self.assertEqual(db.get_generic_api_email_by_email("generic@example.com")["status"], "failed")
         self.assertEqual(db.get_icloud_email_by_email("icloud@example.com")["status"], "failed")
 
-    def test_domain_and_mailcom_claim_success_and_failure_boundaries(self):
+    def test_domain_claim_success_and_failure_boundaries(self):
         domain = db.claim_next_domain_email("domain@example.com", job_id=10)
         self.assertEqual(domain["status"], "registering")
         self.assertTrue(db.release_unconsumed_domain_email("domain@example.com", note="driver failed"))
         self.assertIsNone(db.claim_next_domain_email("domain@example.com", job_id=11))
-
-        db.import_mailcom_emails([{"email": "mother@mail.com", "password": "pw"}])
-        db.create_mailcom_alias(
-            alias_email="alias@example.com",
-            parent_email="mother@mail.com",
-            local_part="alias",
-            domain="example.com",
-        )
-        claimed = db.claim_next_mailcom_alias(job_id=12)
-        self.assertEqual(claimed["status"], "registering")
-        account_id = db.insert_account(
-            email="alias@example.com",
-            access_token="at",
-            email_source="mailcom",
-        )
-        self.assertEqual(account_id, 1)
-        self.assertEqual(db.get_mailcom_alias_internal("alias@example.com")["status"], "used")
-        self.assertEqual(db.get_mailcom_internal_record("mother@mail.com")["status"], "available")
-        self.assertTrue(db.mark_registration_failed("alias@example.com", "late failure"))
-        self.assertEqual(db.get_mailcom_alias_internal("alias@example.com")["status"], "used")
-
-        db.create_mailcom_alias(
-            alias_email="failed@example.com",
-            parent_email="mother@mail.com",
-            local_part="failed",
-            domain="example.com",
-        )
-        self.assertIsNotNone(db.claim_next_mailcom_alias(job_id=13))
-        self.assertTrue(db.release_unconsumed_mailcom_email("failed@example.com", note="create failed"))
-        self.assertIsNone(db.claim_next_mailcom_alias(job_id=14))
-        self.assertEqual(db.get_mailcom_alias_internal("failed@example.com")["status"], "failed")
 
     def test_registered_account_post_failure_keeps_used(self):
         db.import_outlook_accounts([{
@@ -221,26 +188,6 @@ class EmailPoolProviderStatusTests(unittest.TestCase):
             self.assertTrue(email_provider.release_email_if_unconsumed("temp@example.com", note="driver failed"))
         self.assertIsNone(cf_temp_mail_client.get_account_context("temp@example.com"))
 
-    def test_mailcom_recovery_releases_parent_and_keeps_alias_terminal(self):
-        db.import_mailcom_emails([{"email": "mother@mail.com", "password": "pw"}])
-        db.create_mailcom_alias(
-            alias_email="orphan@example.com",
-            parent_email="mother@mail.com",
-            local_part="orphan",
-            domain="example.com",
-        )
-        db.claim_next_mailcom_alias(job_id=900)
-        job = db.create_job(email_source="mailcom")
-        db.update_job(job["id"], status="failed", email="orphan@example.com")
-        # 将租约绑定到实际终止任务，模拟进程重启前的快照。
-        parents = db._load_mailcom_emails()
-        parents[0]["registration_lease_job_id"] = job["id"]
-        db._save_mailcom_emails(parents)
-        recovered = db.recover_interrupted_mailcom_state()
-        self.assertEqual(recovered["lease"], 1)
-        self.assertEqual(db.get_mailcom_alias_internal("orphan@example.com")["status"], "failed")
-        self.assertEqual(db.get_mailcom_internal_record("mother@mail.com")["status"], "available")
-
     def test_active_registration_job_id_prevents_migration_reclaim(self):
         job = db.create_job(email_source="outlook")
         db.update_job(job["id"], status="running", email="active@example.com")
@@ -307,8 +254,6 @@ class EmailPoolApiStatusTests(unittest.TestCase):
             "_GENERIC_API_EMAIL_JSON": "generic.json",
             "_DOMAIN_EMAIL_JSON": "domain.json",
             "_ICLOUD_EMAIL_JSON": "icloud.json",
-            "_MAILCOM_EMAIL_JSON": "parents.json",
-            "_MAILCOM_ALIAS_JSON": "aliases.json",
             "_ACCOUNTS_JSON": "accounts.json",
             "_JOBS_JSON": "jobs.json",
         }.items():

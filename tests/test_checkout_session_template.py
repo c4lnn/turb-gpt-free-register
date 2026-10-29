@@ -45,7 +45,6 @@ class CheckoutSessionTemplateTests(unittest.TestCase):
             "pending", "live", "deactivated", "none",
             "oaics", "cs_live", "other_cs",
             "outlook", "generic_api", "cloudflare_domain", "icloud", "cloudflare",
-            "mailcom",
         ):
             self.assertIn(value, self.template)
         self.assertIn('id="checkoutTypeFilterV2"', self.template)

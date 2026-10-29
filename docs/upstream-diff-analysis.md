@@ -32,7 +32,6 @@
             |                             |
         本地 main                     upstream/main
     (大量自研能力)                (巡检/新邮箱/新短信)
-   - mail.com 全家桶              + 一键巡检
    - iCloud / SMSBower V1        + IMAP / MailCode / 西瓜接码
    - Checkout 检测               + 代理链 / wreq 协议驱动
    - SQLite 按来源分表            + SQLite 统一 email_pool
@@ -67,7 +66,6 @@
 | 能力 | 文件 | 说明 |
 |---|---|---|
 | Checkout Session 检测 | `core/chatgpt_checkout.py`、`core/checkout_session_service.py`、`config/checkout_session.py` | 本地自研，远端无 |
-| mail.com 全家桶 | `core/mailcom_{client,provider,protocol,settings_client,alias_service,alias_pool_service,alias_domains,alias_cleanup,capacity}.py` + `config/mailcom_alias_domains.json` | 9+ 文件，别名池 / 生命周期 / 容量管理 |
 | iCloud 邮箱 | `core/icloud_client.py` | 隐私邮箱导入 + QQ IMAP 转发（远端用 imap 取代） |
 | SMSBower 独立 provider | `core/smsbower_provider.py` | V1 handler API + 日志脱敏 |
 | SQLite 存储封装 | `core/sqlite_store.py` | `SQLiteRuntimeStore` 独立封装 |
@@ -90,22 +88,20 @@
 | outlook_emails            |         | email_pool (统一表)         |
 | generic_api_emails        |         |   outlook/generic_api/imap/ |
 | icloud_emails             |         |   domain 共用一张表          |
-| mailcom_emails / aliases  |         | accounts                   |
 | accounts / jobs           |         | registration_jobs           |
-| mailcom_alias_domains     |         | codex_accounts              |
 +---------------------------+         | codex_agent_accounts        |
                                       | account_inspections*3       |
                                       | storage_meta                |
                                       +---------------------------+
 ```
 
-本地分表承载 mailcom/icloud；远端统一表承载 imap + 巡检三表。**schema 已彻底分叉**。
+本地分表承载 icloud；远端统一表承载 imap + 巡检三表。**schema 已彻底分叉**。
 
 ### 邮箱来源注册表 `core/email_provider.py`
 
 | | 来源集合 |
 |---|---|
-| 本地 | outlook, generic_api, cloudflare_domain, icloud, cloudflare, remail, mailcom |
+| 本地 | outlook, generic_api, cloudflare_domain, icloud, cloudflare, remail |
 | 远端 | outlook, generic_api, imap, cloudflare_domain, cloudflare, gptmail/mailnest/cloudmail, remail, xigua, mailcode |
 
 ### 短信 `sms_provider.py`
@@ -186,7 +182,7 @@
 
 - [ ] `core/chatgpt_plan.py`：本地「查询失败原因」vs 远端「优惠力度查询」（6 vs 5）
 - [ ] `core/live_check_service.py`：本地「查活后查套餐」vs 远端「查活协议优化 ×4」（3 vs 6）。**A1 已知遗留**：`account_liveness` 对齐后内部已查套餐（`result["plan_result"]`），本地 `live_check_service` 仍再查一次（`result["plan_check"]`），形成重复查套餐；且未传递 `fingerprint_state`/`email_source`。档 B 对齐时需移除重复逻辑 + 传递指纹状态 + 改 403 代理轮转。
-- [ ] `core/email_provider.py`：来源集合互斥，决策 icloud vs imap、mailcom 保留/替换（5 vs 4）
+- [ ] `core/email_provider.py`：来源集合互斥，决策 icloud vs imap（4 vs 4）
 - [ ] `core/db.py`：本地分表 vs 远端统一 `email_pool` + 巡检三表。**最高风险**，单独迁移方案 + 数据兼容测试（15 vs 19）
 - [ ] `webui/app.py`：路由层大面积分歧（18 vs 17）
 - [ ] `webui/config_editor.py`：配置编辑器（8 vs 19）

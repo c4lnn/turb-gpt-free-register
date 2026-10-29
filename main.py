@@ -168,28 +168,13 @@ def _prepare_persisted_email_registration(email: str) -> bool:
     """
     from core import db
 
-    alias = db.get_mailcom_alias_internal(email)
-    if alias is not None:
-        state = canonical_status(alias.get("status"), missing="disabled", unknown="disabled")
-        if state == "available":
-            claimed = db.claim_mailcom_alias(email)
-            if claimed is None:
-                raise RuntimeError("mail.com 别名当前不可领取，或所属母号正在处理其它注册任务")
-            state = "registering"
-        if state != "registering":
-            raise RuntimeError(f"邮箱池条目不可用于完整注册: status={state}")
-        if not db.mark_mailcom_alias_registration_started(email):
-            raise RuntimeError("mail.com 别名注册状态写入失败")
-        return True
-
-    # 其它持久化来源由各自 provider 领取；这里仅识别已由上层领取的条目，
+    # 持久化来源由各自 provider 领取；这里仅识别已由上层领取的条目，
     # 不把用户手动输入且未入池的地址强行写入某个来源。
     for getter in (
         db.get_outlook_by_email,
         db.get_generic_api_email_by_email,
         db.get_domain_email_by_email,
         db.get_icloud_email_by_email,
-        db.get_mailcom_email_by_email,
     ):
         row = getter(email)
         if row is None:

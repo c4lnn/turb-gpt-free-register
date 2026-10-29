@@ -311,20 +311,6 @@ def _run_one_job(job_id: int, log_file: str) -> None:
             log_logger.info(f"[Job {job_id}] 开始注册任务")
             email, name, birthday = _prepare_registration_args()
             db.update_job(job_id, email=email)
-            alias = db.get_mailcom_alias_internal(email)
-            if alias is not None:
-                db.mark_mailcom_alias_registration_started(email, job_id=job_id)
-                parent = str(alias.get("parent_email") or "")
-                local, _, domain = str(email or "").partition("@")
-                masked_alias = f"{local[:1]}***@{domain}" if domain else "[redacted-email]"
-                parent_local, _, parent_domain = parent.partition("@")
-                masked_parent = f"{parent_local[:1]}***@{parent_domain}" if parent_domain else "[redacted-email]"
-                log_logger.info(
-                    "[Job %s] mail.com 别名已开始注册: alias=%s parent=%s",
-                    job_id,
-                    masked_alias,
-                    masked_parent,
-                )
             check_stop_requested()
             def _on_email_acquired(acquired_email: str) -> None:
                 nonlocal email
@@ -411,28 +397,6 @@ def _run_one_job(job_id: int, log_file: str) -> None:
             completed_at=datetime.now().isoformat(timespec="seconds"),
         )
     finally:
-        if email and db.get_mailcom_alias_internal(email):
-            try:
-                alias = db.get_mailcom_alias_internal(email) or {}
-                alias_status = str(alias.get("status") or "").strip().casefold()
-                if alias_status == "registering":
-                    # finally 可能在成功落库后、任务状态写回前执行；先按本地
-                    # 账号事实决定 used/failed，绝不遗留 registering 或复活失败别名。
-                    if db.get_account_by_email(email) is not None:
-                        db.mark_registration_success(email)
-                    else:
-                        db.mark_registration_failed(
-                            email,
-                            reason="注册任务终态释放租约",
-                            stage="registration_finally",
-                            job_id=job_id,
-                        )
-                else:
-                    # 成功/失败路径已写入 alias 终态，这里只负责清除可能残留
-                    # 的母号共享租约，不改写 used/failed/disabled。
-                    db.release_mailcom_registration_lease(email, job_id=job_id)
-            except Exception:
-                log_logger.exception("[Job %s] 释放 mail.com 母号注册租约失败", job_id)
         _deactivate_job(job_id)
 
 
