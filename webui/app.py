@@ -27,7 +27,7 @@ from core import registration_service as svc
 from core.email_pool_status import EMAIL_POOL_STATUSES, validate_status, EmailPoolStatusError
 from core.account_status_contracts import build_account_status_contract
 from core.account_status_contracts import (
-    CODEX_AUTH_STATUSES, CODEX_OPERATION_STATUSES, LIVE_CHECK_STATUSES, PLAN_CATEGORY_CODES,
+    CODEX_AUTH_STATUSES, CODEX_OPERATION_STATUSES, LIVE_CHECK_STATUSES,
 )
 from core.email_provider import VALID_EMAIL_SOURCES
 from webui import config_editor
@@ -54,14 +54,12 @@ def _pool_status_arg(raw: str | None) -> tuple[str | None, str | None]:
 
 
 def _account_status_filter_args() -> tuple[dict[str, str], str | None]:
-    plan = str(request.args.get("plan_category") or request.args.get("plan") or "").strip().lower()
+    plan = str(request.args.get("plan") or "").strip().lower()
     email_source = str(request.args.get("email_source") or "").strip().lower()
     auth = str(request.args.get("codex_auth_status") or "").strip().lower()
     operation = str(request.args.get("codex_operation_status") or "").strip().lower()
     live = str(request.args.get("live_check_status") or "").strip().lower()
     legacy = str(request.args.get("codex_status") or "").strip().lower()
-    if plan and plan not in set(PLAN_CATEGORY_CODES) | {"all", "any", "free", "plus"}:
-        return {}, "plan_category 非法"
     if email_source and email_source not in set(VALID_EMAIL_SOURCES) | {"all", "any", "unknown"}:
         return {}, "email_source 非法"
     if auth and auth not in CODEX_AUTH_STATUSES:
@@ -197,7 +195,7 @@ def _compact_account_for_list(row: dict) -> dict:
     # 这些是列表固定列直接展示字段。
     for key in (
         "user_name", "email_source", "note", "archived", "created_at",
-        "plan_type", "current_plan_type", "plus_trial_eligible", "trial_eligibility_known",
+        "plan_type", "current_plan_type", "plus_trial_eligible", "eligible_promo_campaigns",
         "plan_check_status", "codex_status",
         "checkout_check_status", "checkout_session_type",
         "totp_setup_status",
@@ -211,7 +209,7 @@ def _compact_account_for_list(row: dict) -> dict:
     # 下面字段仅在有值时返回，避免每行堆满 null/空字符串/内部状态。
     optional_keys = (
         # 套餐展示补充：付费到期/折扣/失败原因。
-        "plan_check_error", "plan_check_error_kind", "plan_check_http_status", "plan_checked_at", "plan_check_updated_at", "plan_last_success_at",
+        "plan_check_error", "plan_check_http_status", "plan_checked_at", "plan_check_updated_at", "plan_last_success_at",
         "plan_expires_at", "plan_renews_at", "renews_at",
         "billing_period", "billing_currency", "discount_amount", "discount_type",
         "discount_expires_at", "discount_promo_campaign_id",
@@ -396,7 +394,7 @@ def _compact_job_for_list(row: dict) -> dict:
     for key in (
         "job_type", "account_id", "parent_job_id", "retry_attempt", "email", "started_at", "completed_at",
         "display_status", "retryable", "retry_action", "retry_label",
-        "manual_otp_required",
+        "manual_otp_required", "error_code", "error_stage",
     ):
         value = row.get(key)
         if value is not None and value != "" and value is not False:
@@ -3014,11 +3012,9 @@ def create_app(auth_code: str | None = None) -> Flask:
             except ValueError as exc:
                 return jsonify({"ok": False, "error": f"ValueError: {exc}"}), 400
         if "PLAN_CHECK_PROXY_MODE" in updates:
-            from core.chatgpt_plan import PLAN_CHECK_PROXY_MODES
-
             mode = str(updates.get("PLAN_CHECK_PROXY_MODE") or "").strip().lower()
-            if mode not in PLAN_CHECK_PROXY_MODES:
-                choices = " / ".join(("auto", "proxy", "pool", "direct"))
+            if mode not in {"auto", "proxy", "direct"}:
+                choices = " / ".join(("auto", "proxy", "direct"))
                 return jsonify({
                     "ok": False,
                     "error": f"ValueError: PLAN_CHECK_PROXY_MODE={mode!r} 无效，可选 {choices}",

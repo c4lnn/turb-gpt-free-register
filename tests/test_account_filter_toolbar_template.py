@@ -21,7 +21,7 @@ class AccountFilterToolbarTemplateTests(unittest.TestCase):
         self.assertIn("查询与筛选", query)
         self.assertIn('id="qAccountsV2"', query)
         self.assertIn('id="accountEmailSourceFilterV2"', query)
-        self.assertIn('id="accountPlanCategoryFilterV2"', query)
+        self.assertIn('id="showPlusAccountsOnlyV2"', query)
         self.assertIn('id="accountCodexAuthFilterV2"', query)
         self.assertNotIn("accountsSelectedHintV2", query)
         self.assertNotIn("codexBulkWorkersV2", query)
@@ -42,18 +42,14 @@ class AccountFilterToolbarTemplateTests(unittest.TestCase):
         self.assertIn("flex: 0 0 auto", styles)
         self.assertIn(".accounts-filter-v2 .acc-v2-select-field > span", styles)
         self.assertIn("width: 132px; height: 34px", styles)
-        self.assertIn("#accountPlanCategoryFilterV2", styles)
-        self.assertIn("width: 200px", styles)
         self.assertIn("@media (max-width: 700px)", styles)
         self.assertIn("flex-basis: 100%", styles)
-        self.assertIn(".accounts-filter-v2 #accountPlanCategoryFilterV2", styles)
 
     def test_status_codes_are_declared_once_as_filter_metadata(self):
         metadata_start = self.template.index("const ACCOUNT_FILTER_META")
         metadata_end = self.template.index("function accountFilterLabel", metadata_start)
         metadata = self.template[metadata_start:metadata_end]
         for code in (
-            "free_trial_eligible", "free_no_trial", "paid", "unknown",
             "not_started", "success", "failed", "skipped",
             "idle", "queued", "running", "canceled",
             "pending", "live", "deactivated", "none",
@@ -76,7 +72,7 @@ class AccountFilterToolbarTemplateTests(unittest.TestCase):
         self.assertIn("/api/accounts/plan-check-status?${params.toString()}", poll)
         self.assertIn("date_from", self.template[self.template.index("function buildAccountsQueryParams()"):poll_end])
         self.assertNotIn("SHOW_ARCHIVED_ACCOUNTS", self.template)
-        self.assertNotIn("SHOW_PLUS_ACCOUNTS_ONLY", self.template)
+        self.assertIn("SHOW_PLUS_ACCOUNTS_ONLY", self.template)
         self.assertNotIn("CHECKOUT_TYPE_FILTER", self.template)
 
     def test_filter_change_clears_selection_resets_page_and_queues_reload(self):
@@ -95,7 +91,6 @@ class AccountFilterToolbarTemplateTests(unittest.TestCase):
         for element_id, state_key in (
             ("accountArchiveFilterV2", "archived"),
             ("accountEmailSourceFilterV2", "email_source"),
-            ("accountPlanCategoryFilterV2", "plan_category"),
             ("accountCodexAuthFilterV2", "codex_auth_status"),
             ("accountCodexOperationFilterV2", "codex_operation_status"),
             ("accountLiveCheckFilterV2", "live_check_status"),

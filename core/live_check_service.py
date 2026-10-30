@@ -85,7 +85,7 @@ def _run_live_check(*, account_id: int, email: str, proxy: str | None, trigger: 
             try:
                 plan_result = check_account_plan(
                     result.get("access_token") or "",
-                    env=browser_session,
+                    session=browser_session,
                     timezone_offset_min="-",
                 )
             except Exception as exc:

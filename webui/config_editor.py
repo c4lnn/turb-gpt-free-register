@@ -242,7 +242,7 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "PLAN_CHECK_PROXY_MODE", "file": "proxy.py", "type": "str", "group": "代理池",
-        "label": "套餐网络模式", "help": "auto=专用代理优先并允许回退；proxy=专用代理优先且强制代理；pool=仅使用 PROXY_POOL、忽略专用代理且不直连；direct=强制直连",
+        "label": "套餐网络模式", "help": "auto=专用代理优先并允许回退；proxy=专用代理优先且强制代理；direct=强制直连",
     },
     {
         "key": "PLAN_CHECK_PROXY", "file": "proxy.py", "type": "str", "group": "代理池",

@@ -51,7 +51,7 @@
 | 协议 profiles | `core/protocol_profiles.py` | 协议驱动 profile 管理 |
 | 代理链 | `core/proxy_chain.py`、`core/proxy_utils.py` | 上游代理链（`PROXY_POOL_UPSTREAM_PROXY`、`PLAN_CHECK_UPSTREAM_PROXY`） |
 | 2FA 独立服务 | `core/twofa_service.py` | 并发/队列/代理模式可配置（`TWOFA_WORKERS`/`TWOFA_QUEUE_LIMIT`/`TWOFA_PROXY_MODE`） |
-| wreq 协议驱动 | `core/wreq_session.py` | requirements 新增 `wreq`，纯协议驱动第二实现 |
+| wreq 协议驱动 | `core/wreq_session.py` | 本地已声明并实测 `wreq==0.13.0`；注册专用 `chrome152`，独立任务仍按共享配置选择后端 |
 | 优惠力度查询 | `webui/templates/promo_details.html` | `chatgpt_plan.py` 解析 `eligible_promo_campaigns` / `discount` |
 | 注册性能基准 | `tools/benchmark_registration_jobs.py` | 注册任务性能优化 |
 
@@ -180,7 +180,7 @@
 
 ### 档 B — 核心链路，两边都大改（难合，逐个 diff，语义可能冲突）
 
-- [ ] `core/chatgpt_plan.py`：本地「查询失败原因」vs 远端「优惠力度查询」（6 vs 5）
+- [x] `core/chatgpt_plan.py`：本地「查询失败原因」vs 远端「优惠力度查询」（6 vs 5）——已随 change `align-chatgpt-plan-check-upstream` 整文件对齐上游：删除三态资格校验（`trial_eligibility_known`）与失败原因分类（`plan_check_error_kind`）、`env=`→`session=`、删 `pool` 代理、新增 `PLAN_CHECK_UPSTREAM_PROXY` 代理链
 - [ ] `core/live_check_service.py`：本地「查活后查套餐」vs 远端「查活协议优化 ×4」（3 vs 6）。**A1 已知遗留**：`account_liveness` 对齐后内部已查套餐（`result["plan_result"]`），本地 `live_check_service` 仍再查一次（`result["plan_check"]`），形成重复查套餐；且未传递 `fingerprint_state`/`email_source`。档 B 对齐时需移除重复逻辑 + 传递指纹状态 + 改 403 代理轮转。
 - [ ] `core/email_provider.py`：来源集合互斥，决策 icloud vs imap（4 vs 4）
 - [ ] `core/db.py`：本地分表 vs 远端统一 `email_pool` + 巡检三表。**最高风险**，单独迁移方案 + 数据兼容测试（15 vs 19）
@@ -190,13 +190,13 @@
 ### 阶段 3 — 纯新增文件（本地无此文件，零冲突，可与档 A 穿插）
 
 - [x] 代理链：`core/proxy_chain.py`、`core/proxy_utils.py`（代码已随 A1 连带就位；`config/proxy.py` 的 `PROXY_POOL_UPSTREAM_PROXY`/`PLAN_CHECK_UPSTREAM_PROXY` 可选开关未加，默认直连）
-- [x] wreq 协议驱动：`core/wreq_session.py`（代码已随 A1 连带就位；`requirements.txt` 的 `wreq` 依赖未加，默认走 curl_cffi，切 wreq 需补装）
+- [x] wreq 协议驱动：`core/wreq_session.py`（代码已随 A1 就位；本轮已补齐 `wreq==0.13.0`，要求 Python 3.11+；注册固定 `wreq/chrome152`，HTTP／SDK 版本一致、平台不变，独立任务保留原后端配置；缺能力明确失败，无自动安装或静默回退。实际 trace／CSRF／SDK challenge 已通过，完整注册另列验收，见 `protocol-registration-flow-diff.md` 4.5.5）
 - [x] 协议 profiles：`core/protocol_profiles.py`（已随 A1 连带就位）
 - [x] HTTP 诊断：`core/http_diagnostics.py`（已随 A1 连带就位）
 - [ ] IMAP 邮箱：`core/imap_mail_client.py`
 - [ ] MailCode 邮箱：`core/mailcode_client.py`
 - [ ] 西瓜接码：`core/xigua_client.py` + `config/email.py`（`XIGUA_*`）
-- [ ] 优惠力度查询：`webui/templates/promo_details.html` + `chatgpt_plan.py` 解析（若档 B 已合 plan 则并入）
+- [x] 优惠力度查询：`webui/templates/promo_details.html` + `chatgpt_plan.py` 解析（已随 `align-chatgpt-plan-check-upstream` 照抄上游模板并接入 `data-promo-details` 详情按钮）
 - [ ] 一键巡检：`core/account_inspection_service.py` + `inspection_lease.py` + 模板（依赖档 B 的 db 表）
 - [ ] 注册性能基准：`tools/benchmark_registration_jobs.py`
 
@@ -218,7 +218,7 @@
 - [x] 建立差异基准快照（本文档）
 - [x] 档 A1（协议注册/认证流程升级 + 密码注册/2FA/密码保存闭环：已完成——代码对齐 + 测试套件通过 + 完整闭环冒烟（密码 + 2FA + `totp_secret` 落库 + 明文可追溯日志）+ 独立补跑 2FA 后台队列 + 账号页密码列/「开启2FA」按钮）
 - [ ] 档 A2（其余核心好合项）
-- [ ] 档 B（核心链路大冲突项）
+- [ ] 档 B（核心链路大冲突项）——首项 `core/chatgpt_plan.py` 已随 change `align-chatgpt-plan-check-upstream` 完成（废弃 in-progress change `display-plan-check-error-summary`：失败原因分类已删除；`require-full-plan-promo-discount` 语义被取代）
 - [ ] 阶段 3（纯新增；`proxy_chain`/`proxy_utils`/`protocol_profiles`/`wreq_session`/`http_diagnostics` 已随 A1 连带就位，剩余 IMAP/MailCode/西瓜/巡检等；「Roxy 资源缓存」因省流量已删不再需要）
 - [ ] 阶段 4（仅剩短信 provider 决策；2FA 驱动与浏览器省流量已决策删除）
 - [ ] 阶段 5（本地保留项确认）

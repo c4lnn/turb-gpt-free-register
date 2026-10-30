@@ -11,17 +11,30 @@ class _Session:
 
 
 class ChatgptAuthContextTests(unittest.TestCase):
-    def test_ensure_authorize_context_matches_20260914_capture_shape(self):
-        url = "https://auth.openai.com/api/accounts/authorize?client_id=app_x&state=s"
-        out = _ensure_authorize_context(url, _Session(), "user@example.com")
-        qs = parse_qs(urlparse(out).query)
-        self.assertEqual(qs["ext-oai-did"], ["did-123"])
-        self.assertEqual(qs["auth_session_logging_id"], ["log-456"])
-        self.assertNotIn("ext-passkey-client-capabilities", qs)
-        self.assertEqual(qs["screen_hint"], ["login_or_signup"])
-        self.assertEqual(qs["login_hint"], ["user@example.com"])
-        self.assertEqual(qs["ccaps"], ["login_methods chatgpt_login_finalizer_v1"])
-        self.assertEqual(qs["auth_return_target_category"], ["chatgpt_home"])
+    def test_context_normalization_preserves_authorization_state_and_pkce(self):
+        url = (
+            "https://auth.openai.com/api/accounts/authorize?"
+            "state=opaque%2Bstate%2Fwith%3Dpadding&code_challenge=proof%2Bvalue"
+            "&code_challenge_method=S256&redirect_uri=http%3A%2F%2Flocalhost%2Fcallback%3Fx%3D1"
+            "&resource=first&resource=second&empty=&device_id=stale#continue"
+        )
+        before = parse_qs(urlparse(url).query, keep_blank_values=True)
+        result = urlparse(_ensure_authorize_context(url, _Session(), "user@example.com"))
+        after = parse_qs(result.query, keep_blank_values=True)
+        for key in ("state", "code_challenge", "code_challenge_method",
+                    "redirect_uri", "resource", "empty"):
+            self.assertEqual(after[key], before[key], key)
+        self.assertEqual(result.fragment, "continue")
+        self.assertEqual(after["device_id"], [_Session.device_id])
+
+    def test_uninitialized_device_cannot_be_bound_to_authorization(self):
+        session = _Session()
+        session.device_id = ""
+        with self.assertRaises(RuntimeError):
+            _ensure_authorize_context(
+                "https://auth.openai.com/api/accounts/authorize?state=opaque",
+                session, "user@example.com",
+            )
 
 
 if __name__ == "__main__":

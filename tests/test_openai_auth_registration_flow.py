@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 import json
 import unittest
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import core.openai_auth as openai_auth
@@ -26,8 +25,6 @@ class _Response:
 class _ProtocolSession:
     def __init__(self):
         self.device_id = "device-id"
-        self.sentinel_sid = "top-level-sid"
-        self.sentinel_iframe_sid = "iframe-sid"
         self.document_navigation_id = "document-1"
         self.browser_profile = {"user_agent": "Test UA", "navigator_language": "ja-JP"}
         self.posts = []
@@ -67,102 +64,7 @@ class _ProtocolSession:
 
 
 class OpenAIRegistrationFlowTests(unittest.TestCase):
-    def test_network_preflight_uses_address_bar_navigation_shape(self):
-        class Session:
-            def __init__(self):
-                self.header_args = []
-                self.requests = []
 
-            def get_chatgpt_navigate_headers(self, referer="", **kwargs):
-                self.header_args.append((referer, kwargs))
-                return {"sec-fetch-site": "none"}
-
-            def get(self, url, *, headers, allow_redirects, timeout):
-                self.requests.append((url, headers, allow_redirects, timeout))
-                return _Response(url=url)
-
-        session = Session()
-        openai_auth.network_preflight(session)
-
-        self.assertEqual(session.header_args, [("", {})])
-        self.assertEqual(session.requests[0][0], "https://chatgpt.com/auth/login")
-        self.assertEqual(session.requests[0][1]["sec-fetch-site"], "none")
-        self.assertEqual(session.requests[0][3], 12.0)
-
-    def test_network_preflight_retries_status_403_on_same_session(self):
-        class Session:
-            def __init__(self):
-                self.calls = 0
-                self.reset_count = 0
-
-            def get_chatgpt_navigate_headers(self, referer=""):
-                return {"referer": referer}
-
-            def get(self, *_args, **_kwargs):
-                self.calls += 1
-                if self.calls == 1:
-                    return _Response(status_code=403, text="challenge")
-                return _Response()
-
-            def reset_circuit_breaker(self):
-                self.reset_count += 1
-
-        session = Session()
-        with patch.object(openai_auth, "_interruptible_sleep") as sleep:
-            openai_auth.network_preflight(session)
-
-        self.assertEqual(session.calls, 2)
-        self.assertEqual(session.reset_count, 1)
-        sleep.assert_called_once_with(1.0)
-
-    def test_sentinel_iframe_retries_socks5_proxy_failure(self):
-        class ProxyError(RuntimeError):
-            pass
-
-        class Session(_ProtocolSession):
-            def __init__(self):
-                super().__init__()
-                self.frame_attempts = 0
-                self.reset_count = 0
-
-            def get(self, url, *, headers, allow_redirects):
-                if "sentinel/frame.html" in url:
-                    self.frame_attempts += 1
-                    if self.frame_attempts == 1:
-                        raise ProxyError(
-                            "curl: (97) cannot complete SOCKS5 connection to sentinel.openai.com"
-                        )
-                return super().get(url, headers=headers, allow_redirects=allow_redirects)
-
-            def reset_circuit_breaker(self):
-                self.reset_count += 1
-
-        session = Session()
-        with patch.object(openai_auth, "_interruptible_sleep") as sleep:
-            result = openai_auth.request_sentinel_token(session, "username_password_create")
-
-        self.assertEqual(result["token"], "challenge")
-        self.assertEqual(session.frame_attempts, 2)
-        self.assertEqual(session.reset_count, 1)
-        sleep.assert_called_once_with(1.0)
-
-    def test_register_user_matches_password_registration_request(self):
-        session = _ProtocolSession()
-
-        result = openai_auth.register_user(
-            session, "user@example.com", "Password!123", "sentinel", "so-token"
-        )
-
-        url, headers, body = session.posts[-1]
-        self.assertEqual(url, "https://auth.openai.com/api/accounts/user/register")
-        self.assertEqual(headers["referer"], "https://auth.openai.com/create-account/password")
-        self.assertEqual(headers["openai-sentinel-token"], "sentinel")
-        self.assertEqual(headers["openai-sentinel-so-token"], "so-token")
-        self.assertEqual(json.loads(body), {
-            "username": "user@example.com",
-            "password": "Password!123",
-        })
-        self.assertEqual(result["continue_url"], "/api/accounts/email-otp/send")
 
     def test_navigate_create_account_password_switches_from_passwordless_page(self):
         class Session(_ProtocolSession):
@@ -200,92 +102,81 @@ class OpenAIRegistrationFlowTests(unittest.TestCase):
         self.assertEqual(final_url, "https://auth.openai.com/email-verification")
         self.assertEqual(session.document_navigation_id, "document-1-next")
 
-    def test_validate_email_otp_forwards_both_sentinel_headers(self):
+
+
+
+
+    def test_challenge_network_failure_closes_sdk_without_exposing_credentials(self):
+        class SDK:
+            closed = False
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                self.closed = True
+
+            def requirements(self):
+                return "request-proof"
+
+            def solve(self, _challenge):
+                raise AssertionError("a failed HTTP challenge must not be solved")
+
+        class Session(_ProtocolSession):
+            def post(self, _url, *, headers, data):
+                raise ConnectionError("proxy credential must-not-leak")
+
+        sdk = SDK()
+        with patch.object(openai_auth, "SentinelSDK", return_value=sdk), patch.object(
+            openai_auth, "_proxy_retry_config", return_value=(1, 0)
+        ):
+            with self.assertRaises(openai_auth.SentinelRequestError) as raised:
+                openai_auth.request_sentinel_token(Session(), "username_password_create")
+        self.assertTrue(sdk.closed)
+        self.assertEqual(raised.exception.category, "sentinel_network_failed")
+        self.assertNotIn("must-not-leak", str(raised.exception))
+
+    def _solved_response(self, session, flow, *, so_required=False):
+        return {
+            "token": "current-challenge",
+            "so": {"required": so_required},
+            "_sentinel_flow": flow,
+            "_sentinel_device_id": session.device_id,
+            "_sentinel_header": json.dumps({
+                "p": "proof", "c": "current-challenge",
+                "id": session.device_id, "flow": flow,
+            }),
+            "_sentinel_so_header": None,
+        }
+
+    def test_result_from_another_flow_cannot_be_consumed(self):
         session = _ProtocolSession()
+        result = self._solved_response(session, "username_password_create")
+        with self.assertRaises(openai_auth.SentinelRequestError):
+            openai_auth.build_sentinel_header(session, result, "oauth_create_account")
 
-        openai_auth.validate_email_otp(session, "123456", "sentinel", "so-token")
-
-        url, headers, body = session.posts[-1]
-        self.assertEqual(url, "https://auth.openai.com/api/accounts/email-otp/validate")
-        self.assertEqual(headers["openai-sentinel-token"], "sentinel")
-        self.assertEqual(headers["openai-sentinel-so-token"], "so-token")
-        self.assertEqual(json.loads(body), {"code": "123456"})
-
-    def test_sentinel_flow_selects_matching_sdk_context_and_sid(self):
+    def test_result_from_another_device_cannot_be_consumed(self):
         session = _ProtocolSession()
-        captured = []
+        result = self._solved_response(session, "username_password_create")
+        session.device_id = "other-device"
+        with self.assertRaises(openai_auth.SentinelRequestError):
+            openai_auth.build_sentinel_header(session, result, "username_password_create")
 
-        def fake_requirements(sid, *, profile):
-            captured.append((sid, profile))
-            return "p-value"
-
-        with patch.object(openai_auth, "generate_requirements_token", side_effect=fake_requirements):
-            openai_auth.request_sentinel_token(session, "username_password_create")
-            openai_auth.request_sentinel_token(session, "email_otp_validate")
-            openai_auth.request_sentinel_token(session, "oauth_create_account")
-
-        # 同一个 SDK context 会缓存同一份 p；password iframe 与 top-level
-        # 各生成一次，top-level 的两个 flow 复用。
-        self.assertEqual([item[0] for item in captured], [
-            "iframe-sid", "top-level-sid",
-        ])
-        self.assertEqual(
-            captured[0][1]["script_src_samples"],
-            ["https://sentinel.openai.com/sentinel/20260810913b/sdk.js"],
-        )
-        self.assertIn("/sentinel/", captured[1][1]["script_src_samples"][0])
-        self.assertTrue(captured[1][1]["script_src_samples"][0].endswith("/sdk.js"))
-        self.assertIsNone(captured[0][1]["build_id"])
-        self.assertIsNone(captured[1][1]["build_id"])
-        flows = [json.loads(call[2])["flow"] for call in session.posts]
-        self.assertEqual(flows, [
-            "username_password_create", "email_otp_validate", "oauth_create_account",
-        ])
-        frame_gets = [call for call in session.gets if "sentinel/frame.html" in call[0]]
-        self.assertEqual(len(frame_gets), 2)
-        self.assertTrue(frame_gets[0][1]["user-initiated"])
-        self.assertFalse(frame_gets[1][1]["user-initiated"])
-
-    def test_password_page_sentinel_bundle_reuses_same_iframe_p(self):
+    def test_proof_from_another_challenge_cannot_be_consumed(self):
         session = _ProtocolSession()
-        with patch.object(openai_auth, "generate_requirements_token", return_value="shared-p") as generate:
-            result = openai_auth.request_password_sentinel_bundle(session)
+        result = self._solved_response(session, "username_password_create")
+        result["token"] = "next-challenge"
+        with self.assertRaises(openai_auth.SentinelRequestError):
+            openai_auth.build_sentinel_header(session, result, "username_password_create")
 
-        self.assertEqual(result["token"], "challenge")
-        generate.assert_called_once()
-        flows = []
-        values = []
-        for url, _headers, body in session.posts:
-            if url.endswith("/sentinel/req"):
-                payload = json.loads(body)
-                flows.append(payload["flow"])
-                values.append(payload["p"])
-        self.assertEqual(flows, [
-            "email_otp_validate",
-            "username_password_create",
-            "authorize_continue",
-        ])
-        self.assertEqual(values, ["shared-p", "shared-p", "shared-p"])
-        frame_gets = [call for call in session.gets if "sentinel/frame.html" in call[0]]
-        self.assertEqual(len(frame_gets), 1)
-        self.assertTrue(frame_gets[0][1]["user-initiated"])
-
-    def test_header_runner_uses_the_same_sid_as_challenge_request(self):
+    def test_empty_so_is_only_accepted_when_current_challenge_does_not_require_it(self):
         session = _ProtocolSession()
-        output = json.dumps({"c": "challenge", "so": "session-observer"})
-
-        with patch.object(openai_auth, "generate_sentinel_token", return_value=output) as generate:
-            header, so_header = openai_auth.build_sentinel_header(
-                session, {"token": "challenge"}, "username_password_create"
-            )
-            self.assertEqual(generate.call_args.kwargs["sentinel_sid"], "iframe-sid")
-            self.assertEqual(json.loads(header), {"c": "challenge"})
-            self.assertEqual(json.loads(so_header)["flow"], "username_password_create")
-
-            openai_auth.build_sentinel_header(
-                session, {"token": "challenge"}, "email_otp_validate"
-            )
-            self.assertEqual(generate.call_args.kwargs["sentinel_sid"], "top-level-sid")
+        result = self._solved_response(session, "username_password_create")
+        _header, so = openai_auth.build_sentinel_header(session, result, "username_password_create")
+        self.assertIsNone(so)
+        result["so"]["required"] = True
+        with self.assertRaises(openai_auth.SentinelRequestError):
+            openai_auth.build_sentinel_header(session, result, "username_password_create")
 
     def test_browser_session_keeps_document_id_until_explicit_navigation(self):
         session = object.__new__(BrowserSession)

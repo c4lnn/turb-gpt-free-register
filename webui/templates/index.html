@@ -1131,9 +1131,6 @@
     .accounts-filter-v2 .acc-v2-select-field select:focus {
       outline: none; border-color: #409eff;
     }
-    .accounts-filter-v2 #accountPlanCategoryFilterV2 {
-      width: 200px;
-    }
     .accounts-filter-v2 #accountEmailSourceFilterV2 {
       width: 180px;
     }
@@ -1205,9 +1202,6 @@
       }
       .accounts-filter-v2 .acc-v2-select-field select {
         width: 100%; min-width: 0;
-      }
-      .accounts-filter-v2 #accountPlanCategoryFilterV2 {
-        width: 100%;
       }
       .accounts-filter-v2 #accountEmailSourceFilterV2 {
         width: 100%;
@@ -2566,10 +2560,15 @@
             <span>邮箱来源</span>
             <select id="accountEmailSourceFilterV2" data-account-filter="email_source" aria-label="筛选邮箱来源"></select>
           </label>
-          <label class="acc-v2-select-field" for="accountPlanCategoryFilterV2" title="按统一套餐类别筛选账号">
-            <span>套餐类别</span>
-            <select id="accountPlanCategoryFilterV2" data-account-filter="plan_category" aria-label="筛选套餐类别"></select>
+          <button type="button" class="acc-v2-toggle" id="showPlusAccountsOnlyV2" aria-pressed="false" title="只查询/显示已开通套餐的账号">已开通套餐</button>
+          <button type="button" class="acc-v2-toggle" id="showPlusTrialAccountsOnlyV2" aria-pressed="false" title="只查询/显示当前为 free 且存在 eligible_promo_campaigns 套餐优惠的账号，不限 Plus">有套餐优惠</button>
+          <label class="acc-v2-inline" title="指定 eligible_promo_campaigns 中的套餐类型；留空表示全部优惠类型">优惠类型
+            <select id="promoTypeFilterV2"><option value="">全部</option><option value="plus">Plus</option><option value="pro">Pro</option><option value="go">Go</option><option value="team">Team</option><option value="business">Business</option></select>
           </label>
+          <label class="acc-v2-inline" title="按 eligible_promo_campaigns 优惠百分比筛选">优惠力度
+            <select id="promoDiscountFilterV2"><option value="">全部</option><option value="100">100%优惠</option><option value="50">50%优惠</option><option value="other">其他优惠（非100%/50%）</option></select>
+          </label>
+          <button type="button" class="acc-v2-toggle" id="showFreeAccountsOnlyV2" aria-pressed="false" title="只查询/显示已明确不能试用套餐的 free 账号；资格未知的账号不包含">free不可试用套餐</button>
           <label class="acc-v2-select-field" for="accountCodexAuthFilterV2" title="按 Codex 授权状态筛选账号">
             <span>Codex授权</span>
             <select id="accountCodexAuthFilterV2" data-account-filter="codex_auth_status" aria-label="筛选 Codex 授权状态"></select>
@@ -3028,7 +3027,6 @@ const ACCOUNT_FILTER_STATE = {
   q: '',
   archived: 'active',
   email_source: '',
-  plan_category: '',
   codex_auth_status: '',
   codex_operation_status: '',
   live_check_status: '',
@@ -3036,6 +3034,9 @@ const ACCOUNT_FILTER_STATE = {
   date_from: '',
   date_to: '',
 };
+let SHOW_PLUS_ACCOUNTS_ONLY = false;
+let SHOW_PLUS_TRIAL_ACCOUNTS_ONLY = false;
+let SHOW_FREE_ACCOUNTS_ONLY = false;
 const ACCOUNT_SELECTED = new Set();
 const OUTLOOK_SELECTED = new Set();
 let JOBS = [];
@@ -3716,6 +3717,17 @@ function getAccountsQuery() {
   return ACCOUNT_FILTER_STATE.q;
 }
 
+function getAccountsPlanFilter() {
+  if (SHOW_PLUS_ACCOUNTS_ONLY) return 'plus';
+  if (SHOW_PLUS_TRIAL_ACCOUNTS_ONLY) {
+    const type = (document.getElementById('promoTypeFilterV2')?.value || '').trim().toLowerCase();
+    const discount = (document.getElementById('promoDiscountFilterV2')?.value || '').trim();
+    return (type || discount) ? `promo:${type || '*'}:${discount}` : 'promo';
+  }
+  if (SHOW_FREE_ACCOUNTS_ONLY) return 'free_no_trial';
+  return '';
+}
+
 const ACCOUNT_FILTER_META = Object.freeze({
   archived: Object.freeze({
     id: 'accountArchiveFilterV2',
@@ -3735,13 +3747,6 @@ const ACCOUNT_FILTER_META = Object.freeze({
       'outlook', 'generic_api', 'cloudflare_domain', 'icloud', 'cloudflare',
       'unknown',
     ]),
-  }),
-  planCategory: Object.freeze({
-    id: 'accountPlanCategoryFilterV2',
-    stateKey: 'plan_category',
-    param: 'plan_category',
-    domain: 'planCategory',
-    codes: Object.freeze(['free_trial_eligible', 'free_no_trial', 'paid', 'unknown']),
   }),
   codexAuth: Object.freeze({
     id: 'accountCodexAuthFilterV2',
@@ -3823,6 +3828,8 @@ function buildAccountsQueryParams() {
     const value = String(state[meta.stateKey] || '').trim().toLowerCase();
     if (value) params.set(meta.param, value);
   });
+  const plan = getAccountsPlanFilter();
+  if (plan) params.set('plan', plan);
   if (state.q) params.set('q', state.q);
   if (state.date_from) params.set('date_from', state.date_from);
   if (state.date_to) params.set('date_to', state.date_to);
@@ -3922,7 +3929,7 @@ const ACCOUNT_STATUS_LABELS = Object.freeze({
   codexOperation: Object.freeze({idle: '未操作', queued: '补跑排队中', running: '补跑中', success: '补跑成功', failed: '补跑失败', canceled: '已停止', unknown: '未知'}),
   query: Object.freeze({pending: '待查询', queued: '查询排队中', running: '查询中', success: '查询成功', failed: '查询失败', unknown: '未知'}),
   extract: Object.freeze({pending: '待提链', queued: '排队', running: '提炼中', success: '提炼成功', failed: '提炼失败', canceled: '已取消', unknown: '未知'}),
-  planCategory: Object.freeze({free_trial_eligible: 'Free｜Plus 试用资格可用', free_no_trial: 'Free｜无 Plus 试用资格', paid: '付费套餐', unknown: '未知'}),
+  planCategory: Object.freeze({free_trial_eligible: 'Free｜有套餐优惠', free_no_trial: 'Free｜无套餐优惠', paid: '付费套餐', unknown: '未知'}),
   emailSource: Object.freeze({outlook: 'Outlook 邮箱池', generic_api: '通用 API 邮箱', cloudflare_domain: 'Cloudflare 域名邮箱', icloud: 'iCloud 隐私邮箱', cloudflare: 'Cloudflare 临时邮箱', unknown: '未知'}),
   checkoutType: Object.freeze({oaics: 'OAICS', cs_live: 'Stripe Live', other_cs: '其它 Stripe', unknown: '未知'}),
   live: Object.freeze({pending: '待查活', queued: '排队', running: '运行中', live: '正常', deactivated: '已废', failed: '失败', unknown: '未知'}),
@@ -3985,23 +3992,6 @@ function _discountLabel(r) {
   if (!Number.isNaN(n)) return `${n}折扣`;
   return `${amount}折扣`;
 }
-function _planErrorSummary(r) {
-  const kind = String(r.plan_check_error_kind || '').toLowerCase();
-  if (kind === 'http_4xx' || kind === 'http_5xx') {
-    const status = Number(r.plan_check_http_status);
-    const inRange = Number.isInteger(status)
-      && (kind === 'http_4xx' ? status >= 400 && status < 500 : status >= 500 && status < 600);
-    if (inRange) return `HTTP ${status}`;
-    // 仅兼容缺少具体状态码的历史记录；新失败结果都会携带 status。
-    return kind === 'http_4xx' ? 'HTTP 4xx' : 'HTTP 5xx';
-  }
-  if (kind === 'local_token_expired') return '本地AT已失效';
-  return ({
-    network_timeout: '网络请求超时',
-    network_connection: '网络连接失败',
-    response_format: '响应异常',
-  })[kind] || '';
-}
 function _planStatusMeta(r) {
   const code = (r.plan_query_status || 'unknown').toString();
   const label = _statusLabel('query', code);
@@ -4009,9 +3999,7 @@ function _planStatusMeta(r) {
   if (!updated) return '';
   const time = _fmtPlanTime(updated);
   const detailText = `${label}|${time}`;
-  const summary = code === 'failed' ? _planErrorSummary(r) : '';
-  const text = summary ? `查询失败：${summary}|${time}` : detailText;
-  return `<div class="acc-v2-sub" title="${esc(detailText)}">${esc(text)}</div>`;
+  return `<div class="acc-v2-sub" title="${esc(detailText)}">${esc(detailText)}</div>`;
 }
 function _checkoutStatusMeta(r) {
   const status = String(r.checkout_query_status || 'unknown').toLowerCase();
@@ -4104,8 +4092,8 @@ function _planCell(r) {
   const cls = isFreeTrialEligible || category === 'paid' ? 'status-success' : 'status-used';
   const expireRaw = r.plan_expires_at || r.expires_at || r.plan_renews_at || r.renews_at || '';
   const planSuffix = isFreeTrialEligible
-    ? 'Plus 试用资格可用'
-    : isFreeNoTrial ? '无 Plus 试用资格'
+    ? '有套餐优惠'
+    : isFreeNoTrial ? '无套餐优惠'
     : category === 'paid' ? r.billing_currency
     : _statusLabel('planCategory', category);
   const text = [plan, planSuffix].filter(Boolean).join('|') || '-';
@@ -4119,8 +4107,17 @@ function _planCell(r) {
   if (discount) detail.push(`折扣: ${discount}`);
   if (r.discount_expires_at) detail.push(`折扣结束: ${r.discount_expires_at}`);
   if (r.discount_promo_campaign_id) detail.push(`优惠: ${r.discount_promo_campaign_id}`);
-  if (isFreeTrialEligible) detail.push('Plus 试用资格可用');
-  return wrap(`<span class="pill ${cls}" title="${esc(detail.filter(Boolean).join('；'))}">${esc(text)}</span>`);
+  if (isFreeTrialEligible) detail.push('有套餐优惠');
+  let promoDetailBtn = '';
+  if (plan.toLowerCase() === 'free') {
+    let campaigns = {};
+    try { campaigns = r.eligible_promo_campaigns || {}; } catch (_) { campaigns = {}; }
+    const keys = (campaigns && typeof campaigns === 'object') ? Object.keys(campaigns) : [];
+    if (keys.length) {
+      promoDetailBtn = `<button type="button" class="promo-detail-btn" data-promo-details="${esc(JSON.stringify(campaigns))}">详情(${keys.length})</button>`;
+    }
+  }
+  return wrap(`<span class="pill ${cls}" title="${esc(detail.filter(Boolean).join('；'))}">${esc(text)}</span>${promoDetailBtn}`);
 }
 function _planAction(r) {
   const capabilities = r.plan_capabilities || {};
@@ -4781,6 +4778,44 @@ async function applyAccountsFilterChange(stateKey, value) {
   ACCOUNT_FILTER_STATE[stateKey] = String(value || '').trim().toLowerCase();
   await reloadAccountsForFilterChange();
 }
+function setAccountsFilterToggle(el, on) {
+  if (!el) return;
+  el.classList.toggle('is-active', !!on);
+  el.setAttribute('aria-pressed', on ? 'true' : 'false');
+}
+async function applyAccountsPlusFilter(on) {
+  SHOW_PLUS_ACCOUNTS_ONLY = !!on;
+  if (SHOW_PLUS_ACCOUNTS_ONLY) {
+    SHOW_PLUS_TRIAL_ACCOUNTS_ONLY = false;
+    SHOW_FREE_ACCOUNTS_ONLY = false;
+  }
+  setAccountsFilterToggle($('#showPlusAccountsOnlyV2'), SHOW_PLUS_ACCOUNTS_ONLY);
+  setAccountsFilterToggle($('#showPlusTrialAccountsOnlyV2'), SHOW_PLUS_TRIAL_ACCOUNTS_ONLY);
+  setAccountsFilterToggle($('#showFreeAccountsOnlyV2'), SHOW_FREE_ACCOUNTS_ONLY);
+  await reloadAccountsForFilterChange();
+}
+async function applyAccountsPlusTrialFilter(on) {
+  SHOW_PLUS_TRIAL_ACCOUNTS_ONLY = !!on;
+  if (SHOW_PLUS_TRIAL_ACCOUNTS_ONLY) {
+    SHOW_PLUS_ACCOUNTS_ONLY = false;
+    SHOW_FREE_ACCOUNTS_ONLY = false;
+  }
+  setAccountsFilterToggle($('#showPlusAccountsOnlyV2'), SHOW_PLUS_ACCOUNTS_ONLY);
+  setAccountsFilterToggle($('#showPlusTrialAccountsOnlyV2'), SHOW_PLUS_TRIAL_ACCOUNTS_ONLY);
+  setAccountsFilterToggle($('#showFreeAccountsOnlyV2'), SHOW_FREE_ACCOUNTS_ONLY);
+  await reloadAccountsForFilterChange();
+}
+async function applyAccountsFreeFilter(on) {
+  SHOW_FREE_ACCOUNTS_ONLY = !!on;
+  if (SHOW_FREE_ACCOUNTS_ONLY) {
+    SHOW_PLUS_ACCOUNTS_ONLY = false;
+    SHOW_PLUS_TRIAL_ACCOUNTS_ONLY = false;
+  }
+  setAccountsFilterToggle($('#showPlusAccountsOnlyV2'), SHOW_PLUS_ACCOUNTS_ONLY);
+  setAccountsFilterToggle($('#showPlusTrialAccountsOnlyV2'), SHOW_PLUS_TRIAL_ACCOUNTS_ONLY);
+  setAccountsFilterToggle($('#showFreeAccountsOnlyV2'), SHOW_FREE_ACCOUNTS_ONLY);
+  await reloadAccountsForFilterChange();
+}
 async function refreshAccountsList(btn) {
   if (!btn) return;
   const old = btn.textContent;
@@ -4811,6 +4846,26 @@ async function refreshAccountsList(btn) {
     select.addEventListener('change', () => {
       applyAccountsFilterChange(select.dataset.accountFilter, select.value);
     });
+  });
+  const plusV2 = $('#showPlusAccountsOnlyV2');
+  if (plusV2) plusV2.addEventListener('click', () => {
+    applyAccountsPlusFilter(!SHOW_PLUS_ACCOUNTS_ONLY);
+  });
+  const plusTrialV2 = $('#showPlusTrialAccountsOnlyV2');
+  if (plusTrialV2) plusTrialV2.addEventListener('click', () => {
+    applyAccountsPlusTrialFilter(!SHOW_PLUS_TRIAL_ACCOUNTS_ONLY);
+  });
+  const promoTypeV2 = $('#promoTypeFilterV2');
+  if (promoTypeV2) promoTypeV2.addEventListener('change', () => {
+    applyAccountsPlusTrialFilter(true);
+  });
+  const promoDiscountV2 = $('#promoDiscountFilterV2');
+  if (promoDiscountV2) promoDiscountV2.addEventListener('change', () => {
+    applyAccountsPlusTrialFilter(true);
+  });
+  const freeV2 = $('#showFreeAccountsOnlyV2');
+  if (freeV2) freeV2.addEventListener('click', () => {
+    applyAccountsFreeFilter(!SHOW_FREE_ACCOUNTS_ONLY);
   });
   const refreshV2 = $('#btnRefreshAccountsV2');
   if (refreshV2) refreshV2.addEventListener('click', () => refreshAccountsList(refreshV2));
@@ -7259,7 +7314,6 @@ function configFieldChoices(key, currentValue) {
     return [
       {value:'auto', label:'自动（专用代理优先）'},
       {value:'proxy', label:'强制代理（专用代理优先）'},
-      {value:'pool', label:'强制代理池'},
       {value:'direct', label:'强制直连'},
     ];
   }
@@ -7876,5 +7930,6 @@ jobsTimer = setInterval(() => { if (!$('#tab-register').classList.contains('hidd
 setInterval(loadSummary, 5000);
 setInterval(() => { if (!$('#tab-accounts').classList.contains('hidden')) pollAccountPlanStatuses(); }, 2000);
 </script>
+{% include 'promo_details.html' %}
 </body>
 </html>

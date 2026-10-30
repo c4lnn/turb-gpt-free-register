@@ -6,30 +6,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 const crypto = require("node:crypto");
 const { performance } = require("node:perf_hooks");
-
-function readArgs(argv) {
-  const args = {};
-  for (let i = 0; i < argv.length; i++) {
-    const item = argv[i];
-    if (!item.startsWith("--")) continue;
-    const key = item.slice(2);
-    const next = argv[i + 1];
-    // Python 适配层会显式传空字符串表示“该字段不存在”（例如 Auth 页
-    // build-id）。空字符串是合法参数值，不能误解析成布尔标志 "1"。
-    if (next === undefined || next.startsWith("--")) {
-      args[key] = "1";
-      continue;
-    }
-    args[key] = next;
-    i++;
-  }
-  return args;
-}
-
-function fail(message) {
-  process.stderr.write(`${message}\n`);
-  process.exit(1);
-}
+const readline = require("node:readline");
 
 function parseJson(text, source) {
   try {
@@ -37,58 +14,6 @@ function parseJson(text, source) {
   } catch (error) {
     throw new Error(`${source} 不是合法 JSON：${error.message}`);
   }
-}
-
-function pick(...values) {
-  for (const value of values) {
-    if (value !== undefined && value !== null && value !== "") return value;
-  }
-  return "";
-}
-
-function truthy(value) {
-  return value === true || value === "1" || value === "true" || value === "yes";
-}
-
-function readConfig(args) {
-  const explicitPath = args.config || process.env.SENTINEL_CONFIG;
-  const candidates = explicitPath
-    ? [path.resolve(explicitPath)]
-    : [
-        path.resolve(process.cwd(), "sentinel.config.json"),
-        path.resolve(process.cwd(), "tools", "sentinel.config.json"),
-        path.resolve(__dirname, "sentinel.config.json"),
-        path.resolve(__dirname, "..", "sentinel.config.json"),
-      ];
-
-  for (const filePath of candidates) {
-    if (!fs.existsSync(filePath)) continue;
-    return {
-      path: filePath,
-      data: parseJson(fs.readFileSync(filePath, "utf8"), filePath),
-    };
-  }
-
-  return { path: null, data: {} };
-}
-
-function configGetter(config) {
-  return (...keys) => {
-    for (const key of keys) {
-      if (config[key] !== undefined && config[key] !== null && config[key] !== "") {
-        return config[key];
-      }
-    }
-    return "";
-  };
-}
-
-function normalizeList(value, fallback) {
-  const source = Array.isArray(value) ? value.join(",") : pick(value, fallback);
-  return String(source)
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
 }
 
 function parseSecChBrands(value, major = "") {
@@ -105,134 +30,6 @@ function parseSecChBrands(value, major = "") {
   let m;
   while ((m = re.exec(text))) out.push({ brand: m[1], version: m[2] });
   return out.length ? out : text.split(",").map((part) => ({ brand: part.trim(), version: String(major || "") })).filter((x) => x.brand);
-}
-
-function xorDecode(text, key) {
-  let output = "";
-  const decoded = atobBinary(text);
-  for (let i = 0; i < decoded.length; i++) {
-    output += String.fromCharCode(decoded.charCodeAt(i) ^ key.charCodeAt(i % key.length));
-  }
-  return output;
-}
-
-function decodeDx(dx, proof) {
-  return JSON.parse(xorDecode(dx, proof));
-}
-
-function normalizeChallenge(raw) {
-  if (typeof raw === "string") {
-    const trimmed = raw.trim();
-    if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return trimmed;
-    raw = parseJson(trimmed, "challenge 字符串");
-  }
-
-  const candidates = [
-    raw?.cachedChatReq,
-    raw?.result?.cachedChatReq,
-    raw?.data?.cachedChatReq,
-    raw?.data,
-    raw,
-  ];
-
-  for (const candidate of candidates) {
-    if (!candidate || typeof candidate !== "object") continue;
-    if (candidate.proofofwork || candidate.token || candidate.turnstile || candidate.so) {
-      return candidate;
-    }
-  }
-
-  throw new Error("challenge 缺少 cachedChatReq/proofofwork/token 字段，无法喂给 SDK");
-}
-
-function readChallengeFile(filePath) {
-  const absolutePath = path.resolve(filePath);
-  const raw = fs.readFileSync(absolutePath, "utf8");
-  return normalizeChallenge(parseJson(raw, absolutePath));
-}
-
-const OFFICIAL_CHALLENGE_URL = "https://chatgpt.com/backend-api/sentinel/req";
-
-function headerMapFromEnv(options = {}) {
-  const headers = {
-    accept: "*/*",
-    "content-type":
-      options.contentType ||
-      (options.ignoreEnv ? "" : process.env.SENTINEL_CONTENT_TYPE) ||
-      "text/plain;charset=UTF-8",
-  };
-  const cookie =
-    options.cookie ||
-    (options.ignoreEnv ? "" : process.env.SENTINEL_COOKIE || process.env.CHATGPT_COOKIE);
-  const authorization =
-    options.bearer ||
-    (options.ignoreEnv ? "" : process.env.SENTINEL_AUTHORIZATION || process.env.CHATGPT_BEARER_TOKEN);
-  const userAgent = options.userAgent || (options.ignoreEnv ? "" : process.env.SENTINEL_USER_AGENT);
-
-  if (cookie) headers.cookie = cookie;
-  if (authorization) {
-    headers.authorization = authorization.toLowerCase().startsWith("bearer ")
-      ? authorization
-      : `Bearer ${authorization}`;
-  }
-  if (userAgent) {
-    headers["user-agent"] = userAgent;
-  }
-  if (options.pageUrl) headers.referer = options.pageUrl;
-  if (options.origin) headers.origin = options.origin;
-  if (options.deviceId) headers["oai-device-id"] = options.deviceId;
-  if (process.env.SENTINEL_HEADERS_JSON) {
-    Object.assign(headers, parseJson(process.env.SENTINEL_HEADERS_JSON, "SENTINEL_HEADERS_JSON"));
-  }
-  return headers;
-}
-
-function assertAllowedChallengeHost(challengeUrl, officialMode) {
-  const host = new URL(challengeUrl).hostname.toLowerCase();
-  const allowed = (process.env.SENTINEL_ALLOW_HOST || "")
-    .split(",")
-    .map((item) => item.trim().toLowerCase())
-    .filter(Boolean);
-
-  if ((host === "chatgpt.com" || host.endsWith(".chatgpt.com")) && !officialMode && !allowed.includes(host)) {
-    throw new Error(
-      "为避免误打真实生产接口，默认不请求 chatgpt.com。若这是比赛授权接口，请使用 --official 或设置 SENTINEL_ALLOW_HOST=chatgpt.com。"
-    );
-  }
-}
-
-async function fetchChallenge(challengeUrl, flow, proof, deviceId, options = {}) {
-  assertAllowedChallengeHost(challengeUrl, options.officialMode);
-  const hasCookie = Boolean(
-    options.cookie || (options.ignoreEnv ? "" : process.env.SENTINEL_COOKIE || process.env.CHATGPT_COOKIE)
-  );
-  const hasBearer = Boolean(
-    options.bearer ||
-      (options.ignoreEnv ? "" : process.env.SENTINEL_AUTHORIZATION || process.env.CHATGPT_BEARER_TOKEN)
-  );
-  if (options.officialMode && !hasCookie && !hasBearer) {
-    throw new Error("官方接口模式至少需要 Cookie 或 Bearer；请传 --cookie 或 --bearer。");
-  }
-  const body = JSON.stringify({ p: proof, id: deviceId, flow });
-  const response = await fetch(challengeUrl, {
-    method: "POST",
-    headers: headerMapFromEnv({
-      pageUrl: options.pageUrl,
-      origin: new URL(challengeUrl).origin,
-      userAgent: options.userAgent,
-      deviceId,
-      cookie: options.cookie,
-      bearer: options.bearer,
-      contentType: options.contentType,
-      ignoreEnv: options.ignoreEnv,
-    }),
-    body,
-  });
-  const text = await response.text();
-  if (!response.ok) {
-    throw new Error(`challenge API 返回 HTTP ${response.status}：${text.slice(0, 300)}`);
-  }
-  return normalizeChallenge(text);
 }
 
 function createEventTarget() {
@@ -469,10 +266,19 @@ function createIntlObject(options) {
 
 function createDateConstructor(options) {
   const NativeDate = Date;
+  const zoneNames = new Intl.DateTimeFormat("en-US", {
+    timeZone: options.timeZone || undefined,
+    timeZoneName: "long",
+  });
   const format = (date) => {
     const text = NativeDate.prototype.toString.call(date);
-    const name = String(options.timezoneName || "").trim();
-    return name ? text.replace(/\s*\([^)]*\)$/, ` (${name})`) : text;
+    if (Number.isNaN(date.getTime())) return text;
+    for (const part of zoneNames.formatToParts(date)) {
+      if (part.type === "timeZoneName") {
+        return text.replace(/\s*\([^)]*\)$/, ` (${part.value})`);
+      }
+    }
+    throw new Error("当前时区没有可用长名");
   };
   function BrowserDate(...args) {
     if (!new.target) return format(new NativeDate());
@@ -487,6 +293,7 @@ function createDateConstructor(options) {
   Object.setPrototypeOf(BrowserDate, NativeDate);
   return BrowserDate;
 }
+
 
 function createPerformanceObserver(observerSet) {
   return class PerformanceObserverMock {
@@ -751,6 +558,16 @@ function createAudioContext() {
 
 function createBrowserContext(options) {
   const windowTarget = createEventTarget();
+  // SDK 内部偶尔会调用 console.log/error（例如 cookie 库弃用告警）。这些必须
+  // 走 stderr，绝不能污染 stdout 协议通道。
+  const vmConsole = {
+    log: (...a) => process.stderr.write(a.map(String).join(" ") + "\n"),
+    info: (...a) => process.stderr.write(a.map(String).join(" ") + "\n"),
+    warn: (...a) => process.stderr.write(a.map(String).join(" ") + "\n"),
+    error: (...a) => process.stderr.write(a.map(String).join(" ") + "\n"),
+    debug: () => {},
+    trace: () => {},
+  };
   const managedTimers = new Set();
   const managedSetTimeout = (callback, delay, ...args) => {
     const id = setTimeout(() => {
@@ -764,16 +581,10 @@ function createBrowserContext(options) {
     managedTimers.delete(id);
     clearTimeout(id);
   };
-  const forcedRandomUUID = options.sentinelSid || "";
-  let randomUUIDCalls = 0;
+  // 真实 SDK 内部 sid 由 crypto.randomUUID 自行生成，应用层不得注入
+  // device_id / sentinel_sid / 固定种子。这里直接用 Node webcrypto 的真实随机源。
   const browserCrypto = Object.create(crypto.webcrypto);
-  browserCrypto.randomUUID = () => {
-    randomUUIDCalls += 1;
-    // 当前 sdk.js 的第一次 UUID 调用用于 Sentinel 内部 sid。
-    // 只固定这一次，避免后续 UUID 全部重复。
-    if (forcedRandomUUID && randomUUIDCalls === 1) return forcedRandomUUID;
-    return crypto.randomUUID();
-  };
+  browserCrypto.randomUUID = () => crypto.randomUUID();
   browserCrypto.getRandomValues = crypto.webcrypto.getRandomValues.bind(crypto.webcrypto);
 
   const performanceObservers = new Set();
@@ -1259,7 +1070,7 @@ function createBrowserContext(options) {
     btoa: btoaBinary,
     atob: atobBinary,
     fetch: browserFetch,
-    console,
+    console: vmConsole,
     Math: mathObject,
     Date: browserDate,
     Intl: browserIntl,
@@ -1351,7 +1162,7 @@ function createBrowserContext(options) {
       btoa: btoaBinary,
       atob: atobBinary,
       fetch: browserFetch,
-      console,
+      console: vmConsole,
       Math: mathObject,
       Date: browserDate,
       Intl: browserIntl,
@@ -1389,250 +1200,297 @@ function createBrowserContext(options) {
   };
 }
 
-async function main(argv = process.argv.slice(2), writeOutput = true) {
-  const args = readArgs(argv);
-  if (args.help === "1" || args.h === "1") {
-    const helpText = [
-      "用法：",
-      "  node sentinel-runner.js --cookie \"你的 Cookie\"",
-      "  node sentinel-runner.js --bearer \"Bearer 你的 token\"",
-      "  node sentinel-runner.js --cookie \"你的 Cookie\" --bearer \"Bearer 你的 token\"",
-      "  node sentinel-runner.js --config sentinel.config.json",
-      "",
-      "默认会读取当前目录、tools 目录或项目根目录的 sentinel.config.json。",
-      "",
-      "常用参数：",
-      "  --flow checkout_session_approval",
-      "  --page-url https://chatgpt.com/checkout/openai_llc/cs_xxx",
-      "  --device-id 你的_oai-did",
-      "  --challenge-url 自定义题目 challenge API",
-      "  --sdk 指定 sdk.js 路径",
-      "  --no-cookie 生成 token 时不向 challenge API 发送 Cookie",
-    ].join("\n");
-    if (writeOutput) process.stdout.write(`${helpText}\n`);
-    return helpText;
+function createDeferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+function emit(message) {
+  process.stdout.write(JSON.stringify(message) + "\n");
+}
+
+function emitError(phase, category) {
+  emit({ type: "error", phase, category,
+    message: `Sentinel SDK ${phase} 阶段失败（${category}）` });
+}
+
+// 服务端设备值（oai-did）来自成功 warmup 的 cookie；这里确保 SDK 的
+// En.getCookies()["oai-did"] 能读到与 Python 侧一致的设备值。SDK 内部 sid
+// 是另一回事，由 crypto.randomUUID 自行生成，绝不在此注入。
+function buildCookieHeader(deviceId, cookie) {
+  const seen = new Set();
+  const pairs = [];
+  for (const part of String(cookie || "").split(";")) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const idx = trimmed.indexOf("=");
+    if (idx <= 0) continue;
+    const name = trimmed.slice(0, idx).trim();
+    if (seen.has(name)) continue;
+    seen.add(name);
+    pairs.push(trimmed);
   }
-
-  const { path: configPath, data: config } = readConfig(args);
-  const ignoreEnvForCredentials = Boolean(configPath);
-  const cfg = configGetter(config);
-  const defaultSdkPath = fs.existsSync(path.resolve(__dirname, "sdk.js"))
-    ? path.resolve(__dirname, "sdk.js")
-    : path.resolve(__dirname, "..", "sdk.js");
-  const sdkPath = path.resolve(pick(args["sdk"], cfg("sdk", "sdkPath"), process.env.SENTINEL_SDK_PATH, defaultSdkPath));
-  const flow = pick(args.flow, cfg("flow"), process.env.SENTINEL_FLOW, "checkout_session_approval");
-  const challengeFile = pick(args["challenge-file"], cfg("challengeFile", "challenge_file"), process.env.SENTINEL_CHALLENGE_FILE);
-  const officialMode =
-    args.official === "1" ||
-    truthy(cfg("official")) ||
-    process.env.SENTINEL_OFFICIAL === "1" ||
-    (!challengeFile && !args["challenge-url"] && !cfg("challengeUrl", "challenge_url") && !process.env.SENTINEL_CHALLENGE_URL);
-  const challengeUrl =
-    pick(args["challenge-url"], cfg("challengeUrl", "challenge_url"), process.env.SENTINEL_CHALLENGE_URL) ||
-    (officialMode ? OFFICIAL_CHALLENGE_URL : "");
-  const noCookie = args["no-cookie"] === "1" || truthy(cfg("noCookie", "no_cookie"));
-  const cookieArg = noCookie ? "" : pick(args.cookie, args.cookies, cfg("cookie", "cookies"));
-  const bearerArg = pick(args.bearer, args.authorization, cfg("bearer", "bearerToken", "authorization", "accessToken"));
-  const contentType = pick(args["content-type"], cfg("contentType", "content_type"));
-  const debugDx = args["debug-dx"] === "1" || truthy(cfg("debugDx", "debug_dx"));
-  const debugDxLimit = Number(pick(args["debug-dx-limit"], cfg("debugDxLimit", "debug_dx_limit"), 80));
-  const deviceId =
-    pick(args["device-id"], cfg("deviceId", "device_id", "oaiDid", "oai_did"), process.env.SENTINEL_OAI_DID) ||
-    "8a5ad769-e9e7-4461-ae3a-6755d7f46b0b";
-
-  if (!fs.existsSync(sdkPath)) throw new Error(`找不到 SDK 文件：${sdkPath}`);
-  if (!challengeFile && !challengeUrl) {
-    throw new Error("请提供 --challenge-file、--challenge-url 或 --official，用于把题目服务器 challenge 喂回 SDK。");
+  if (!seen.has("oai-did") && deviceId) {
+    pairs.push(`oai-did=${deviceId}`);
   }
+  return pairs.join("; ");
+}
 
-  let cachedChallenge = null;
+function buildOptions(msg, flow) {
+  const screen = {
+    width: Number(msg.screen?.width || 0),
+    height: Number(msg.screen?.height || 0),
+    availWidth: Number(msg.screen?.availWidth ?? msg.screen?.width ?? 0),
+    availHeight: Number(msg.screen?.availHeight ?? msg.screen?.height ?? 0),
+    colorDepth: Number(msg.screen?.colorDepth || 24),
+    pixelDepth: Number(msg.screen?.pixelDepth || msg.screen?.colorDepth || 24),
+    orientation: { type: "landscape-primary", angle: 0 },
+  };
   const options = {
     flow,
-    challengeProof: pick(
-      args["challenge-proof"],
-      cfg("challengeProof", "challenge_proof"),
-      process.env.SENTINEL_CHALLENGE_PROOF,
-      ""
-    ),
-    sentinelSid: pick(args["sentinel-sid"], cfg("sentinelSid", "sentinel_sid"), process.env.SENTINEL_SID, ""),
-    pageUrl: pick(args["page-url"], cfg("pageUrl", "page_url"), process.env.SENTINEL_PAGE_URL, "https://chatgpt.com/checkout/openai_llc/cs_ctf"),
-    scriptSrc:
-      pick(
-        args["script-src"],
-        cfg("scriptSrc", "script_src"),
-        process.env.SENTINEL_SCRIPT_SRC,
-      "https://sentinel.openai.com/sentinel/20260810913b/sdk.js",
-      ),
-    buildId: pick(args["build-id"], cfg("buildId", "build_id"), process.env.SENTINEL_BUILD_ID, ""),
-    reactListeningKey: pick(args["react-listening-key"], cfg("reactListeningKey", "react_listening_key"), process.env.SENTINEL_REACT_LISTENING_KEY, ""),
-    reactContainerKey: pick(args["react-container-key"], cfg("reactContainerKey", "react_container_key"), process.env.SENTINEL_REACT_CONTAINER_KEY, ""),
-    reactResourcesKey: pick(args["react-resources-key"], cfg("reactResourcesKey", "react_resources_key"), process.env.SENTINEL_REACT_RESOURCES_KEY, ""),
-    cookie: noCookie
-      ? `oai-did=${deviceId}`
-      : cookieArg ||
-        (ignoreEnvForCredentials ? "" : process.env.SENTINEL_COOKIE || process.env.CHATGPT_COOKIE) ||
-        `oai-did=${deviceId}`,
-    userAgent:
-      pick(
-        args["user-agent"],
-        cfg("userAgent", "user_agent"),
-        process.env.SENTINEL_USER_AGENT,
-      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
-      ),
-    contentType,
-    browserFamily: pick(args["browser-family"], cfg("browserFamily", "browser_family"), process.env.SENTINEL_BROWSER_FAMILY, "chrome"),
-    navigatorPlatform: pick(args["navigator-platform"], cfg("navigatorPlatform", "navigator_platform"), process.env.SENTINEL_NAVIGATOR_PLATFORM, "MacIntel"),
-    navigatorVendor: pick(args["navigator-vendor"], cfg("navigatorVendor", "navigator_vendor"), process.env.SENTINEL_NAVIGATOR_VENDOR, "Google Inc."),
-    userAgentDataPlatform: pick(args["user-agent-data-platform"], cfg("userAgentDataPlatform", "user_agent_data_platform"), process.env.SENTINEL_UA_DATA_PLATFORM, "macOS"),
-    requestIdleCallback: truthy(pick(args["request-idle-callback"], cfg("requestIdleCallback", "request_idle_callback"), process.env.SENTINEL_REQUEST_IDLE_CALLBACK, "0")),
-    language: pick(args.language, cfg("language"), process.env.SENTINEL_LANGUAGE, "ja-JP"),
-    languages: normalizeList(pick(args.languages, cfg("languages")), process.env.SENTINEL_LANGUAGES || "ja-JP"),
-    timeZone: pick(args["time-zone"], args.timezone, cfg("timeZone", "time_zone", "timezone"), process.env.SENTINEL_TIME_ZONE, "Asia/Tokyo"),
-    timezoneName: pick(args["timezone-name"], cfg("timezoneName", "timezone_name"), process.env.SENTINEL_TIMEZONE_NAME, "Japan Standard Time"),
-    timezoneOffsetMinutes: Number(pick(args["timezone-offset-minutes"], cfg("timezoneOffsetMinutes", "timezone_offset_minutes"), process.env.SENTINEL_TIMEZONE_OFFSET_MINUTES, 540)),
-    hardwareConcurrency: Number(pick(args.cores, cfg("cores", "hardwareConcurrency"), process.env.SENTINEL_CORES, 4)),
-    jsHeapSizeLimit: Number(pick(args["js-heap-size-limit"], cfg("jsHeapSizeLimit", "js_heap_size_limit"), process.env.SENTINEL_JS_HEAP_SIZE_LIMIT, 4395630592)),
-    fixedRandom:
-      pick(args.random, cfg("random", "fixedRandom"), process.env.SENTINEL_FIXED_RANDOM)
-        ? Number(pick(args.random, cfg("random", "fixedRandom"), process.env.SENTINEL_FIXED_RANDOM))
-        : Number.NaN,
-    deviceMemory: Number(pick(args["device-memory"], cfg("deviceMemory", "device_memory"), process.env.SENTINEL_DEVICE_MEMORY, 8)),
-    devicePixelRatio: Number(pick(args["device-pixel-ratio"], cfg("devicePixelRatio", "device_pixel_ratio"), process.env.SENTINEL_DEVICE_PIXEL_RATIO, 2)),
-    chromeMajor: pick(args["chrome-major"], cfg("chromeMajor", "chrome_major"), process.env.SENTINEL_CHROME_MAJOR, "150"),
-    chromeFullVersion: pick(args["chrome-full-version"], cfg("chromeFullVersion", "chrome_full_version"), process.env.SENTINEL_CHROME_FULL_VERSION, "150.0.0.0"),
-    secChUa: pick(args["sec-ch-ua"], cfg("secChUa", "sec_ch_ua"), process.env.SENTINEL_SEC_CH_UA, '"Not;A=Brand";v="8", "Chromium";v="150", "Google Chrome";v="150"'),
-    secChUaPlatform: String(pick(args["sec-ch-ua-platform"], cfg("secChUaPlatform", "sec_ch_ua_platform"), process.env.SENTINEL_SEC_CH_UA_PLATFORM, "macOS")).replace(/^"|"$/g, ""),
-    secChUaFullVersionList: pick(args["sec-ch-ua-full-version-list"], cfg("secChUaFullVersionList", "sec_ch_ua_full_version_list"), process.env.SENTINEL_SEC_CH_UA_FULL_VERSION_LIST, ""),
-    secChUaPlatformVersion: String(pick(args["sec-ch-ua-platform-version"], cfg("secChUaPlatformVersion", "sec_ch_ua_platform_version"), process.env.SENTINEL_SEC_CH_UA_PLATFORM_VERSION, "15.7.0")).replace(/^"|"$/g, ""),
-    secChUaArch: String(pick(args["sec-ch-ua-arch"], cfg("secChUaArch", "sec_ch_ua_arch"), process.env.SENTINEL_SEC_CH_UA_ARCH, "arm")).replace(/^"|"$/g, ""),
-    secChUaBitness: String(pick(args["sec-ch-ua-bitness"], cfg("secChUaBitness", "sec_ch_ua_bitness"), process.env.SENTINEL_SEC_CH_UA_BITNESS, "64")).replace(/^"|"$/g, ""),
-    secChUaModel: String(pick(args["sec-ch-ua-model"], cfg("secChUaModel", "sec_ch_ua_model"), process.env.SENTINEL_SEC_CH_UA_MODEL, "")).replace(/^"|"$/g, ""),
-    cfEdgeMsec: Number(pick(args["cf-edge-msec"], cfg("cfEdgeMsec", "cf_edge_msec"), process.env.SENTINEL_CF_EDGE_MSEC, 38)),
-    cfOriginTtfbMsec: Number(pick(args["cf-origin-ttfb-msec"], cfg("cfOriginTtfbMsec", "cf_origin_ttfb_msec"), process.env.SENTINEL_CF_ORIGIN_TTFB_MSEC, 74)),
-    cfTcpRttMsec: Number(pick(args["cf-tcp-rtt-msec"], cfg("cfTcpRttMsec", "cf_tcp_rtt_msec"), process.env.SENTINEL_CF_TCP_RTT_MSEC, 22)),
-    cfQuicRttMsec: Number(pick(args["cf-quic-rtt-msec"], cfg("cfQuicRttMsec", "cf_quic_rtt_msec"), process.env.SENTINEL_CF_QUIC_RTT_MSEC, 0)),
-    screen: (() => {
-      const width = Number(pick(args.width, cfg("width", "screenWidth"), process.env.SENTINEL_SCREEN_WIDTH, 1680));
-      const height = Number(pick(args.height, cfg("height", "screenHeight"), process.env.SENTINEL_SCREEN_HEIGHT, 1050));
-      const availWidth = Number(pick(args["avail-width"], cfg("availWidth", "screenAvailWidth"), process.env.SENTINEL_SCREEN_AVAIL_WIDTH, width));
-      const availHeight = Number(pick(args["avail-height"], cfg("availHeight", "screenAvailHeight"), process.env.SENTINEL_SCREEN_AVAIL_HEIGHT, Math.max(0, height - 25)));
-      const colorDepth = Number(pick(args["color-depth"], cfg("colorDepth", "color_depth"), process.env.SENTINEL_COLOR_DEPTH, 24));
-      return {
-        width,
-        height,
-        availWidth,
-        availHeight,
-        colorDepth,
-        pixelDepth: colorDepth,
-        orientation: { type: "landscape-primary", angle: 0 },
-      };
-    })(),
-    async handleIframeMessage(message) {
-      if (message.type !== "token" && message.type !== "init") {
+    pageUrl: String(msg.page_url || "https://auth.openai.com/create-account/password"),
+    scriptSrc: String(msg.script_src || ""),
+    buildId: String(msg.build_id || ""),
+    reactListeningKey: String(msg.react_listening_key || ""),
+    reactContainerKey: String(msg.react_container_key || ""),
+    reactResourcesKey: String(msg.react_resources_key || ""),
+    cookie: buildCookieHeader(msg.device_id, msg.cookie),
+    browserFamily: String(msg.browser_family || "chrome"),
+    navigatorPlatform: String(msg.navigator_platform || "MacIntel"),
+    navigatorVendor: String(msg.navigator_vendor || "Google Inc."),
+    userAgentDataPlatform: String(msg.user_agent_data_platform || "macOS"),
+    requestIdleCallback: msg.request_idle_callback === 1 || msg.request_idle_callback === true,
+    language: String(msg.language || "en-US"),
+    languages: Array.isArray(msg.languages)
+      ? msg.languages.map(String)
+      : [String(msg.language || "en-US")],
+    timeZone: String(msg.time_zone || ""),
+    hardwareConcurrency: Number(msg.hardware_concurrency || 4),
+    jsHeapSizeLimit: Number(msg.js_heap_size_limit || 4395630592),
+    deviceMemory: Number(msg.device_memory || 8),
+    devicePixelRatio: Number(msg.device_pixel_ratio || 2),
+    chromeMajor: String(msg.chrome_major || ""),
+    chromeFullVersion: String(msg.chrome_full_version || ""),
+    secChUa: String(msg.sec_ch_ua || ""),
+    secChUaPlatform: String(msg.sec_ch_ua_platform || "").replace(/^"|"$/g, ""),
+    secChUaFullVersionList: String(msg.sec_ch_ua_full_version_list || ""),
+    secChUaPlatformVersion: String(msg.sec_ch_ua_platform_version || "").replace(/^"|"$/g, ""),
+    secChUaArch: String(msg.sec_ch_ua_arch || "").replace(/^"|"$/g, ""),
+    secChUaBitness: String(msg.sec_ch_ua_bitness || "").replace(/^"|"$/g, ""),
+    secChUaModel: String(msg.sec_ch_ua_model || "").replace(/^"|"$/g, ""),
+    userAgent: String(msg.user_agent || ""),
+    screen,
+    outerWidth: Number(msg.outer_width ?? screen.availWidth),
+    outerHeight: Number(msg.outer_height ?? screen.availHeight),
+    innerWidth: Number(msg.inner_width ?? screen.availWidth),
+    innerHeight: Number(msg.inner_height ?? Math.max(0, screen.availHeight - 87)),
+    gpu: {
+      vendor: String(msg.webgl_vendor || ""),
+      renderer: String(msg.webgl_renderer || ""),
+    },
+  };
+  return options;
+}
+
+async function runProtocol() {
+  let state = null;
+
+  function shutdown() {
+    if (!state) return;
+    try {
+      state.clearTimers?.();
+    } catch {
+      /* ignore */
+    }
+    state = null;
+  }
+
+  function handleRequirements(msg) {
+    const flow = String(msg.flow || "");
+    if (!flow) {
+      emitError("requirements", "invalid_flow");
+      return;
+    }
+    const sdkPath = path.resolve(String(msg.sdk_path || path.join(__dirname, "sdk.js")));
+    if (!fs.existsSync(sdkPath)) {
+      emitError("requirements", "sdk_missing");
+      return;
+    }
+
+    const options = buildOptions(msg, flow);
+    const solveDeferred = createDeferred();
+    let requirementsEmitted = false;
+
+    options.handleIframeMessage = async (message) => {
+      if (message.type !== "token" && message.type !== "req") {
         throw new Error(`未知 iframe 消息类型：${message.type}`);
       }
       const proof = message.p;
-      if (challengeFile) {
-        cachedChallenge ||= readChallengeFile(challengeFile);
-      } else {
-        cachedChallenge = await fetchChallenge(challengeUrl, flow, proof, deviceId, {
-          officialMode,
-          pageUrl: options.pageUrl,
-          userAgent: options.userAgent,
-          cookie: noCookie ? "" : cookieArg,
-          bearer: bearerArg,
-          contentType: options.contentType,
-          ignoreEnv: ignoreEnvForCredentials,
-        });
+      if (!proof || typeof proof !== "string" || !proof.trim()) {
+        throw new Error("SDK 未生成有效 requirements proof");
       }
-      const cachedProof = options.challengeProof || proof;
-      if (debugDx && cachedChallenge?.turnstile?.dx) {
-        try {
-          const decoded = decodeDx(cachedChallenge.turnstile.dx, cachedProof);
-          const limit = Number.isFinite(debugDxLimit) && debugDxLimit > 0 ? debugDxLimit : 80;
-          process.stderr.write(`dx 前 ${limit} 条指令：${JSON.stringify(decoded.slice(0, limit))}\n`);
-        } catch (error) {
-          process.stderr.write(`dx 解码失败：${error.message}\n`);
+      requirementsEmitted = true;
+      emit({ type: "requirements_result", flow, p: proof });
+      const resolved = await solveDeferred.promise;
+      return { cachedProof: proof, cachedChatReq: resolved.cachedChatReq };
+    };
+
+    let context;
+    let clearTimers;
+    try {
+      ({ context, clearTimers } = createBrowserContext(options));
+      const sdkCode = fs.readFileSync(sdkPath, "utf8");
+      vm.runInContext(sdkCode, context, { filename: sdkPath });
+      if (!context.SentinelSDK || typeof context.SentinelSDK.token !== "function") {
+        throw new Error("SDK 加载后没有暴露 SentinelSDK.token");
+      }
+    } catch (error) {
+      emitError("requirements", "sdk_incompatible");
+      return;
+    }
+
+    const tokenPromise = Promise.resolve()
+      .then(() => context.SentinelSDK.token(flow))
+      .then((tokenText) => {
+        if (!requirementsEmitted) {
+          throw new Error("SDK token() 未请求 challenge 即返回，接口不兼容");
         }
+        return { tokenText };
+      })
+      .catch((error) => ({ error }));
+
+    // 若真实 SDK 在 requirements 阶段即失败（尚未发出 requirements_result），
+    // 立即上报，避免 Python 等待超时。
+    tokenPromise.then((result) => {
+      if (result?.error && !requirementsEmitted) {
+        emitError("requirements", "sdk_exec_failed");
       }
-      return {
-        cachedProof,
-        cachedChatReq: cachedChallenge,
-      };
-    },
-  };
+    });
 
-  // 窗口尺寸和 Screen 分开建模。真实桌面 Chrome 中 viewport 不会等于整块
-  // screen；未显式传入时按最大化窗口给出一组自洽的标题栏/工具栏差值。
-  options.outerWidth = Number(pick(
-    args["outer-width"], cfg("outerWidth", "outer_width"),
-    process.env.SENTINEL_OUTER_WIDTH, options.screen.availWidth,
-  ));
-  options.outerHeight = Number(pick(
-    args["outer-height"], cfg("outerHeight", "outer_height"),
-    process.env.SENTINEL_OUTER_HEIGHT, options.screen.availHeight,
-  ));
-  options.innerWidth = Number(pick(
-    args["inner-width"], cfg("innerWidth", "inner_width", "viewportWidth", "viewport_width"),
-    process.env.SENTINEL_INNER_WIDTH, options.outerWidth,
-  ));
-  options.innerHeight = Number(pick(
-    args["inner-height"], cfg("innerHeight", "inner_height", "viewportHeight", "viewport_height"),
-    process.env.SENTINEL_INNER_HEIGHT, Math.max(0, options.outerHeight - 87),
-  ));
-  options.gpu = {
-    vendor: pick(args["webgl-vendor"], cfg("webglVendor", "webgl_vendor"), process.env.SENTINEL_WEBGL_VENDOR),
-    renderer: pick(args["webgl-renderer"], cfg("webglRenderer", "webgl_renderer"), process.env.SENTINEL_WEBGL_RENDERER),
-  };
-
-  if (options.timeZone) {
-    process.env.TZ = options.timeZone;
+    state = { context, clearTimers, flow, tokenPromise, solveDeferred };
   }
 
-  const { context, clearTimers } = createBrowserContext(options);
-  let sdkCode = fs.readFileSync(sdkPath, "utf8");
-  if (debugDx) {
-    sdkCode = sdkCode.replace(
-      "Cn.set(n,Cn.get(e)[Cn.get(r)].bind(Cn[t(24)](e)))",
-      "(()=>{const __o=Cn.get(e),__p=Cn.get(r);if(!__o||!__o[__p])console.error('[dx bind missing]',typeof __o,__p,Object.prototype.toString.call(__o));return Cn.set(n,__o[__p].bind(__o))})()"
-    );
-  }
-  vm.runInContext(sdkCode, context, { filename: sdkPath });
-  if (!context.SentinelSDK?.token) {
-    throw new Error("SDK 加载后没有暴露 SentinelSDK.token");
-  }
+  async function handleSolve(msg) {
+    if (!state) {
+      emitError("solve", "no_requirements");
+      return;
+    }
+    if (String(msg.flow || "") !== state.flow) {
+      state.solveDeferred.reject(new Error("solve flow 与 requirements 不一致"));
+      emitError("solve", "flow_mismatch");
+      return;
+    }
+    const challenge = msg.challenge;
+    if (!challenge || typeof challenge !== "object" || Array.isArray(challenge)) {
+      state.solveDeferred.reject(new Error("solve 缺少有效 challenge"));
+      emitError("solve", "invalid_challenge");
+      return;
+    }
 
-  const tokenText = await context.SentinelSDK.token(flow);
-  const tokenPayload = parseJson(tokenText, "SentinelSDK.token 输出");
-  // SO collector 与主 token 是两条独立输出。浏览器随后调用
-  // sessionObserverToken(flow)，并把结果放进 openai-sentinel-so-token。
-  if (context.SentinelSDK.sessionObserverToken) {
-    const soText = await context.SentinelSDK.sessionObserverToken(flow);
-    if (soText) {
+    state.solveDeferred.resolve({ cachedChatReq: challenge });
+
+    let result;
+    try {
+      result = await state.tokenPromise;
+    } catch (error) {
+      emitError("solve", "sdk_exec_failed");
+      shutdown();
+      return;
+    }
+
+    if (result?.error) {
+      emitError("solve", "sdk_exec_failed");
+      shutdown();
+      return;
+    }
+
+    let tokenPayload;
+    try {
+      tokenPayload = parseJson(result.tokenText, "SentinelSDK.token 输出");
+    } catch (error) {
+      emitError("solve", "solve_invalid");
+      shutdown();
+      return;
+    }
+
+    let soPayload = null;
+    if (typeof state.context.SentinelSDK.sessionObserverToken === "function") {
       try {
-        const soPayload = typeof soText === "string" ? JSON.parse(soText) : soText;
-        tokenPayload._so = soPayload?.so || soPayload;
+        const soText = await state.context.SentinelSDK.sessionObserverToken(state.flow);
+        if (soText) {
+          soPayload = typeof soText === "string"
+            ? parseJson(soText, "sessionObserverToken 输出")
+            : soText;
+        }
       } catch {
-        tokenPayload._so = soText;
+        // SO 缺失不致命；Python 端按当前 challenge 是否要求 SO 判断。
       }
     }
+
+    emit({
+      type: "solve_result",
+      flow: state.flow,
+      token: tokenPayload,
+      so: soPayload,
+    });
+    shutdown();
   }
-  const outputText = JSON.stringify(tokenPayload);
-  clearTimers();
-  if (!writeOutput) return outputText;
-  if (args.pretty || process.env.SENTINEL_PRETTY === "1") {
-    process.stdout.write(`${JSON.stringify(tokenPayload, null, 2)}\n`);
-  } else {
-    process.stdout.write(`${outputText}\n`);
-  }
-  return outputText;
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    crlfDelay: Infinity,
+    terminal: false,
+  });
+  rl.on("line", (line) => {
+    const trimmed = String(line || "").trim();
+    if (!trimmed) return;
+    let msg;
+    try {
+      msg = JSON.parse(trimmed);
+    } catch {
+      emitError("protocol", "invalid_json");
+      return;
+    }
+    if (!msg || typeof msg !== "object" || Array.isArray(msg)) {
+      emitError("protocol", "invalid_json");
+      return;
+    }
+    switch (msg.type) {
+      case "requirements":
+        handleRequirements(msg);
+        break;
+      case "solve":
+        handleSolve(msg).catch(() => {});
+        break;
+      case "close":
+        shutdown();
+        emit({ type: "closed" });
+        rl.close();
+        break;
+      default:
+        emitError("protocol", "unknown_message");
+    }
+  });
+  rl.on("close", () => {
+    shutdown();
+    process.exit(0);
+  });
 }
 
 if (require.main === module) {
-  main().catch((error) => fail(error?.stack || error?.message || String(error)));
+  runProtocol().catch((error) => {
+    emitError("protocol", "sdk_exec_failed");
+    process.exit(1);
+  });
 }
 
 module.exports = {
-  main,
-  normalizeChallenge,
+  runProtocol,
+  buildOptions,
+  createBrowserContext,
 };

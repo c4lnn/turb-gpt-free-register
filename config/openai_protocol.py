@@ -57,10 +57,15 @@ OPENAI_PROXY_RETRY_DELAY = 1.0
 # 登录页预检使用独立的短超时。代理端口可连接并不代表其上游 TLS 链路可用，
 # 避免失效节点按全局 30 秒超时长时间占住注册 worker。
 OPENAI_PREFLIGHT_TIMEOUT = 12.0
+# 注册专用：总尝试次数含首次请求，不再嵌套通用代理重试。
+OPENAI_REGISTRATION_WARMUP_ATTEMPTS = 20
+OPENAI_REGISTRATION_WARMUP_TIMEOUT = 40.0
 
 
 apply_env_overrides(globals(), {
     "OPENAI_PROXY_RETRY_MAX_ATTEMPTS": "int",
     "OPENAI_PROXY_RETRY_DELAY": "float",
     "OPENAI_PREFLIGHT_TIMEOUT": "float",
+    "OPENAI_REGISTRATION_WARMUP_ATTEMPTS": "int",
+    "OPENAI_REGISTRATION_WARMUP_TIMEOUT": "float",
 })

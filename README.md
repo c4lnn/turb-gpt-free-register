@@ -1,6 +1,6 @@
 # Turb GPT Free Register
 
-ChatGPT / OpenAI 账号自动注册与 Codex OAuth 授权工具。基于 `curl_cffi` + Sentinel/PoW 的纯协议注册。
+ChatGPT / OpenAI 账号自动注册与 Codex OAuth 授权工具。注册使用 `wreq/chrome152` 与真实 Sentinel SDK 的纯协议链路；独立任务保留各自 HTTP 后端配置。
 
 项目提供 **CLI** 和 **本地 WebUI** 两种使用方式。日常推荐使用 WebUI。
 
@@ -95,8 +95,8 @@ Masi CDK 使用「可选池」和「已用完池」两个业务池。可在 WebU
 
 ## 环境要求
 
-- Python 3.10+
-- Node.js 18+
+- Python 3.11+（`wreq==0.13.0` 要求；本轮实测 Python 3.12.15）
+- Node.js 18+，需具备 `node:vm`、WebCrypto 和可用的 Intl/IANA 时区数据；本轮实测 v22.19.0
 - 可用代理、系统代理/VPN
 - 如启用 Codex 自动授权：需要接码平台配置
 
@@ -106,6 +106,21 @@ Masi CDK 使用「可选池」和「已用完池」两个业务池。可在 WebU
 pip install -r requirements.txt
 node --version
 ```
+
+注册入口固定使用已声明的 `wreq==0.13.0` 与 `chrome152`，HTTP UA／Client Hints 和 SDK navigator／userAgentData 同步为 152，平台仍为既有 macOS。缺依赖或不支持该档位时在认证前失败，不自动安装或退回 curl_cffi。共享 `PROTOCOL_HTTP_CLIENT`、`CURL_CFFI_IMPERSONATE`、`WREQ_EMULATION` 继续控制独立查活、Codex 和补设 2FA，不覆盖注册入口；注册同步 2FA 沿用成功注册会话及既有重认证流程。
+
+### 注册地域与 SDK 运行要求
+
+- 注册初始化经选定路由的当前 Cloudflare trace 确认有效 IP 与受支持国家，不读取历史地域缓存、不切换直连、不要求多个 GeoIP 服务 IP 或外部时区一致。trace 在首次 warmup 前执行一次，设备重试不重复；重建或轮换后无新 trace 时，原国家只代表初始／最近旧传输观测，不保证当前出口固定。初始探测失败、未知国家或无效 IP 均停止；手动画像也不能救活未知出口国家。
+- 默认自动使用实际国家的完整语言／IANA 时区映射。关闭 `AUTO_BROWSER_LOCALE_FROM_IP` 后沿用 `BROWSER_LOCALE_PROFILE` 显式选择画像；原生调用也可通过显式 profile 的国家／locale 选择覆盖另一已知出口国家。实际国家与 `profile_country`、`locale_source` 分开记录；所选画像自身不完整或语言／时区不相容仍拒绝。AU／CA 使用本国语言与时区，不复用 GB／US 模板。
+- 同国 IP 轮换、有效初始化后的额外预检不可达或另一已知国家仅诊断，保留任务内冻结画像；后续成功响应明确为未知国家仍停止。有效服务端 `oai-did` 是独立前提，CSRF 200 或 403 但没有有效设备 cookie 都不能继续认证。
+- 设备 warmup 采用限定的 navigation 转 XHR 头形态（JSON、empty／cors／same-origin、priority u=0），不额外发送 Referer／Content-Type 或导航标志，不改变其它认证请求的头。失败尝试沿用有界重试、空 CookieJar 重建和池候选策略；成功会话直接继续注册，不新增独立探针或假邮箱 POST。设备仍须域／根路径适用、非空、未过期且无歧义；wreq 的 host-only cookie 来源从真实响应及重定向恢复，不放宽门禁。
+- `proxy` 表示已有代理连接／认证失败证据；`geo_service`、`geo_parse`、`geo_incomplete`、`geo_mismatch` 分别表示服务不可用、解析失败、信息不足与所选画像自身冲突，不用于合法跨国覆盖或同国轮换。独立查活、Codex 与补设 2FA 保持原策略。
+- Python 时区数据由依赖 `tzdata` 提供，Windows 同样需要安装。SDK Date/Intl 使用冻结的 IANA 时区并按实际日期计算夏令时，不用宿主时区或当天静态长名冒充其它日期。
+- 保留 `sentinel/sdk.js` 与 `sentinel/sentinel-runner.js`。每个单 flow 使用一个短生命周期 Node 宿主完成同 VM 的 requirements/solve，HTTP challenge 仍由 Python 当前会话发起；可通过 `NODE_EXECUTABLE` 指定 Node 程序。OSS 的 QuickJS 文件名不表示本项目需要另装 QuickJS 引擎。
+- SDK 消息通过内存中的 stdin/stdout 交互，原始输出、challenge、指纹和 token 不进入诊断日志或临时 JSON；失败不回退手工 requirements 或旧 runner。主 token 与当前上下文绑定，PoW/SO 要求读取本次 challenge。
+- 测试 WebUI 使用 5100，生产保持 5000。本轮真实初始化、SDK challenge 和一条新号密码／OTP／资料／最终会话／同步 2FA 已通过；受控失败边界与历史出口故障另列，不承诺所有路由成功。实际通过范围见 `docs/protocol-registration-flow-diff.md` 4.5.5。
+
 
 ### 密钥配置（.env）
 

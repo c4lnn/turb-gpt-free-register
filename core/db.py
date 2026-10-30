@@ -39,7 +39,6 @@ from core.email_pool_status import (
 )
 from core.account_status_contracts import (
     build_account_status_contract,
-    classify_plan_category,
     codex_auth_status,
     codex_operation_status,
     normalize_codex_auth_status,
@@ -55,14 +54,6 @@ _LEGACY_DATA_DIR = _PROJECT_ROOT / "data"
 _LOG_DIR = _PROJECT_ROOT / "注册日志"
 _PLAN_CHECK_STALE_SECONDS = 120
 _PLAN_CHECK_QUEUE_STALE_SECONDS = 1800
-_PLAN_CHECK_ERROR_KINDS = frozenset({
-    "network_timeout",
-    "network_connection",
-    "http_4xx",
-    "http_5xx",
-    "response_format",
-    "local_token_expired",
-})
 _CHECKOUT_SESSION_STALE_SECONDS = 120
 _CHECKOUT_SESSION_QUEUE_STALE_SECONDS = 1800
 
@@ -1322,57 +1313,6 @@ def _find_by_email(rows: list[dict], email: str) -> dict | None:
     return next((r for r in rows if (r.get("email") or "").lower() == target), None)
 
 
-def _plan_check_error_kind_for_row(row: dict) -> str | None:
-    """返回套餐失败分类，并兼容没有新字段的历史记录。"""
-    try:
-        http_status = int(row.get("plan_check_http_status"))
-    except (TypeError, ValueError):
-        http_status = None
-    if http_status is not None:
-        if 400 <= http_status < 500:
-            return "http_4xx"
-        if 500 <= http_status < 600:
-            return "http_5xx"
-
-    current = str(row.get("plan_check_error_kind") or "").strip()
-    if current in _PLAN_CHECK_ERROR_KINDS:
-        return current
-
-    error = str(row.get("plan_check_error") or "")
-    lowered = error.lower()
-    if error.strip() in {
-        # 兼容历史版本生成的旧文案，以及当前简化后的新文案。
-        "AT已过期/失效，请手动查活刷新",
-        "本地判断：AT已过期/失效，请手动查活刷新",
-        "AT已失效，请手动查活刷新",
-        "本地AT已失效，请手动查活刷新",
-    }:
-        return "local_token_expired"
-    if re.search(r"\bhttp\s*4\d{2}\b", lowered):
-        return "http_4xx"
-    if re.search(r"\bhttp\s*5\d{2}\b", lowered):
-        return "http_5xx"
-    if "timeout" in lowered or "timed out" in lowered or "超时" in error:
-        return "network_timeout"
-    if any(marker in error for marker in ("响应不是 JSON", "响应缺少", "未找到可解析的账号条目")):
-        return "response_format"
-    if any(marker in lowered for marker in ("invalid json", "jsondecodeerror")):
-        return "response_format"
-    if any(
-        marker in lowered
-        for marker in (
-            "connectionerror",
-            "proxyerror",
-            "sslerror",
-            "connection refused",
-            "connection reset",
-            "connect failed",
-        )
-    ):
-        return "network_connection"
-    return None
-
-
 def _decorate_account(row: dict, *, include_checkout_session_id: bool = True) -> dict:
     out = {
         key: value
@@ -1443,12 +1383,6 @@ def _decorate_account(row: dict, *, include_checkout_session_id: bool = True) ->
             out["checkout_check_error"] = out["checkout_check_error_message"]
             out["checkout_check_ok"] = False
             out["checkout_check_stale"] = True
-    if out.get("plan_check_status") == "failed":
-        error_kind = _plan_check_error_kind_for_row(out)
-        if error_kind:
-            out["plan_check_error_kind"] = error_kind
-        else:
-            out.pop("plan_check_error_kind", None)
     out["extract_link_resumable"] = account_extract_resumable(out)
     out.update(build_account_status_contract(out))
     out["copy_line"] = _account_line(out)
@@ -1456,19 +1390,68 @@ def _decorate_account(row: dict, *, include_checkout_session_id: bool = True) ->
 
 
 def _account_matches_plan_filter(row: dict, plan_filter: str | None = None) -> bool:
-    """按规范套餐类别过滤；旧值仅在兼容期映射到规范类别。"""
+    """账号套餐过滤：支持已开通 Plus、任意套餐优惠及 free 资格过滤。"""
     f = str(plan_filter or "").strip().lower()
     if not f or f in {"all", "any"}:
         return True
-    category = classify_plan_category(row)
-    if f in {"free_trial_eligible", "free_no_trial", "paid", "unknown"}:
-        return category == f
-    # 兼容旧前端参数：free 仍表示所有已确认的 Free 分类，plus 表示 paid。
-    if f == "free":
-        return category in {"free_trial_eligible", "free_no_trial"}
+    plan = str(row.get("current_plan_type") or row.get("plan_type") or "").strip().lower()
     if f == "plus":
-        return category == "paid"
-    return False
+        # "free(可Plus试用)"/plus_trial_eligible 只是可试用，不算已开通 Plus。
+        return "plus" in plan and "free" not in plan
+    if f in {"plus_trial", "plus_trial_eligible", "trial", "trial_eligible"}:
+        trial = row.get("plus_trial_eligible")
+        if isinstance(trial, str):
+            trial = trial.strip().lower() in {"1", "true", "yes", "on"}
+        return plan == "free" and bool(trial)
+    if f in {"promo", "promotion", "plan_promo", "eligible_promo"} or f.startswith("promo:"):
+        campaigns = row.get("eligible_promo_campaigns")
+        if plan != "free" or not isinstance(campaigns, dict) or not campaigns:
+            return False
+        promo_parts = f.split(":") if f.startswith("promo:") else []
+        wanted = promo_parts[1].strip() if len(promo_parts) > 1 else ""
+        discount_text = promo_parts[2].strip() if len(promo_parts) > 2 else ""
+        other_discount = discount_text == "other"
+        try:
+            wanted_discount = float(discount_text.rstrip("%")) if discount_text else None
+        except ValueError:
+            wanted_discount = None
+        if not wanted and wanted_discount is None and not other_discount:
+            return True
+
+        def normalize_promo_type(value: Any) -> str:
+            value = str(value or "").strip().lower().replace("-", "").replace("_", "").replace(" ", "")
+            if value.startswith("chatgpt"):
+                value = value[7:]
+            if value.endswith("plan"):
+                value = value[:-4]
+            return value
+
+        wanted = normalize_promo_type(wanted) if wanted not in {"*", "all", "any"} else ""
+        for key, campaign in campaigns.items():
+            metadata = campaign.get("metadata") if isinstance(campaign, dict) else {}
+            plan_name = metadata.get("plan_name") if isinstance(metadata, dict) else ""
+            type_matches = not wanted or wanted in {normalize_promo_type(key), normalize_promo_type(plan_name)}
+            discount = metadata.get("discount") if isinstance(metadata, dict) else {}
+            percentage = discount.get("percentage") if isinstance(discount, dict) else None
+            try:
+                if other_discount:
+                    discount_matches = (
+                        type(percentage) in (int, float)
+                        and 0 < percentage <= 100 and percentage not in (50, 100)
+                    )
+                else:
+                    discount_matches = wanted_discount is None or float(percentage) == wanted_discount
+            except (TypeError, ValueError):
+                discount_matches = False
+            if type_matches and discount_matches:
+                return True
+        return False
+    if f in {"free_no_trial", "free_without_trial", "free_not_trial"}:
+        campaigns = row.get("eligible_promo_campaigns")
+        return plan == "free" and isinstance(campaigns, dict) and not campaigns
+    if f == "free":
+        return plan == "free"
+    return plan == f
 
 
 def _account_matches_codex_filter(row: dict, status_filter: str | None = None) -> bool:
@@ -1808,7 +1791,6 @@ def claim_account_plan_check(
         row["plan_check_started_at"] = None
         row["plan_check_completed_at"] = None
         row["plan_check_error"] = None
-        row["plan_check_error_kind"] = None
         row["updated_at"] = now
         _save_accounts(accounts)
         return True
@@ -1826,7 +1808,6 @@ def mark_account_plan_check_running(acc_id: int) -> bool:
         row["plan_check_started_at"] = now
         row["plan_check_updated_at"] = now
         row["plan_check_error"] = None
-        row["plan_check_error_kind"] = None
         row["updated_at"] = now
         _save_accounts(accounts)
         return True
@@ -1844,7 +1825,6 @@ def recover_interrupted_plan_checks() -> int:
             row["plan_check_status"] = "failed"
             row["plan_check_ok"] = False
             row["plan_check_error"] = "WebUI 重启导致套餐查询中断，请重新查询"
-            row["plan_check_error_kind"] = None
             row["plan_check_completed_at"] = now
             row["plan_check_updated_at"] = now
             row["updated_at"] = now
@@ -1877,17 +1857,6 @@ def update_account_plan_check(acc_id: int | None = None, email: str | None = Non
         row["plan_check_updated_at"] = now
         row["plan_check_http_status"] = result.get("http_status")
         row["plan_check_error"] = None if ok else result.get("error")
-        error_kind = str(result.get("plan_check_error_kind") or "").strip()
-        row["plan_check_error_kind"] = error_kind if error_kind in _PLAN_CHECK_ERROR_KINDS else None
-        # 这个标志表达本次响应是否足够完整，不能由 plus_trial_eligible 的
-        # 普通布尔值替代；失败查询或非布尔资格必须明确写为不可判定。
-        plus_trial_eligible = result.get("plus_trial_eligible")
-        trial_eligibility_known = bool(
-            ok
-            and result.get("trial_eligibility_known") is True
-            and (plus_trial_eligible is True or plus_trial_eligible is False)
-        )
-        row["trial_eligibility_known"] = trial_eligibility_known
 
         if result.get("account_id"):
             row["account_id"] = result.get("account_id")
@@ -1926,15 +1895,14 @@ def update_account_plan_check(acc_id: int | None = None, email: str | None = Non
                 if result.get(_k) is not None:
                     row[_k] = result.get(_k)
 
-            row["plus_trial_eligible"] = (
-                plus_trial_eligible if trial_eligibility_known else None
-            )
+            row["plus_trial_eligible"] = bool(result.get("plus_trial_eligible"))
             row["plus_trial_campaign_id"] = result.get("plus_trial_campaign_id")
             row["plus_trial_title"] = result.get("plus_trial_title")
             row["plus_trial_discount_percentage"] = result.get("plus_trial_discount_percentage")
             row["plus_trial_duration_num_periods"] = result.get("plus_trial_duration_num_periods")
             row["plus_trial_duration_period"] = result.get("plus_trial_duration_period")
             row["eligible_offer_ids"] = result.get("eligible_offer_ids") or []
+            row["eligible_promo_campaigns"] = result.get("eligible_promo_campaigns") or {}
             row["plan_last_success_at"] = result.get("checked_at") or _now()
             row["plan_last_success_result_json"] = json.dumps(result, ensure_ascii=False)
         row["plan_check_proxy_mode"] = result.get("proxy_mode")
@@ -2529,8 +2497,8 @@ def list_account_plan_check_statuses(
     fields = (
         "id", "email", "archived",
         "email_source",
-        "plan_type", "current_plan_type", "plus_trial_eligible", "trial_eligibility_known",
-        "plan_check_status", "plan_check_ok", "plan_check_error", "plan_check_error_kind", "plan_check_http_status",
+        "plan_type", "current_plan_type", "plus_trial_eligible", "eligible_promo_campaigns",
+        "plan_check_status", "plan_check_ok", "plan_check_error", "plan_check_http_status",
         "plan_check_trigger", "plan_check_queued_at", "plan_check_started_at",
         "plan_check_completed_at", "plan_check_updated_at", "plan_checked_at", "plan_last_success_at",
         "plan_check_network_route", "plan_check_proxy_used", "plan_check_proxy_fallback_reason",
@@ -2606,7 +2574,6 @@ def list_account_plan_check_statuses(
                     "plan_check_status": row.get("plan_check_status"),
                     "plan_check_ok": row.get("plan_check_ok"),
                     "plan_check_error": row.get("plan_check_error"),
-                    "plan_check_error_kind": _plan_check_error_kind_for_row(row),
                     "plan_check_http_status": row.get("plan_check_http_status"),
                     "plan_check_updated_at": row.get("plan_check_updated_at"),
                     "checkout_check_status": row.get("checkout_check_status"),
@@ -2623,7 +2590,7 @@ def list_account_plan_check_statuses(
                     "current_plan_type": row.get("current_plan_type"),
                     "plan_type": row.get("plan_type"),
                     "plus_trial_eligible": row.get("plus_trial_eligible"),
-                    "trial_eligibility_known": row.get("trial_eligibility_known"),
+                    "eligible_promo_campaigns": row.get("eligible_promo_campaigns"),
                     "live_check_status": row.get("live_check_status"),
                     "live_check_ok": row.get("live_check_ok"),
                     "live_check_error": row.get("live_check_error"),
@@ -3784,6 +3751,8 @@ def update_job(
     status: str | None = None,
     email: str | None = None,
     error: str | None = None,
+    error_code: str | None = None,
+    error_stage: str | None = None,
     started_at: str | None = None,
     completed_at: str | None = None,
     account_id: int | None = None,
@@ -3800,6 +3769,10 @@ def update_job(
             row["email"] = email
         if error is not None:
             row["error_message"] = error
+        if error_code is not None:
+            row["error_code"] = error_code
+        if error_stage is not None:
+            row["error_stage"] = error_stage
         if started_at is not None:
             row["started_at"] = started_at
         if completed_at is not None:

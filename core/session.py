@@ -10,6 +10,7 @@ import re
 import threading
 import time
 import uuid
+from ipaddress import ip_address
 from urllib.parse import urlparse
 from curl_cffi.requests import Session
 
@@ -20,6 +21,16 @@ from config import (
     ACCEPT_LANGUAGE, IMPERSONATE, OAI_CLIENT_BUILD_NUMBER, OAI_CLIENT_VERSION,
     REQUEST_TIMEOUT, pick_proxy, pick_browser_profile, validate_browser_profile,
     BROWSER_PROFILE_POOL, build_browser_environment,
+)
+from core.registration_geo import (
+    RegistrationGeoError,
+    build_registration_locale,
+    is_known_country,
+    CATEGORY_PROXY,
+    CATEGORY_GEO_SERVICE,
+    CATEGORY_GEO_INCOMPLETE,
+    CATEGORY_GEO_MISMATCH,
+    STAGE_VALIDATE,
 )
 
 
@@ -85,6 +96,7 @@ class BrowserSession:
         *,
         detect_exit_geo: bool = True,
         device_id: str | None = None,
+        server_device_id: bool = False,
         auth_session_logging_id: str | None = None,
         oai_session_id: str | None = None,
         sentinel_sid: str | None = None,
@@ -100,146 +112,165 @@ class BrowserSession:
                    显式传 "" 表示禁用代理。
             detect_exit_geo: 是否探测出口 IP 并自动选择语言/时区画像。
                              套餐查询等短请求可关闭，避免额外网络等待。
+            server_device_id: 注册专用服务端设备初始化策略。True 时构造阶段
+                             device_id 置空，禁止本地补种/合成 oai-did，
+                             待预检从真实 ChatGPT cookie 绑定服务端值。
         """
         # proxy=None  → 从池里随机抽（默认行为），并按代理池上游配置决定是否链式
         # proxy=""    → 禁用代理（直连）
         # proxy="..." → 使用指定代理，不套用代理池上游
         self._proxy_pool_relay = None
-        if proxy is None:
-            self.proxy = pick_proxy()
-            self.proxy_target = self.proxy
-            if self.proxy:
-                from core.proxy_chain import open_proxy_pool_proxy
-                transport_proxy, self._proxy_pool_relay = open_proxy_pool_proxy(self.proxy)
+        self._proxy_pool_selected = proxy is None
+        self.server_device_id = bool(server_device_id)
+        # 注册地域硬门禁状态：仅 server_device_id 会话使用，独立消费者不受影响。
+        self._registration_geo_frozen = False
+        self._registration_geo_frozen_profile: dict = {}
+        self.exit_geo_observation_scope = "unobserved"
+        self.session = None
+        self._explicit_browser_profile = dict(browser_profile or {})
+        try:
+            if proxy is None:
+                self.proxy = pick_proxy()
+                self.proxy_target = self.proxy
+                if self.proxy:
+                    from core.proxy_chain import open_proxy_pool_proxy
+                    transport_proxy, self._proxy_pool_relay = open_proxy_pool_proxy(self.proxy)
+                else:
+                    transport_proxy = ""
             else:
-                transport_proxy = ""
-        else:
-            self.proxy = proxy
-            self.proxy_target = proxy
-            transport_proxy = proxy
+                self.proxy = proxy
+                self.proxy_target = proxy
+                transport_proxy = proxy
 
-        self.fingerprint_seed = str(fingerprint_seed or "").strip()
+            self.fingerprint_seed = str(fingerprint_seed or "").strip()
 
-        # 生成/复用设备ID（oai-did），整个任务周期复用。
-        if device_id:
-            self.device_id = str(device_id)
-        elif self.fingerprint_seed:
-            self.device_id = _seed_uuid(self.fingerprint_seed, "device_id")
-        else:
-            self.device_id = str(uuid.uuid4())
+            # 生成/复用设备ID（oai-did），整个任务周期复用。
+            # 服务端设备模式：注册入口显式选择，构造阶段 device_id 置空，
+            # 由预检从真实 ChatGPT cookie 绑定服务端 oai-did，禁止本地 UUID 冒充成功。
+            if self.server_device_id:
+                self.device_id = ""
+            elif device_id:
+                self.device_id = str(device_id)
+            elif self.fingerprint_seed:
+                self.device_id = _seed_uuid(self.fingerprint_seed, "device_id")
+            else:
+                self.device_id = str(uuid.uuid4())
 
-        # 生成 auth_session_logging_id
-        if auth_session_logging_id:
-            self.auth_session_logging_id = str(auth_session_logging_id)
-        elif self.fingerprint_seed:
-            self.auth_session_logging_id = _seed_uuid(self.fingerprint_seed, "auth_session_logging_id")
-        else:
-            self.auth_session_logging_id = str(uuid.uuid4())
+            # 生成 auth_session_logging_id
+            if auth_session_logging_id:
+                self.auth_session_logging_id = str(auth_session_logging_id)
+            elif self.fingerprint_seed:
+                self.auth_session_logging_id = _seed_uuid(self.fingerprint_seed, "auth_session_logging_id")
+            else:
+                self.auth_session_logging_id = str(uuid.uuid4())
 
-        # Auth Web 在同一份 document 内复用该 ID；真正发生页面导航时再轮换。
-        self.document_navigation_id = str(uuid.uuid4())
+            # Auth Web 在同一份 document 内复用该 ID；真正发生页面导航时再轮换。
+            self.document_navigation_id = str(uuid.uuid4())
 
-        # ChatGPT 前端会话 ID：CES / Statsig / API 链路内保持稳定。
-        if oai_session_id:
-            self.oai_session_id = str(oai_session_id)
-        elif self.fingerprint_seed:
-            self.oai_session_id = _seed_uuid(self.fingerprint_seed, "oai_session_id")
-        else:
-            self.oai_session_id = str(uuid.uuid4())
+            # ChatGPT 前端会话 ID：CES / Statsig / API 链路内保持稳定。
+            if oai_session_id:
+                self.oai_session_id = str(oai_session_id)
+            elif self.fingerprint_seed:
+                self.oai_session_id = _seed_uuid(self.fingerprint_seed, "oai_session_id")
+            else:
+                self.oai_session_id = str(uuid.uuid4())
 
-        # Datadog/RUM 关联 ID：每个 BrowserSession 独立生成，禁止跨账号复用。
-        # 同一账号的运行时环境尽量保持固定，避免同账号多次操作指纹漂移。
-        if self.fingerprint_seed:
-            self.datadog_trace_id = str(_seed_int(self.fingerprint_seed, "datadog_trace_id"))
-            self.datadog_parent_id = str(_seed_int(self.fingerprint_seed, "datadog_parent_id"))
-        else:
-            self.datadog_trace_id = str(random.getrandbits(63))
-            self.datadog_parent_id = str(random.getrandbits(63))
-        self.datadog_origin = "rum"
-        # 先使用配置默认值，加载真实 ChatGPT 登录页后从 data-build/data-seq
-        # 动态同步，避免滚动发布期间继续发送过期的前端版本头。
-        self.client_build_number = str(OAI_CLIENT_BUILD_NUMBER)
-        self.client_version = str(OAI_CLIENT_VERSION)
+            # Datadog/RUM 关联 ID：每个 BrowserSession 独立生成，禁止跨账号复用。
+            # 同一账号的运行时环境尽量保持固定，避免同账号多次操作指纹漂移。
+            if self.fingerprint_seed:
+                self.datadog_trace_id = str(_seed_int(self.fingerprint_seed, "datadog_trace_id"))
+                self.datadog_parent_id = str(_seed_int(self.fingerprint_seed, "datadog_parent_id"))
+            else:
+                self.datadog_trace_id = str(random.getrandbits(63))
+                self.datadog_parent_id = str(random.getrandbits(63))
+            self.datadog_origin = "rum"
+            # 先使用配置默认值，加载真实 ChatGPT 登录页后从 data-build/data-seq
+            # 动态同步，避免滚动发布期间继续发送过期的前端版本头。
+            self.client_build_number = str(OAI_CLIENT_BUILD_NUMBER)
+            self.client_version = str(OAI_CLIENT_VERSION)
 
-        # Sentinel SDK 内部 sid：真实 SDK 会单独生成一个 UUID，和 oai-did 不是同一个值。
-        # Python 初始 p 与 Node Runner 最终 token 都复用这个 sid，保持同一 SDK 实例语义。
-        if sentinel_sid:
-            self.sentinel_sid = str(sentinel_sid)
-        elif self.fingerprint_seed:
-            self.sentinel_sid = _seed_uuid(self.fingerprint_seed, "sentinel_sid")
-        else:
-            self.sentinel_sid = str(uuid.uuid4())
-        # 密码注册 iframe 与顶层 Auth 页是两个独立 Sentinel SDK 实例。
-        if self.fingerprint_seed:
-            self.sentinel_iframe_sid = _seed_uuid(self.fingerprint_seed, "sentinel_iframe_sid")
-        else:
-            self.sentinel_iframe_sid = str(uuid.uuid4())
-        if self.fingerprint_seed:
-            self.react_listening_key = "_reactListening" + _seed_uuid(self.fingerprint_seed, "react_listening_key").replace("-", "")[:12]
-            self.react_container_key = "__reactContainer$" + _seed_uuid(self.fingerprint_seed, "react_container_key").replace("-", "")[:11]
-        else:
-            self.react_listening_key = "_reactListening" + uuid.uuid4().hex[:12]
-            self.react_container_key = "__reactContainer$" + uuid.uuid4().hex[:11]
-        self.react_resources_key = "__reactResources$" + self.react_container_key.split("$", 1)[1]
+            # Sentinel SDK 内部 sid：真实 SDK 会单独生成一个 UUID，和 oai-did 不是同一个值。
+            # 仅保留给既有匿名 bootstrap；注册 SDK 的 SID 由其自身管理。
+            if sentinel_sid:
+                self.sentinel_sid = str(sentinel_sid)
+            elif self.fingerprint_seed:
+                self.sentinel_sid = _seed_uuid(self.fingerprint_seed, "sentinel_sid")
+            else:
+                self.sentinel_sid = str(uuid.uuid4())
+            # 密码注册 iframe 与顶层 Auth 页是两个独立 Sentinel SDK 实例。
+            if self.fingerprint_seed:
+                self.sentinel_iframe_sid = _seed_uuid(self.fingerprint_seed, "sentinel_iframe_sid")
+            else:
+                self.sentinel_iframe_sid = str(uuid.uuid4())
+            if self.fingerprint_seed:
+                self.react_listening_key = "_reactListening" + _seed_uuid(self.fingerprint_seed, "react_listening_key").replace("-", "")[:12]
+                self.react_container_key = "__reactContainer$" + _seed_uuid(self.fingerprint_seed, "react_container_key").replace("-", "")[:11]
+            else:
+                self.react_listening_key = "_reactListening" + uuid.uuid4().hex[:12]
+                self.react_container_key = "__reactContainer$" + uuid.uuid4().hex[:11]
+            self.react_resources_key = "__reactResources$" + self.react_container_key.split("$", 1)[1]
 
-        # 每个会话固定后端；Web 配置热更新只影响后续新会话。
-        from config import browser as browser_cfg
-        self.http_client = str(browser_cfg.PROTOCOL_HTTP_CLIENT).strip().lower()
-        from core.protocol_profiles import validate_protocol_profile, align_browser_profile
-        self.impersonate = (browser_cfg.CURL_CFFI_IMPERSONATE if self.http_client == "curl_cffi"
-                            else browser_cfg.WREQ_EMULATION)
-        self.impersonate = validate_protocol_profile(self.http_client, str(self.impersonate).strip())
-        if self.http_client == "curl_cffi":
-            self.session = Session(impersonate=self.impersonate)
-        elif self.http_client == "wreq":
-            from core.wreq_session import WreqSession
-            self.session = WreqSession(impersonate=self.impersonate)
-        else:
-            raise ValueError(f"未知协议 HTTP 客户端: {self.http_client}")
-        logger.info("[协议会话] HTTP 客户端=%s 指纹=%s 实际实现=%s.%s",
-                    self.http_client, self.impersonate,
-                    type(self.session).__module__, type(self.session).__name__)
+            # 每个会话固定后端；Web 配置热更新只影响后续新会话。
+            from config import browser as browser_cfg
+            self.http_client = "wreq" if self.server_device_id else str(browser_cfg.PROTOCOL_HTTP_CLIENT).strip().lower()
+            from core.protocol_profiles import validate_protocol_profile, align_browser_profile
+            self.impersonate = ("chrome152" if self.server_device_id else
+                                browser_cfg.CURL_CFFI_IMPERSONATE if self.http_client == "curl_cffi"
+                                else browser_cfg.WREQ_EMULATION)
+            self.impersonate = validate_protocol_profile(self.http_client, str(self.impersonate).strip())
+            if self.http_client == "curl_cffi":
+                self.session = Session(impersonate=self.impersonate)
+            elif self.http_client == "wreq":
+                from core.wreq_session import WreqSession
+                self.session = WreqSession(impersonate=self.impersonate)
+            else:
+                raise ValueError(f"未知协议 HTTP 客户端: {self.http_client}")
+            logger.info("[协议会话] HTTP 客户端=%s 指纹=%s 实际实现=%s.%s",
+                        self.http_client, self.impersonate,
+                        type(self.session).__module__, type(self.session).__name__)
 
-        # 设置代理
-        if transport_proxy:
-            self.session.proxies = {
-                "http": transport_proxy,
-                "https": transport_proxy,
-            }
+            # 设置代理
+            if transport_proxy:
+                self.session.proxies = {
+                    "http": transport_proxy,
+                    "https": transport_proxy,
+                }
 
-        # 设置超时
-        self.session.timeout = REQUEST_TIMEOUT
+            # 设置超时
+            self.session.timeout = REQUEST_TIMEOUT
 
-        # 会话级熔断：收到 403/429 后停止继续打后续接口，避免异常状态下扩大误伤。
-        self.blocked_until = 0.0
-        self.blocked_reason = ""
+            # 会话级熔断：收到 403/429 后停止继续打后续接口，避免异常状态下扩大误伤。
+            self.blocked_until = 0.0
+            self.blocked_reason = ""
 
-        # 先用当前代理检测出口 IP 地理信息，再为本会话挑一份稳定浏览器画像。
-        # 这样 Accept-Language / navigator.language / timezone 可自动跟随出口地区。
-        self.exit_geo = self._detect_exit_geo() if detect_exit_geo else {}
-        self._enforce_proxy_quality()
-        if browser_profile:
-            self.browser_profile = dict(browser_profile)
-        else:
-            self.browser_profile = dict(_seeded_browser_profile(self.fingerprint_seed, self.exit_geo))
-        self.browser_profile = align_browser_profile(self.browser_profile, self.impersonate)
-        self.browser_profile["react_listening_key"] = self.react_listening_key
-        self.browser_profile["react_container_key"] = self.react_container_key
-        self.browser_profile["react_resources_key"] = self.react_resources_key
-        issues = validate_browser_profile(self.browser_profile)
-        if issues:
-            logger.warning("[指纹] 浏览器画像存在不一致: %s", "; ".join(issues))
+            # 先用当前代理检测出口 IP 地理信息，再为本会话挑一份稳定浏览器画像。
+            # 这样 Accept-Language / navigator.language / timezone 可自动跟随出口地区。
+            self.exit_geo = self._detect_exit_geo() if detect_exit_geo and not self.server_device_id else {}
+            self._enforce_proxy_quality()
+            if browser_profile:
+                self.browser_profile = dict(browser_profile)
+            else:
+                self.browser_profile = dict(_seeded_browser_profile(self.fingerprint_seed, self.exit_geo))
+            self.browser_profile = align_browser_profile(self.browser_profile, self.impersonate)
+            self.browser_profile["react_listening_key"] = self.react_listening_key
+            self.browser_profile["react_container_key"] = self.react_container_key
+            self.browser_profile["react_resources_key"] = self.react_resources_key
+            issues = validate_browser_profile(self.browser_profile)
+            if issues:
+                logger.warning("[指纹] 浏览器画像存在不一致: %s", "; ".join(issues))
 
-        # 让 HTTP Cookie、OAuth 参数 ext-oai-did、Sentinel 里的 id 三者一致。
-        # 浏览器里 oai-did 通常会作为一方 Cookie 存在；协议层主动补齐可减少同一会话内
-        # “头部/参数/JS 指纹有设备 ID，但 Cookie Jar 为空”的不一致。
-        # 注意：预检阶段（chatgpt.com/auth/login）若携带主动补齐的 oai-did/oai-locale
-        # Cookie，会被 Cloudflare 判定异常返回 403（低信誉出口地区尤其明显）。因此这里
-        # 只记录待补齐状态，等 network_preflight 通过后再由 seed_oai_cookies() 写入 Jar。
-        self._oai_cookies_seeded = False
+            # 非注册消费者仍在预检后补种设备/语言 cookie；注册路径只读取服务端值。
+            if not self.server_device_id:
+                self._oai_cookies_seeded = False
 
-        # Cloudflare 状态只能来自真实响应 Set-Cookie；这里仅记录变化，不主动伪造/覆盖。
-        self._cf_cookie_seen = self.cf_cookie_snapshot()
+            # Cloudflare 状态只能来自真实响应 Set-Cookie；这里仅记录变化，不主动伪造/覆盖。
+            self._cf_cookie_seen = self.cf_cookie_snapshot()
+        except BaseException:
+            try:
+                self.close()
+            except Exception:
+                pass
+            raise
 
     def seed_oai_cookies(self) -> None:
         """预检通过后补齐 oai-did/oai-locale 一方 Cookie（幂等）。
@@ -247,6 +278,9 @@ class BrowserSession:
         预检阶段带这些主动 Cookie 会触发 Cloudflare 403；等 chatgpt.com 连通性建立
         后再写入，既保持 OAuth/Sentinel 的设备 ID 一致性，又不污染预检。
         """
+        if getattr(self, "server_device_id", False):
+            # 注册采用服务端设备初始化：禁止本地补种 oai-did/oai-locale。
+            return
         if getattr(self, "_oai_cookies_seeded", False):
             return
         self._oai_cookies_seeded = True
@@ -267,10 +301,26 @@ class BrowserSession:
             pass
         return out
 
+    def get_server_device_id(self) -> str:
+        """只接受根路径有效、未过期且唯一的 ChatGPT 服务端设备 cookie。"""
+        matched = None
+        for cookie in self.session.cookies.jar:
+            if cookie.name != "oai-did" or not str(cookie.value or "").strip():
+                continue
+            if cookie.domain.lower() not in {"chatgpt.com", ".chatgpt.com"}:
+                continue
+            if (cookie.path or "/") != "/" or cookie.is_expired():
+                continue
+            if matched is not None:
+                return ""
+            matched = cookie.value
+        return str(matched or "").strip()
+
     def close(self) -> None:
         """Close the HTTP session and any proxy-pool relay owned by this session."""
         try:
-            self.session.close()
+            if self.session is not None:
+                self.session.close()
         finally:
             relay, self._proxy_pool_relay = self._proxy_pool_relay, None
             if relay is not None:
@@ -329,6 +379,9 @@ class BrowserSession:
             "datadog_trace_id": self.datadog_trace_id,
             "datadog_parent_id": self.datadog_parent_id,
             "geo_country": geo.get("country") or "",
+            "geo_observation_scope": self.exit_geo_observation_scope,
+            "profile_country": profile.get("profile_country") or "",
+            "locale_source": profile.get("locale_source") or "",
             "geo_city": geo.get("city") or "",
             "geo_timezone": geo.get("timezone") or "",
             "geo_org": geo.get("org") or "",
@@ -406,6 +459,9 @@ class BrowserSession:
     def _cookie_header_with_device(self, domain: str) -> str:
         """导出 Cookie，并确保设备/语言 cookie 不会因 Jar 合并而丢失。"""
         existing = self._cookie_header_for_domain(domain)
+        if getattr(self, "server_device_id", False):
+            # 服务端设备模式禁止合成 oai-did/oai-locale，只导出真实 Jar Cookie。
+            return existing
         pairs = [p.strip() for p in existing.split(";") if p.strip()]
         names = {p.split("=", 1)[0].strip() for p in pairs if "=" in p}
         if "oai-did" not in names:
@@ -417,6 +473,118 @@ class BrowserSession:
     def chatgpt_cookie_header_with_device(self) -> str:
         """兼容提链项目的显式 API，供需要手工 Cookie 头的调用点使用。"""
         return self._cookie_header_with_device("chatgpt.com")
+
+    # ------------------------------------------------------------------
+    # 注册地域硬门禁：只服务 server_device_id 注册初始化，不改变独立消费者策略。
+    # ------------------------------------------------------------------
+
+    def validate_registration_geo(self, trace: dict | None = None) -> None:
+        """用本会话当前 trace 确认实际国家；不读取 GeoIP 服务或历史缓存。"""
+        if not self.server_device_id:
+            return
+        trace = trace or {}
+        country = self._normalize_country_code(trace.get("loc"))
+        try:
+            ip = str(ip_address(str(trace.get("ip") or "").strip()))
+        except ValueError:
+            raise RegistrationGeoError("地域信息不完整：缺少有效出口 IP",
+                                       CATEGORY_GEO_INCOMPLETE, STAGE_VALIDATE) from None
+        if not is_known_country(country):
+            raise RegistrationGeoError("地域信息不完整：出口国家缺失或不受支持",
+                                       CATEGORY_GEO_INCOMPLETE, STAGE_VALIDATE)
+        self.exit_geo_observation_scope = "latest_trace"
+        observed = {"ip": ip, "country": country, "sources": ["trace"]}
+        if self._registration_geo_frozen:
+            self._revalidate_registration_geo(observed)
+            return
+        profile_country, supplied, source = self._registration_profile_selection(country)
+        locale = build_registration_locale(profile_country, supplied.get("timezone_iana", ""))
+        self._validate_explicit_registration_profile(supplied, locale)
+        frozen = {**observed, **locale, "profile_country": profile_country, "locale_source": source}
+        self._freeze_registration_geo(frozen)
+        self._enforce_proxy_quality()
+
+    def _registration_profile_selection(self, actual_country: str) -> tuple[str, dict, str]:
+        from config import browser as browser_cfg
+        supplied = self._explicit_browser_profile
+        geo = supplied.get("geo") or {}
+        has_country = isinstance(geo, dict) and any(field in geo for field in ("country_code", "country"))
+        country_value = (geo.get("country_code") or geo.get("country")) if has_country else None
+        key = supplied.get("locale_profile")
+        has_locale = any(field in supplied for field in (
+            "navigator_language", "navigator_languages", "accept_language", "timezone_iana"))
+        if not has_country and not key and not has_locale and not browser_cfg.AUTO_BROWSER_LOCALE_FROM_IP:
+            key = browser_cfg.BROWSER_LOCALE_PROFILE
+            supplied = dict(browser_cfg.BROWSER_LOCALE_PROFILES.get(key) or {})
+        if has_country:
+            country = self._normalize_country_code(country_value)
+        elif key:
+            # 完整 profile key（jp/us 等）与 geo:xx 都可明确国家；不要反查复用模板的 AU/CA。
+            country = self._normalize_country_code(str(key).removeprefix("geo:"))
+        elif has_locale or not browser_cfg.AUTO_BROWSER_LOCALE_FROM_IP:
+            country = ""
+        else:
+            return actual_country, {}, "auto"
+        if not is_known_country(country):
+            raise RegistrationGeoError("手动画像国家缺失或不受支持",
+                                       CATEGORY_GEO_INCOMPLETE, STAGE_VALIDATE)
+        return country, supplied, "manual"
+
+    def _validate_explicit_registration_profile(self, supplied: dict, locale: dict) -> None:
+        fields = ("navigator_language", "navigator_languages", "accept_language", "timezone_iana")
+        if not any(field in supplied for field in fields):
+            return
+        language = str(supplied.get("navigator_language") or "").strip()
+        languages = supplied.get("navigator_languages")
+        accept = str(supplied.get("accept_language") or "").strip()
+        accepted = [part.split(";", 1)[0].strip().lower() for part in accept.split(",") if part.strip()]
+        if (not language or not isinstance(languages, (list, tuple)) or not languages
+                or not accepted or not supplied.get("timezone_iana")):
+            raise RegistrationGeoError("显式画像语言或时区信息不完整",
+                                       CATEGORY_GEO_INCOMPLETE, STAGE_VALIDATE)
+        normalized = [str(value).strip().lower() for value in languages]
+        expected = locale["navigator_language"].lower()
+        if (language.lower() != expected or normalized[0] != language.lower()
+                or accepted[0] != language.lower() or any(value not in accepted for value in normalized)):
+            raise RegistrationGeoError("显式画像语言与画像国家或 HTTP 偏好不一致",
+                                       CATEGORY_GEO_MISMATCH, STAGE_VALIDATE)
+        locale.update(navigator_language=language, navigator_languages=list(languages), accept_language=accept)
+
+
+    @staticmethod
+    def _classify_geo_exception(exc: Exception) -> tuple[str, str]:
+        """仅在确有代理证据时判为代理失败，否则归为地域服务不可达。"""
+        name = type(exc).__name__.lower()
+        msg = str(exc).lower()
+        proxy_markers = (
+            "407", "proxy authentication", "proxy-authorization", "proxy auth",
+            "proxy requires auth", "connection to proxy", "proxy connect", "socks",
+        )
+        if "proxyerror" in name or any(marker in msg for marker in proxy_markers):
+            return CATEGORY_PROXY, "代理连接/认证失败"
+        return CATEGORY_GEO_SERVICE, f"网络异常({type(exc).__name__})"
+
+
+    def _freeze_registration_geo(self, frozen: dict) -> None:
+        self._registration_geo_frozen = True
+        self._registration_geo_frozen_profile = dict(frozen)
+        self.exit_geo = {key: frozen[key] for key in ("ip", "country", "sources")}
+        profile = self.browser_profile
+        profile["geo"] = dict(self.exit_geo)
+        for field in ("navigator_language", "accept_language", "timezone_iana",
+                      "timezone_offset_minutes", "timezone_name", "profile_country", "locale_source"):
+            profile[field] = frozen[field]
+        profile["navigator_languages"] = list(frozen["navigator_languages"])
+        logger.info("[注册地域] 画像冻结 actual_country=%s profile_country=%s source=%s tz=%s",
+                    frozen["country"], frozen["profile_country"], frozen["locale_source"], frozen["timezone_iana"])
+
+    def _revalidate_registration_geo(self, observed: dict) -> None:
+        changed = (observed["ip"] != self.exit_geo.get("ip")
+                   or observed["country"] != self.exit_geo.get("country"))
+        self.exit_geo = observed
+        self.browser_profile["geo"] = dict(observed)
+        logger.info("[注册地域] 后续观测 actual_country=%s profile_country=%s changed=%s，保留冻结画像",
+                    observed["country"], self.browser_profile["profile_country"], changed)
 
     def _detect_exit_geo(self) -> dict:
         """通过当前代理检测出口 IP 地理信息；失败返回空 dict 并回退到默认地区画像。"""
@@ -790,6 +958,86 @@ class BrowserSession:
         """
         self.blocked_until = 0.0
         self.blocked_reason = ""
+
+    def _next_pool_proxy(self) -> str | None:
+        """返回与当前不同的非空池代理；无候选返回 None（保持原路由）。"""
+        try:
+            from config import proxy as proxy_cfg
+            pool = list(getattr(proxy_cfg, "PROXY_POOL", []) or [])
+        except Exception:
+            return None
+        current = self.proxy or ""
+        candidates = [str(p).strip() for p in pool if str(p).strip() and str(p).strip() != current]
+        if not candidates:
+            return None
+        return random.choice(candidates)
+
+    def _open_raw_session(self):
+        """按当前 http_client/impersonate 新建原始传输会话，保持冻结指纹。"""
+        if self.http_client == "curl_cffi":
+            return Session(impersonate=self.impersonate)
+        if self.http_client == "wreq":
+            from core.wreq_session import WreqSession
+            return WreqSession(impersonate=self.impersonate)
+        raise ValueError(f"未知协议 HTTP 客户端: {self.http_client}")
+
+    def reset_preflight_transport(self) -> None:
+        """注册预检专用：重建干净传输会话与 Cookie Jar，保留冻结画像/ID/SID。
+
+        仅在 warmup 初始化失败之间调用；不重建完整 BrowserSession（避免重新随机
+        画像与设备 ID）。池模式且存在不同候选时轮换出口，无候选保持原路由，
+        绝不改走直连；被替换的旧连接与 relay 一并关闭，避免资源泄漏。
+        """
+        previous_proxy = self.proxy
+        if not self.server_device_id:
+            raise RuntimeError("仅注册初始化可以重建预检传输会话")
+        next_proxy = self.proxy
+        if self._proxy_pool_selected:
+            next_proxy = self._next_pool_proxy() or self.proxy
+        new_relay = None
+        new_session = None
+        try:
+            if self._proxy_pool_selected and next_proxy:
+                from core.proxy_chain import open_proxy_pool_proxy
+                transport_proxy, new_relay = open_proxy_pool_proxy(next_proxy)
+            else:
+                transport_proxy = next_proxy
+            new_session = self._open_raw_session()
+            if transport_proxy:
+                new_session.proxies = {"http": transport_proxy, "https": transport_proxy}
+            new_session.timeout = REQUEST_TIMEOUT
+        except Exception:
+            try:
+                if new_session is not None:
+                    new_session.close()
+            finally:
+                if new_relay is not None:
+                    new_relay.close()
+            raise
+
+        old_session = self.session
+        old_relay = self._proxy_pool_relay
+        self.session = new_session
+        self._proxy_pool_relay = new_relay
+        self.proxy = self.proxy_target = next_proxy
+        self.exit_geo_observation_scope = "previous_transport_trace"
+        if old_session is not None:
+            try:
+                old_session.close()
+            except Exception:
+                logger.debug("[协议会话] 关闭旧传输会话失败", exc_info=True)
+        if old_relay is not None and old_relay is not new_relay:
+            try:
+                old_relay.close()
+            except Exception:
+                logger.debug("[协议会话] 关闭旧代理 relay 失败", exc_info=True)
+
+        # 5. 重置本地熔断与 Cookie 观测状态（新 Jar 无 Cookie）。
+        self.blocked_until = 0.0
+        self.blocked_reason = ""
+        self._cf_cookie_seen = self.cf_cookie_snapshot()
+        logger.info("[协议会话] 注册预检传输已重建 route_changed=%s 客户端=%s",
+                    next_proxy != previous_proxy, self.http_client)
 
     @staticmethod
     def _parse_retry_after(value: str | None) -> int:

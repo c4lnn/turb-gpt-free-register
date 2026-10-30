@@ -198,7 +198,7 @@ class AccountFilterTests(unittest.TestCase):
                 client = app.test_client()
                 response = client.get(
                     "/api/accounts/plan-check-status?page=2&page_size=3&archived=all"
-                    "&email_source=icloud&plan_category=paid&codex_auth_status=failed"
+                    "&email_source=icloud&plan=plus&codex_auth_status=failed"
                     "&codex_operation_status=running&live_check_status=live"
                     "&checkout_type=cs_live&q=needle&date_from=2026-08-01&date_to=2026-08-02",
                     headers={"X-Auth-Code": "test-auth"},
@@ -208,7 +208,7 @@ class AccountFilterTests(unittest.TestCase):
                 kwargs = web_app.db.list_account_plan_check_statuses.call_args.kwargs
                 self.assertEqual(kwargs["archived"], "all")
                 self.assertEqual(kwargs["email_source_filter"], "icloud")
-                self.assertEqual(kwargs["plan_filter"], "paid")
+                self.assertEqual(kwargs["plan_filter"], "plus")
                 self.assertEqual(kwargs["codex_auth_status_filter"], "failed")
                 self.assertEqual(kwargs["codex_operation_status_filter"], "running")
                 self.assertEqual(kwargs["live_check_status_filter"], "live")
@@ -217,22 +217,23 @@ class AccountFilterTests(unittest.TestCase):
                 self.assertEqual(kwargs["date_from"], "2026-08-01")
                 self.assertEqual(kwargs["date_to"], "2026-08-02")
 
-    def test_plan_category_filter_matches_returned_category_code(self):
+    def test_plan_filter_matches_returned_category_code(self):
         self.accounts_path.write_text(json.dumps([
             {
-                "id": 1, "email": "eligible@example.invalid",
-                "current_plan_type": "free", "trial_eligibility_known": True,
-                "plus_trial_eligible": True,
+                "id": 1, "email": "promo@example.invalid",
+                "current_plan_type": "free",
+                "eligible_promo_campaigns": {"plus": {"metadata": {"discount": {"percentage": 100}}}},
             },
             {
-                "id": 2, "email": "no-trial@example.invalid",
-                "current_plan_type": "free", "trial_eligibility_known": True,
-                "plus_trial_eligible": False,
+                "id": 2, "email": "no-promo@example.invalid",
+                "current_plan_type": "free",
+                "eligible_promo_campaigns": {},
             },
             {"id": 3, "email": "paid@example.invalid", "current_plan_type": "plus"},
         ]), encoding="utf-8")
-        page = db.list_accounts_page(plan_filter="free_trial_eligible")
+        page = db.list_accounts_page(plan_filter="promo")
         self.assertEqual(page["total"], 1)
+        self.assertEqual(page["items"][0]["id"], 1)
         self.assertEqual(page["items"][0]["plan_category_code"], "free_trial_eligible")
 
 

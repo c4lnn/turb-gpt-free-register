@@ -11,7 +11,7 @@ from datetime import datetime
 
 from config import proxy as proxy_cfg
 from core import db
-from core.chatgpt_plan import check_account_plan, is_full_discount_percentage
+from core.chatgpt_plan import check_account_plan
 
 logger = logging.getLogger(__name__)
 
@@ -54,8 +54,16 @@ def _wait_for_rate_slot() -> None:
         time.sleep(wait_seconds)
 
 
-def _registration_recheck_delay() -> float:
-    return _float_setting("PLAN_CHECK_REGISTRATION_RECHECK_DELAY", 2.0, 0.0, 30.0)
+def _is_full_discount_percentage(value) -> bool:
+    """满额折扣校验：拒绝布尔与 NaN/Inf，仅接受数值意义等于 100 的比例。"""
+    if value is None or isinstance(value, bool):
+        return False
+    try:
+        percentage = float(value)
+    except (TypeError, ValueError):
+        return False
+    from math import isfinite
+    return isfinite(percentage) and percentage == 100.0
 
 
 def _checkout_auto_eligible(result: dict | None) -> bool:
@@ -69,7 +77,7 @@ def _checkout_auto_eligible(result: dict | None) -> bool:
         return False
     if str(result.get("plus_trial_campaign_id") or "").strip() != "plus-1-month-free":
         return False
-    return is_full_discount_percentage(result.get("plus_trial_discount_percentage"))
+    return _is_full_discount_percentage(result.get("plus_trial_discount_percentage"))
 
 
 def _maybe_enqueue_checkout_session(
@@ -133,34 +141,6 @@ def _run_plan_check(
             proxy=proxy,
             timezone_offset_min=timezone_offset_min,
         )
-
-        recheck_delay = _registration_recheck_delay()
-        should_recheck = (
-            trigger == "registration_auto"
-            and recheck_delay > 0
-            and bool(result.get("ok"))
-            and str(result.get("current_plan_type") or "").lower() == "free"
-            and result.get("trial_eligibility_known") is True
-            and not bool(result.get("plus_trial_eligible"))
-        )
-        if should_recheck:
-            logger.info("[Plan] 新账号暂未发现 Plus 试用资格，%.1fs 后复查一次: %s", recheck_delay, email)
-            time.sleep(recheck_delay)
-            _wait_for_rate_slot()
-            recheck_result = check_account_plan(
-                access_token,
-                proxy=proxy,
-                timezone_offset_min=timezone_offset_min,
-                max_attempts=1,
-            )
-            if recheck_result.get("ok"):
-                result = recheck_result
-            else:
-                logger.warning(
-                    "[Plan] 新账号资格复查失败，保留首次成功结果: %s, %s",
-                    email,
-                    recheck_result.get("error") or "未知错误",
-                )
 
         saved = db.update_account_plan_check(acc_id=account_id, result=result)
         if saved is not False:

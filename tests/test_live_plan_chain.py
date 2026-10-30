@@ -37,7 +37,7 @@ class LivePlanChainTests(unittest.TestCase):
             result = live_check_service._run_live_check(
                 account_id=1, email="user@example.com", proxy="", trigger="manual",
             )
-        check_plan.assert_called_once_with("new-at", env=env, timezone_offset_min="-")
+        check_plan.assert_called_once_with("new-at", session=env, timezone_offset_min="-")
         save_live.assert_called_once_with(1, live_result)
         save_plan.assert_called_once_with(acc_id=1, result=plan_result)
         self.assertEqual(result["plan_check"], plan_result)

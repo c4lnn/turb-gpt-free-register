@@ -63,6 +63,10 @@ tools/_*.py
 # Sentinel runner 临时 challenge 文件
 sentinel-challenge-*.json
 
+# CDP 抓包 HAR（含明文凭证/指纹，绝不提交）
+captures/
+*.har
+
 # Sentinel 本地调试配置（可能含 Cookie/Bearer/Challenge）
 sentinel.config.json
 tools/sentinel.config.json

@@ -113,12 +113,10 @@ class AccountPlanCheckDbTests(unittest.TestCase):
                 result={
                     "ok": False,
                     "error": "network error",
-                    "plan_check_error_kind": "network_connection",
                 },
             ))
         row = self._row()
         self.assertEqual(row["plan_check_status"], "failed")
-        self.assertEqual(row["plan_check_error_kind"], "network_connection")
         self.assertEqual(row["plan_check_updated_at"], "2026-08-07T03:00:00")
 
         row["plan_check_status"] = "running"
@@ -127,7 +125,6 @@ class AccountPlanCheckDbTests(unittest.TestCase):
             self.assertEqual(db.recover_interrupted_plan_checks(), 1)
         recovered = self._row()
         self.assertEqual(recovered["plan_check_status"], "failed")
-        self.assertIsNone(recovered["plan_check_error_kind"])
         self.assertEqual(recovered["plan_check_updated_at"], "2026-08-07T03:00:01")
 
     def test_local_expiry_result_is_persisted_without_fabricated_http_status(self):
@@ -145,7 +142,6 @@ class AccountPlanCheckDbTests(unittest.TestCase):
                 "ok": False,
                 "checked_at": "2026-08-07T06:00:00",
                 "http_status": None,
-                "plan_check_error_kind": "local_token_expired",
                 "error": "本地AT已失效，请手动查活刷新",
                 "token_expired": True,
                 "token_expires_at": "2026-08-07T05:59:00Z",
@@ -155,50 +151,13 @@ class AccountPlanCheckDbTests(unittest.TestCase):
         persisted = self._row()
         self.assertEqual(persisted["plan_check_status"], "failed")
         self.assertFalse(persisted["plan_check_ok"])
-        self.assertEqual(persisted["plan_check_error_kind"], "local_token_expired")
         self.assertIsNone(persisted["plan_check_http_status"])
         self.assertEqual(persisted["plan_check_error"], "本地AT已失效，请手动查活刷新")
         self.assertTrue(persisted["token_expired"])
         self.assertEqual(persisted["token_expires_at"], "2026-08-07T05:59:00Z")
         self.assertTrue(persisted["needs_live_check"])
-        self.assertEqual(json.loads(persisted["plan_check_result_json"])["plan_check_error_kind"], "local_token_expired")
         self.assertEqual(persisted["current_plan_type"], "plus")
         self.assertEqual(persisted["plan_last_success_at"], "2026-08-06T23:00:00")
-
-    def test_historical_local_expiry_compatibility_is_read_only_and_401_wins(self):
-        row = self._row()
-        row.update({
-            "plan_check_status": "failed",
-            "plan_check_ok": False,
-            "plan_check_error": "AT已过期/失效，请手动查活刷新",
-            "plan_check_http_status": None,
-            "plan_check_updated_at": "2026-08-07T07:00:00",
-        })
-        self.accounts_path.write_text(json.dumps([row]), encoding="utf-8")
-        before = self.accounts_path.read_text(encoding="utf-8")
-
-        decorated = db.get_account(1)
-        snapshot = db.list_account_plan_check_statuses()
-
-        self.assertEqual(decorated["plan_check_error_kind"], "local_token_expired")
-        self.assertEqual(snapshot["items"][0]["plan_check_error_kind"], "local_token_expired")
-        self.assertEqual(self.accounts_path.read_text(encoding="utf-8"), before)
-
-        row["plan_check_http_status"] = 401
-        self.accounts_path.write_text(json.dumps([row]), encoding="utf-8")
-        before_401 = self.accounts_path.read_text(encoding="utf-8")
-        decorated_401 = db.get_account(1)
-        snapshot_401 = db.list_account_plan_check_statuses()
-        self.assertEqual(decorated_401["plan_check_error_kind"], "http_4xx")
-        self.assertEqual(snapshot_401["items"][0]["plan_check_error_kind"], "http_4xx")
-        self.assertEqual(snapshot_401["items"][0]["plan_check_http_status"], 401)
-        self.assertEqual(self.accounts_path.read_text(encoding="utf-8"), before_401)
-
-        row["plan_check_http_status"] = None
-        row["plan_check_error"] = "请求失败，请稍后重试"
-        self.accounts_path.write_text(json.dumps([row]), encoding="utf-8")
-        unknown = db.get_account(1)
-        self.assertNotIn("plan_check_error_kind", unknown)
 
     def test_sqlite_historical_read_preserves_payload_and_status_contract(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -227,8 +186,6 @@ class AccountPlanCheckDbTests(unittest.TestCase):
                 snapshot = db.list_account_plan_check_statuses()
                 after = store.load("accounts")
 
-            self.assertEqual(account["plan_check_error_kind"], "local_token_expired")
-            self.assertEqual(snapshot["items"][0]["plan_check_error_kind"], "local_token_expired")
             self.assertEqual(snapshot["items"][0]["plan_query_status"], "failed")
             self.assertEqual(snapshot["items"][0]["plan_category_code"], "paid")
             self.assertEqual(after, before)
@@ -243,7 +200,6 @@ class AccountPlanCheckDbTests(unittest.TestCase):
                 "plan_check_status": "failed",
                 "plan_check_ok": False,
                 "plan_check_error": "本地AT已失效，请手动查活刷新",
-                "plan_check_error_kind": "local_token_expired",
                 "plan_check_http_status": None,
                 "token_expired": True,
                 "token_expires_at": "2026-08-07T05:59:00Z",
@@ -296,11 +252,9 @@ class AccountPlanCheckDbTests(unittest.TestCase):
         accounts = {item["id"]: item for item in account_response.get_json()}
         snapshot = {item["id"]: item for item in snapshot_response.get_json()["items"]}
         for account_id in (1, 2):
-            for key in ("plan_check_error", "plan_check_error_kind", "plan_check_http_status"):
+            for key in ("plan_check_error", "plan_check_http_status"):
                 self.assertEqual(accounts[account_id].get(key), snapshot[account_id].get(key))
-        self.assertEqual(accounts[1]["plan_check_error_kind"], "local_token_expired")
         self.assertIsNone(accounts[1].get("plan_check_http_status"))
-        self.assertEqual(accounts[2]["plan_check_error_kind"], "http_4xx")
         self.assertEqual(accounts[2]["plan_check_http_status"], 401)
         for page, (paged_account_response, paged_snapshot_response) in enumerate(paged_responses, start=1):
             self.assertEqual(paged_account_response.status_code, 200)
@@ -312,7 +266,7 @@ class AccountPlanCheckDbTests(unittest.TestCase):
             account_item = paged_account["items"][0]
             snapshot_item = paged_snapshot["items"][0]
             self.assertEqual(account_item["id"], snapshot_item["id"])
-            for key in ("plan_check_error", "plan_check_error_kind", "plan_check_http_status"):
+            for key in ("plan_check_error", "plan_check_http_status"):
                 self.assertEqual(account_item.get(key), snapshot_item.get(key))
         response_text = account_response.get_data(as_text=True) + snapshot_response.get_data(as_text=True)
         self.assertNotIn("fixture-local-token", response_text)
@@ -379,30 +333,6 @@ class AccountPlanCheckDbTests(unittest.TestCase):
         self.assertNotIn("fixture-pending-password", response_text)
         self.assertNotIn("fixture-no-token-password", response_text)
 
-    def test_requeue_clears_previous_error_kind(self):
-        db.update_account_plan_check(
-            acc_id=1,
-            result={
-                "ok": False,
-                "error": "HTTP 503",
-                "http_status": 503,
-                "plan_check_error_kind": "http_5xx",
-            },
-        )
-        self.assertEqual(self._row()["plan_check_error_kind"], "http_5xx")
-
-        with patch.object(db, "_now", return_value="2026-08-07T03:01:00"):
-            self.assertTrue(db.claim_account_plan_check(acc_id=1))
-        queued = self._row()
-        self.assertEqual(queued["plan_check_status"], "queued")
-        self.assertIsNone(queued["plan_check_error_kind"])
-
-        with patch.object(db, "_now", return_value="2026-08-07T03:01:01"):
-            self.assertTrue(db.mark_account_plan_check_running(1))
-        running = self._row()
-        self.assertEqual(running["plan_check_status"], "running")
-        self.assertIsNone(running["plan_check_error_kind"])
-
     def test_status_snapshot_returns_timestamp_and_revision_tracks_it(self):
         row = self._row()
         row.update({
@@ -415,13 +345,7 @@ class AccountPlanCheckDbTests(unittest.TestCase):
         self.accounts_path.write_text(json.dumps([row]), encoding="utf-8")
 
         first = db.list_account_plan_check_statuses()
-        self.assertEqual(first["items"][0]["plan_check_error_kind"], "http_5xx")
         self.assertEqual(first["items"][0]["plan_check_http_status"], 503)
-        self.assertEqual(db.list_accounts()[0]["plan_check_error_kind"], "http_5xx")
-        self.assertEqual(
-            _compact_account_for_list(db.list_accounts()[0])["plan_check_error_kind"],
-            "http_5xx",
-        )
         self.assertEqual(
             _compact_account_for_list(db.list_accounts()[0])["plan_check_http_status"],
             503,
@@ -434,29 +358,6 @@ class AccountPlanCheckDbTests(unittest.TestCase):
         self.accounts_path.write_text(json.dumps([row]), encoding="utf-8")
         second = db.list_account_plan_check_statuses()
         self.assertNotEqual(first["revision"], second["revision"])
-        self.assertEqual(second["items"][0]["plan_check_error_kind"], "network_connection")
-
-    def test_historical_timeout_and_response_errors_are_classified_without_writing(self):
-        row = self._row()
-        row.update({
-            "plan_check_status": "failed",
-            "plan_check_ok": False,
-            "plan_check_error": "ReadTimeout: request timed out",
-            "plan_check_updated_at": "2026-08-07T05:00:00",
-        })
-        self.accounts_path.write_text(json.dumps([row]), encoding="utf-8")
-        snapshot = db.list_account_plan_check_statuses()
-        self.assertEqual(snapshot["items"][0]["plan_check_error_kind"], "network_timeout")
-        persisted = self._row()
-        self.assertNotIn("plan_check_error_kind", persisted)
-
-        row["plan_check_error"] = "ValueError: 响应缺少 accounts 对象"
-        self.accounts_path.write_text(json.dumps([row]), encoding="utf-8")
-        self.assertEqual(
-            db.list_account_plan_check_statuses()["items"][0]["plan_check_error_kind"],
-            "response_format",
-        )
-
 
 class AccountPlanCellTemplateTests(unittest.TestCase):
     @classmethod
@@ -496,10 +397,10 @@ process.stdout.write(JSON.stringify(rows.map(_planCell)));
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
 
-    def test_success_label_uses_trial_eligibility_for_free_and_currency_for_paid(self):
+    def test_success_label_uses_promo_for_free_and_currency_for_paid(self):
         self.assertIn("const category = String(r.plan_category_code || '').toLowerCase();", self.renderer)
         self.assertNotIn("r.plus_trial_eligible === false", self.renderer)
-        self.assertIn("无 Plus 试用资格", self.renderer)
+        self.assertIn("无套餐优惠", self.renderer)
         self.assertIn("[plan, planSuffix].filter(Boolean).join('|')", self.renderer)
         self.assertNotIn("parts.join('/')", self.renderer)
         self.assertIn("计费周期: ${billing}", self.renderer)
@@ -516,85 +417,6 @@ process.stdout.write(JSON.stringify(rows.map(_planCell)));
         self.assertIn('r.plan_check_updated_at', self.renderer)
         self.assertIn('class="acc-v2-sub"', self.renderer)
         self.assertIn("if (!updated) return '';", self.renderer)
-
-    def test_failed_status_uses_short_visible_summary_and_keeps_tooltip_detail(self):
-        for label in (
-            "网络请求超时",
-            "网络连接失败",
-            "HTTP 4xx",
-            "HTTP 5xx",
-            "响应异常",
-        ):
-            self.assertIn(label, self.template)
-        self.assertIn("const summary = code === 'failed' ? _planErrorSummary(r) : '';", self.renderer)
-        self.assertIn("const text = summary ? `查询失败：${summary}|${time}` : detailText;", self.renderer)
-        self.assertIn("const status = Number(r.plan_check_http_status);", self.renderer)
-        self.assertIn("if (inRange) return `HTTP ${status}`;", self.renderer)
-        self.assertIn('title="${esc(detailText)}"', self.renderer)
-        self.assertIn('title="${[esc(reason), lastTitle].filter(Boolean).join(\'；\')}"', self.renderer)
-        self.assertNotIn("网络错误 · 请求超时", self.template)
-        self.assertNotIn("网络错误 · 连接失败", self.template)
-        self.assertNotIn("响应异常 · 数据格式", self.template)
-
-    def test_failed_summary_renders_specific_http_status_and_updates_without_reload(self):
-        base = {
-            "plan_check_status": "failed",
-            "plan_query_status": "failed",
-            "plan_check_error_kind": "http_4xx",
-            "plan_check_updated_at": "2026-08-28T12:34:00",
-            "plan_check_error": "HTTP response body with sensitive details",
-            "plan_check_network_route": "proxy",
-            "plan_check_proxy_used": "http://proxy-user:proxy-pass@example.invalid:8080",
-            "current_plan_type": "plus",
-        }
-        rows = [
-            {**base, "plan_check_http_status": 401},
-            {**base, "plan_check_http_status": 402},
-            {**base, "plan_check_error_kind": "http_5xx", "plan_check_http_status": 503},
-        ]
-        rendered = self._render_plan_cells(rows)
-
-        for html, status in zip(rendered, (401, 402, 503)):
-            self.assertIn(f"查询失败：HTTP {status}|2026-08-28T12:34:00", html)
-            self.assertNotIn("HTTP 4xx|2026-08-28T12:34:00", html)
-            self.assertNotIn("HTTP 5xx|2026-08-28T12:34:00", html)
-        self.assertNotEqual(rendered[0], rendered[1])
-        self.assertNotEqual(rendered[1], rendered[2])
-        self.assertIn("HTTP response body with sensitive details", rendered[0])
-        self.assertNotIn("proxy-user:proxy-pass@example.invalid:8080", rendered[0])
-        visible_subtext = rendered[0].split('<div class="acc-v2-sub"', 1)[1].split('</div>', 1)[0]
-        self.assertNotIn("HTTP response body with sensitive details", visible_subtext)
-        self.assertNotIn("proxy-user:proxy-pass@example.invalid:8080", visible_subtext)
-
-    def test_failed_summary_distinguishes_local_expiry_and_unknown_history(self):
-        base = {
-            "plan_check_status": "failed",
-            "plan_query_status": "failed",
-            "plan_check_updated_at": "2026-08-28T13:00:00",
-            "plan_check_error": "AT已失效，请手动查活刷新",
-            "current_plan_type": "plus",
-            "plan_category_code": "paid",
-            "plan_last_success_at": "2026-08-27T13:00:00",
-        }
-        rows = [
-            {**base, "plan_check_error_kind": "local_token_expired", "plan_check_http_status": None},
-            {**base, "plan_check_error_kind": "http_4xx", "plan_check_http_status": 401},
-            {**base, "plan_check_error_kind": "http_5xx", "plan_check_http_status": 503},
-            {**base, "plan_check_error_kind": "future_error", "plan_check_http_status": None},
-        ]
-        rendered = self._render_plan_cells(rows)
-
-        self.assertIn("查询失败：本地AT已失效|2026-08-28T13:00:00", rendered[0])
-        self.assertNotIn("HTTP 401|2026-08-28T13:00:00", rendered[0])
-        self.assertIn("查询失败：HTTP 401|2026-08-28T13:00:00", rendered[1])
-        self.assertNotIn("本地AT已失效|2026-08-28T13:00:00", rendered[1])
-        self.assertIn("查询失败：HTTP 503|2026-08-28T13:00:00", rendered[2])
-        self.assertIn("查询失败|2026-08-28T13:00:00", rendered[3])
-        self.assertNotIn("HTTP 401", rendered[3])
-        self.assertIn("上次: plus/付费套餐", rendered[0])
-        self.assertIn("AT已失效，请手动查活刷新", rendered[0])
-        self.assertIn("if (kind === 'local_token_expired') return '本地AT已失效';", self.renderer)
-        self.assertNotIn("r.token_expired", self.renderer)
 
     def test_each_primary_state_is_wrapped_with_status_meta(self):
         self.assertIn("return wrap(`<span class=\"pill status-running\"", self.renderer)

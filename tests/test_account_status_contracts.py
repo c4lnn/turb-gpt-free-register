@@ -28,10 +28,9 @@ from webui.app import _compact_account_for_list
 
 
 class AccountStatusContractTests(unittest.TestCase):
-    def test_plan_categories_are_stable_and_require_known_trial_flag(self):
-        base = {"current_plan_type": "free", "trial_eligibility_known": True}
-        self.assertEqual(classify_plan_category({**base, "plus_trial_eligible": True}), "free_trial_eligible")
-        self.assertEqual(classify_plan_category({**base, "plus_trial_eligible": False}), "free_no_trial")
+    def test_plan_categories_are_stable_and_require_promo_campaigns(self):
+        self.assertEqual(classify_plan_category({"current_plan_type": "free", "eligible_promo_campaigns": {"plus": {"id": "x"}}}), "free_trial_eligible")
+        self.assertEqual(classify_plan_category({"current_plan_type": "free", "eligible_promo_campaigns": {}}), "free_no_trial")
         self.assertEqual(classify_plan_category({"current_plan_type": "plus"}), "paid")
         self.assertEqual(classify_plan_category({"current_plan_type": "free"}), "unknown")
         self.assertEqual(classify_plan_category({"current_plan_type": "new_plan"}), "unknown")
@@ -51,12 +50,12 @@ class AccountStatusContractTests(unittest.TestCase):
         self.assertFalse(plan_capabilities("free_no_trial", "running")["can_start"])
         self.assertFalse(plan_capabilities("unknown", "failed")["is_eligible"])
         self.assertEqual(classify_plan_category({
-            "current_plan_type": "free", "trial_eligibility_known": True,
-            "plus_trial_eligible": False, "plan_check_status": "failed",
+            "current_plan_type": "free", "eligible_promo_campaigns": {},
+            "plan_check_status": "failed",
         }), "unknown")
         self.assertEqual(classify_plan_category({
-            "current_plan_type": "free", "trial_eligibility_known": True,
-            "plus_trial_eligible": False, "plan_check_status": "failed",
+            "current_plan_type": "free", "eligible_promo_campaigns": {},
+            "plan_check_status": "failed",
             "plan_last_success_at": "2026-08-01T00:00:00",
         }), "free_no_trial")
 
@@ -196,8 +195,7 @@ class AccountStatusContractTests(unittest.TestCase):
                     "plan_check_status": raw_status,
                     "access_token": "token-fixture",
                     "current_plan_type": "free",
-                    "trial_eligibility_known": True,
-                    "plus_trial_eligible": False,
+                    "eligible_promo_campaigns": {},
                 })
                 self.assertEqual(contract["plan_query_status"], expected_query)
                 self.assertEqual(contract["plan_capabilities"]["is_checking"], is_checking)
@@ -207,8 +205,7 @@ class AccountStatusContractTests(unittest.TestCase):
         missing_status = build_account_status_contract({
             "access_token": "token-fixture",
             "current_plan_type": "free",
-            "trial_eligibility_known": True,
-            "plus_trial_eligible": False,
+            "eligible_promo_campaigns": {},
         })
         self.assertEqual(missing_status["plan_query_status"], "pending")
         self.assertFalse(missing_status["plan_capabilities"]["is_checking"])
@@ -239,8 +236,7 @@ class AccountStatusContractTests(unittest.TestCase):
     def test_contract_contains_capabilities_and_no_input_secrets(self):
         row = {
             "current_plan_type": "free",
-            "trial_eligibility_known": True,
-            "plus_trial_eligible": False,
+            "eligible_promo_campaigns": {},
             "access_token": "secret",
             "password": "secret",
         }
@@ -260,8 +256,7 @@ class AccountStatusContractTests(unittest.TestCase):
             "checkout_session_id": "cs_live_fixture",
             "checkout_check_result_json": '{"secret":"fixture"}',
             "current_plan_type": "free",
-            "trial_eligibility_known": True,
-            "plus_trial_eligible": False,
+            "eligible_promo_campaigns": {},
         })
         for key in (
             "access_token", "password", "totp_secret", "checkout_session_id",
@@ -349,12 +344,12 @@ class AccountStatusContractTests(unittest.TestCase):
     def test_explicit_status_filter_dimensions_are_preserved(self):
         app = Flask(__name__)
         with app.test_request_context(
-            "/?plan_category=paid&email_source=icloud&codex_auth_status=failed"
+            "/?plan=plus&email_source=icloud&codex_auth_status=failed"
             "&codex_operation_status=success&live_check_status=live"
         ):
             filters, error = _account_status_filter_args()
         self.assertIsNone(error)
-        self.assertEqual(filters["plan_filter"], "paid")
+        self.assertEqual(filters["plan_filter"], "plus")
         self.assertEqual(filters["email_source_filter"], "icloud")
         self.assertEqual(filters["codex_auth_status_filter"], "failed")
         self.assertEqual(filters["codex_operation_status_filter"], "success")

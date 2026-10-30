@@ -21,16 +21,18 @@ PROXY_POOL = [
 
 # 套餐/Plus 试用资格查询使用这组独立网络策略，
 # 避免批量请求被注册代理池中的临时本地代理拖垮，也避免无条件直连造成出口策略失控。
-#   auto   = 优先使用 PLAN_CHECK_PROXY 或代理池；本地代理端口未监听时回退直连
+#   auto   = 优先使用 PLAN_CHECK_PROXY 或代理池；没有代理时才按 direct 运行
 #   proxy  = 强制使用 PLAN_CHECK_PROXY 或代理池，失败直接报错
-#   pool   = 仅从 PROXY_POOL 选择，忽略 PLAN_CHECK_PROXY，失败时不回退直连
 #   direct = 始终直连
 PLAN_CHECK_PROXY_MODE = "auto"
 
-# 套餐查询专用代理。留空时 auto/proxy 模式从 PROXY_POOL 选择；
-# pool 模式保留该值但不使用。
+# 套餐查询专用代理（可多行，每行一个）。留空时 auto/proxy 模式从 PROXY_POOL 选择。
 # 代理可能包含账号密码，因此 WebUI 会把它保存到 .env。
-PLAN_CHECK_PROXY = ""
+PLAN_CHECK_PROXY = []
+
+# 套餐查询上游代理。填写后形成：本地代理 -> 上游代理 -> ChatGPT。
+# 留空则直接连接 PLAN_CHECK_PROXY。
+PLAN_CHECK_UPSTREAM_PROXY = ""
 
 # 查套餐使用独立的短超时和有限重试，避免后台任务长时间卡住。
 PLAN_CHECK_TIMEOUT = 15.0
@@ -61,7 +63,8 @@ PROXY = pick_proxy()
 apply_env_overrides(globals(), {
     'PROXY_POOL': 'list_str_multiline',
     'PLAN_CHECK_PROXY_MODE': 'str',
-    'PLAN_CHECK_PROXY': 'str',
+    'PLAN_CHECK_PROXY': 'list_str_multiline',
+    'PLAN_CHECK_UPSTREAM_PROXY': 'str',
     'PLAN_CHECK_TIMEOUT': 'float',
     'PLAN_CHECK_MAX_ATTEMPTS': 'int',
     'PLAN_CHECK_RETRY_DELAY': 'float',

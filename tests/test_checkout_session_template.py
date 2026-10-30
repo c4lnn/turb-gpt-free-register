@@ -31,7 +31,6 @@ class CheckoutSessionTemplateTests(unittest.TestCase):
         for element_id in (
             "accountArchiveFilterV2",
             "accountEmailSourceFilterV2",
-            "accountPlanCategoryFilterV2",
             "accountCodexAuthFilterV2",
             "accountCodexOperationFilterV2",
             "accountLiveCheckFilterV2",
@@ -39,7 +38,6 @@ class CheckoutSessionTemplateTests(unittest.TestCase):
         ):
             self.assertIn(f'id="{element_id}"', self.template)
         for value in (
-            "free_trial_eligible", "free_no_trial", "paid", "unknown",
             "not_started", "success", "failed", "skipped",
             "idle", "queued", "running", "canceled",
             "pending", "live", "deactivated", "none",

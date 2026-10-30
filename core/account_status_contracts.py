@@ -125,11 +125,10 @@ def classify_plan_category(row: Mapping[str, Any] | None) -> str:
     if not plan:
         return "unknown"
     if plan in FREE_PLAN_TYPES:
-        if row.get("trial_eligibility_known") is not True:
-            return "unknown"
-        if row.get("plus_trial_eligible") is True:
+        campaigns = row.get("eligible_promo_campaigns")
+        if isinstance(campaigns, dict) and campaigns:
             return "free_trial_eligible"
-        if row.get("plus_trial_eligible") is False:
+        if isinstance(campaigns, dict) and not campaigns:
             return "free_no_trial"
         return "unknown"
     if plan in KNOWN_PAID_PLAN_TYPES:

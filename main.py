@@ -15,13 +15,12 @@ from config import REGISTER_EMAIL, REGISTER_NAME  # 这两个一般不在 WebUI 
 from config import twofa as _twofa_cfg
 from config import email as _email_cfg
 from config import openai_protocol as _protocol_cfg
-from core.session import BrowserSession
-from core.chatgpt_auth import get_providers, get_csrf_token, signin_openai
+from core.session import BrowserSession, close_browser_session
+from core.chatgpt_auth import get_csrf_token, signin_openai
 from core.openai_auth import (
     follow_authorize,
     navigate_create_account_password,
     generate_registration_password,
-    request_password_sentinel_bundle,
     register_user,
     navigate_email_otp_send,
     request_sentinel_token,
@@ -29,7 +28,6 @@ from core.openai_auth import (
     validate_email_otp,
     send_email_otp,
     network_preflight,
-    navigate_about_you,
     EmailOtpInvalidError,
     create_account,
 )
@@ -225,34 +223,18 @@ def run_registration(
         if on_email_acquired:
             on_email_acquired(email)
 
-    # 创建浏览器会话（proxy=None 时自动从 config.PROXY_POOL 随机抽一个）
-    session = BrowserSession(proxy=proxy)
-    reset_auth_context = getattr(session, "reset_auth_document_navigation_context", None)
-    if callable(reset_auth_context):
-        reset_auth_context()
-
-    # 从代理 URL 中抽取 sid 段做日志，避免把账号密码完整打印
-    proxy_label = "无"
-    if session.proxy:
-        # 形如 socks5h://user-region-JP-sid-XXXX-t-5:pass@host:port
-        try:
-            sid_part = next(
-                (seg for seg in session.proxy.split("@")[0].split("-") if len(seg) == 8),
-                "***",
-            )
-            proxy_label = f"{session.proxy.split('://')[0]}://...sid-{sid_part}...@{session.proxy.split('@')[-1]}"
-        except Exception:
-            proxy_label = "已配置"
-
-    if not birthday:
-        birthday = generate_random_birthday()
-
-    logger.info(f"[注册] 开始：{email}，代理={proxy_label}")
-    logger.info("[注册] 本次随机生日已生成: present=%s", bool(birthday))
-    logger.debug(f"[注册] 设备ID={session.device_id}，会话日志ID={session.auth_session_logging_id}")
-
+    session = None
     create_acknowledged = False
     try:
+        # 构造与预检都进入同一错误收口；构造中途失败由会话释放部分资源。
+        session = BrowserSession(proxy=proxy, server_device_id=True)
+        reset_auth_context = getattr(session, "reset_auth_document_navigation_context", None)
+        if callable(reset_auth_context):
+            reset_auth_context()
+        if not birthday:
+            birthday = generate_random_birthday()
+        logger.info("[注册] 开始，proxy_configured=%s", bool(session.proxy))
+        logger.info("[注册] 本次随机生日已生成: present=%s", bool(birthday))
         # 网络预检必须在 signin/follow_authorize 之前完成；预检不带邮箱，不会触发 OTP。
         network_preflight(session)
         human_delay("navigate")
@@ -267,10 +249,6 @@ def run_registration(
             human_delay("navigate")
 
         # ==================== 阶段1: ChatGPT 认证 ====================
-        # 步骤1: 获取 providers
-        providers = get_providers(session)
-        human_delay("api")
-
         # 步骤2: 获取 CSRF token
         csrf_token = get_csrf_token(session)
         human_delay("api")
@@ -288,7 +266,7 @@ def run_registration(
         navigate_create_account_password(session, authorize_final_url)
         human_delay("navigate")
         registration_password = generate_registration_password()
-        password_sentinel = request_password_sentinel_bundle(session)
+        password_sentinel = request_sentinel_token(session, "username_password_create")
         password_sentinel_header, password_so_header = build_sentinel_header(
             session, password_sentinel, "username_password_create"
         )
@@ -418,10 +396,7 @@ def run_registration(
                     f"[步骤10] 未知 page_type={page_type}，但 continue_url 指向 about-you，继续 create_account"
                 )
 
-            # 先真实导航到 about-you，让 auth session/page state 与 create_account 一致。
-            about_url = str(otp_continue_url) if otp_continue_url and "about-you" in str(otp_continue_url) else None
-            navigate_about_you(session, about_url)
-            human_delay("navigate")
+            # 同一验证页 document 内提交资料，不增加 about-you 整页导航。
 
             # 步骤11: 获取 Sentinel Token（oauth_create_account）
             sentinel_resp_11 = request_sentinel_token(session, "oauth_create_account")
@@ -581,7 +556,15 @@ def run_registration(
                 logger.warning(f"[邮箱] {email} 注册失败，已标记不可复用 changed={changed}")
         except Exception:
             pass
-        return {"success": False, "email": email, "error": str(e)}
+        return {"success": False, "email": email, "error": str(e),
+                "error_code": getattr(e, "category", None),
+                "error_stage": getattr(e, "stage", None)}
+    finally:
+        try:
+            if session is not None:
+                close_browser_session(session)
+        except Exception as exc:
+            logger.warning("[注册] 会话清理失败: %s", type(exc).__name__)
 
 
 def main():

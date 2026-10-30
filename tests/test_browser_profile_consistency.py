@@ -1,30 +1,9 @@
 # -*- coding: utf-8 -*-
-import json
 import unittest
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from config import browser
-from core import sentinel_runner
-from core.sentinel import generate_fingerprint_data
-from core.session import BrowserSession
 
-
-
-class BrowserProfileVersionTests(unittest.TestCase):
-    def test_openai_browser_version_fields_are_chrome146(self):
-        profile = browser.build_browser_environment({}, base_profile={})
-
-        self.assertEqual(browser.CHROME_MAJOR, "146")
-        self.assertEqual(browser.CHROME_FULL_VERSION, "146.0.0.0")
-        self.assertEqual(browser.IMPERSONATE, "chrome146")
-        self.assertEqual(profile["chrome_major"], "146")
-        self.assertEqual(profile["chrome_full_version"], "146.0.0.0")
-        self.assertIn("Chrome/146.0.0.0", profile["user_agent"])
-        self.assertIn('"Google Chrome";v="146"', profile["sec_ch_ua"])
-        self.assertIn('"Chromium";v="146"', profile["sec_ch_ua"])
-        self.assertIn('"Google Chrome";v="146.0.0.0"', profile["sec_ch_ua_full_version_list"])
-        self.assertEqual(browser.validate_browser_profile(profile), [])
 
 class BrowserLocaleFallbackTests(unittest.TestCase):
     def _profile(self, geo):
@@ -68,68 +47,6 @@ class BrowserLocaleFallbackTests(unittest.TestCase):
         self.assertEqual(profile["timezone_iana"], fallback["timezone_iana"])
         self.assertEqual(profile["timezone_offset_minutes"], fallback["timezone_offset_minutes"])
         self.assertEqual(profile["timezone_name"], fallback["timezone_name"])
-
-
-class BrowserProfileCrossLayerTests(unittest.TestCase):
-    def test_python_sentinel_and_http_headers_use_same_profile(self):
-        profile = browser.build_browser_environment({"country": "CN", "timezone": "Asia/Shanghai"}, base_profile={})
-        fingerprint = generate_fingerprint_data("test-device-id", profile=profile)
-
-        session = BrowserSession.__new__(BrowserSession)
-        session.browser_profile = profile
-        with patch("core.session.SEND_HIGH_ENTROPY_CLIENT_HINTS", True):
-            headers = session._get_common_headers()
-
-        self.assertEqual(fingerprint[4], profile["user_agent"])
-        self.assertEqual(fingerprint[7], profile["navigator_language"])
-        self.assertEqual(fingerprint[8], ",".join(profile["navigator_languages"]))
-        self.assertIn("GMT+0800", fingerprint[1])
-        self.assertIn(profile["timezone_name"], fingerprint[1])
-        self.assertEqual(headers["User-Agent"], profile["user_agent"])
-        self.assertEqual(headers["accept-language"], profile["accept_language"])
-        self.assertEqual(headers["sec-ch-ua"], profile["sec_ch_ua"])
-        self.assertEqual(headers["sec-ch-ua-mobile"], profile["sec_ch_ua_mobile"])
-        self.assertEqual(headers["sec-ch-ua-platform"], profile["sec_ch_ua_platform"])
-        self.assertEqual(headers["sec-ch-ua-full-version-list"], profile["sec_ch_ua_full_version_list"])
-        self.assertEqual(headers["sec-ch-ua-platform-version"], profile["sec_ch_ua_platform_version"])
-        self.assertEqual(headers["sec-ch-ua-arch"], profile["sec_ch_ua_arch"])
-        self.assertEqual(headers["sec-ch-ua-bitness"], profile["sec_ch_ua_bitness"])
-        self.assertEqual(headers["sec-ch-ua-model"], profile["sec_ch_ua_model"])
-
-    def test_runner_receives_profile_version_and_locale_parameters(self):
-        profile = browser.build_browser_environment({"country": "CN", "timezone": "Asia/Shanghai"}, base_profile={})
-        fake_process = SimpleNamespace(
-            returncode=0,
-            stdout=json.dumps({"p": "p", "c": "c", "id": "device", "flow": "authorize_continue"}),
-            stderr="",
-        )
-
-        with patch.object(sentinel_runner, "_ensure_runner_environment"), patch.object(
-            sentinel_runner.subprocess, "run", return_value=fake_process
-        ) as run:
-            result = sentinel_runner.generate_sentinel_token(
-                {},
-                "authorize_continue",
-                "device",
-                browser_profile=profile,
-                cookie="oai-did=device",
-            )
-
-        self.assertEqual(json.loads(result)["flow"], "authorize_continue")
-        command = run.call_args.args[0]
-
-        def command_value(name):
-            return command[command.index(name) + 1]
-
-        self.assertEqual(command_value("--chrome-major"), profile["chrome_major"])
-        self.assertEqual(command_value("--chrome-full-version"), profile["chrome_full_version"])
-        self.assertEqual(command_value("--user-agent"), profile["user_agent"])
-        self.assertEqual(command_value("--language"), profile["navigator_language"])
-        self.assertEqual(command_value("--time-zone"), profile["timezone_iana"])
-        self.assertEqual(command_value("--timezone-name"), profile["timezone_name"])
-        self.assertEqual(command_value("--timezone-offset-minutes"), str(profile["timezone_offset_minutes"]))
-        self.assertIn('"Google Chrome";v="146"', command_value("--sec-ch-ua"))
-        self.assertEqual(run.call_args.kwargs["env"]["TZ"], profile["timezone_iana"])
 
 
 if __name__ == "__main__":

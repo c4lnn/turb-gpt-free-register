@@ -14,58 +14,32 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
-# 2026-09-14 成功样本：signin 不再主动携带 passkey capabilities；
-# authorize 使用两个 ccaps，并明确返回 ChatGPT 首页。
+# signin 与 authorize 字段按现网规则构造，保留服务端授权上下文。
 _CC_CAPS = "login_methods chatgpt_login_finalizer_v1"
 
 
 def _ensure_authorize_context(authorize_url: str, session: BrowserSession, email: str) -> str:
-    """
-    对 NextAuth 返回的 authorize URL 做最后兜底：确保当前前端默认
-    login_or_signup 链路的上下文参数没有在重定向生成阶段丢失。
-    """
-    try:
-        parsed = urlparse(authorize_url)
-        if not parsed.netloc.endswith("auth.openai.com"):
-            return authorize_url
-        params = parse_qs(parsed.query, keep_blank_values=True)
-        # 旧实现主动注入该字段；当前成功浏览器 authorize 已不携带。
-        changed = bool(params.pop("ext-passkey-client-capabilities", None))
-        language_getter = getattr(session, "navigator_language", None)
-        if callable(language_getter):
-            ui_locale = str(language_getter() or "en-US")
-        else:
-            # 兼容精简会话/旧任务对象，同时避免因为缺少一个辅助方法而把
-            # ext-oai-did 等整个 authorize 上下文静默丢掉。
-            profile = getattr(session, "browser_profile", {}) or {}
-            ui_locale = str(profile.get("navigator_language") or "en-US")
-        required = {
-            "ext-oai-did": session.device_id,
-            "auth_session_logging_id": session.auth_session_logging_id,
-            "screen_hint": "login_or_signup",
-            "login_hint": email,
-            "ui_locales": ui_locale,
-            "ccaps": _CC_CAPS,
-            "auth_return_target_category": "chatgpt_home",
-        }
-        for key, value in required.items():
-            if key in {"ccaps", "auth_return_target_category", "ui_locales"}:
-                if params.get(key) != [value]:
-                    params[key] = [value]
-                    changed = True
-            elif not params.get(key):
-                params[key] = [value]
-                changed = True
-        if not changed:
-            return authorize_url
-        logger.info(
-            "[步骤3] authorize 上下文已对齐：ui_locales=%s oai-did=%s",
-            ui_locale,
-            str(session.device_id)[:12] + "...",
-        )
-        return parsed._replace(query=urlencode(params, doseq=True)).geturl()
-    except Exception:
+    """补齐当前设备上下文，不覆盖 OAuth state、PKCE 或回调参数。"""
+    parsed = urlparse(authorize_url)
+    if parsed.hostname != "auth.openai.com":
         return authorize_url
+    params = parse_qs(parsed.query, keep_blank_values=True)
+    for key in ("ext-passkey-client-capabilities", "ext-oai-did",
+                "ui_locales", "auth_return_target_category"):
+        params.pop(key, None)
+    if not session.device_id:
+        raise RuntimeError("authorize 设备上下文尚未初始化")
+    params["device_id"] = [session.device_id]
+    required = {
+        "auth_session_logging_id": session.auth_session_logging_id,
+        "screen_hint": "login_or_signup",
+        "login_hint": email,
+        "ccaps": _CC_CAPS,
+    }
+    for key, value in required.items():
+        if not params.get(key):
+            params[key] = [value]
+    return parsed._replace(query=urlencode(params, doseq=True)).geturl()
 
 
 def get_providers(session: BrowserSession) -> dict:
@@ -119,7 +93,7 @@ def get_csrf_token(session: BrowserSession) -> str:
 
     data = resp.json()
     csrf_token = data.get("csrfToken", "")
-    logger.info(f"[步骤2] 获取 CSRF Token 成功: {csrf_token[:20]}...")
+    logger.info("[步骤2] 获取 CSRF Token 成功")
     return csrf_token
 
 
@@ -155,7 +129,6 @@ def signin_openai(session: BrowserSession, csrf_token: str, email: str) -> str:
     # 构造 URL 查询参数
     query_params = {
         "prompt": "login",
-        "ext-oai-did": session.device_id,
         "auth_session_logging_id": session.auth_session_logging_id,
         "screen_hint": "login_or_signup",
         "login_hint": email,
@@ -165,7 +138,7 @@ def signin_openai(session: BrowserSession, csrf_token: str, email: str) -> str:
     # 构造请求头
     headers = session.get_nextauth_headers(referer="https://chatgpt.com/auth/login")
     headers["content-type"] = "application/x-www-form-urlencoded"
-    headers["origin"] = "https://chatgpt.com"
+    headers = {key: value for key, value in headers.items() if key.lower() != "origin"}
 
     # 构造请求体
     body = urlencode({
@@ -174,7 +147,7 @@ def signin_openai(session: BrowserSession, csrf_token: str, email: str) -> str:
         "json": "true",
     })
 
-    logger.info(f"[步骤3] 发起 OAuth Signin 请求, 邮箱: {email}")
+    logger.info("[步骤3] 发起 OAuth Signin 请求")
     resp = session.post(url, headers=headers, data=body)
     resp.raise_for_status()
 
@@ -182,9 +155,8 @@ def signin_openai(session: BrowserSession, csrf_token: str, email: str) -> str:
     authorize_url = data.get("url", "")
 
     if not authorize_url:
-        raise ValueError(f"[步骤3] 未获取到 authorize URL, 响应: {data}")
+        raise ValueError("[步骤3] 未获取到 authorize URL")
 
     authorize_url = _ensure_authorize_context(authorize_url, session, email)
-    logger.info("[步骤3] 获取 authorize URL 成功，已确认 login_or_signup/oai-did 上下文")
-    logger.debug(f"[步骤3] URL: {authorize_url[:160]}...")
+    logger.info("[步骤3] 获取 authorize URL 成功，设备上下文已确认")
     return authorize_url

@@ -357,6 +357,8 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                     account_id=(result or {}).get("account_id") if isinstance(result, dict) else None,
                     network_traffic=(result or {}).get("network_traffic") if isinstance(result, dict) else None,
                     error=str(err)[:500],
+                    error_code=(result or {}).get("error_code") if isinstance(result, dict) else None,
+                    error_stage=(result or {}).get("error_stage") if isinstance(result, dict) else None,
                     completed_at=datetime.now().isoformat(timespec="seconds"),
                 )
                 email_to_handle = str(result_email or email or "").strip()
@@ -394,6 +396,8 @@ def _run_one_job(job_id: int, log_file: str) -> None:
             job_id,
             status="failed",
             error=f"{type(exc).__name__}: {exc}"[:500],
+            error_code=getattr(exc, "category", None),
+            error_stage=getattr(exc, "stage", None),
             completed_at=datetime.now().isoformat(timespec="seconds"),
         )
     finally:
