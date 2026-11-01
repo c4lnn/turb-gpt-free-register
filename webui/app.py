@@ -394,7 +394,7 @@ def _compact_job_for_list(row: dict) -> dict:
     for key in (
         "job_type", "account_id", "parent_job_id", "retry_attempt", "email", "started_at", "completed_at",
         "display_status", "retryable", "retry_action", "retry_label",
-        "manual_otp_required", "error_code", "error_stage",
+        "manual_otp_required", "error_code", "error_stage", "registration",
     ):
         value = row.get(key)
         if value is not None and value != "" and value is not False:

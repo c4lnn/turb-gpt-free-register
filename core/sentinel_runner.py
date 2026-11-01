@@ -53,7 +53,6 @@ from config import (
     JS_HEAP_SIZE_LIMIT,
     DEVICE_MEMORY,
     SENTINEL_SV,
-    OPENAI_BUILD_ID,
 )
 
 logger = logging.getLogger(__name__)
@@ -65,23 +64,17 @@ _SENTINEL_DIR = _PROJECT_ROOT / "sentinel"
 _RUNNER_PATH = _SENTINEL_DIR / "sentinel-runner.js"
 _SDK_PATH = _SENTINEL_DIR / "sdk.js"
 
-# 各 flow 对应的 page-url（与浏览器实际页面一致，影响 sdk.js 指纹生成）。
-_FLOW_PAGE_URL = {
-    "username_password_create": "https://auth.openai.com/create-account/password",
-    "email_otp_validate": "https://auth.openai.com/email-verification",
-    "authorize_continue": "https://auth.openai.com/email-verification",
-    "oauth_create_account": "https://auth.openai.com/about-you",
-    "password_verify": "https://auth.openai.com/log-in/password",
-}
+# Auth Sentinel SDK 使用统一页面语义；业务请求 URL 不在此处改写。
+_SENTINEL_PAGE_URL = "https://auth.openai.com/"
 
-# 这些 Auth 页没有 data-build，也不存在 ChatGPT c/<build> 脚本，SDK 指纹不注入
-# 前端 build。当前全部业务 flow 都属于 Auth 页，因此 build_id 恒为空。
-_AUTH_FLOWS_NO_BUILD = frozenset({
+# Sentinel SDK 只接受当前仓库使用的 Auth flow；这些页面不注入 ChatGPT frontend build。
+_SUPPORTED_AUTH_FLOWS = frozenset({
     "username_password_create",
     "email_otp_validate",
     "authorize_continue",
     "oauth_create_account",
     "password_verify",
+    "verify_mfa",
 })
 
 # 单阶段等待超时（秒）。sdk.js 内部可能要做 PoW，留充裕一点；沿用旧 60s 基线。
@@ -134,6 +127,8 @@ class SentinelSDK:
     ):
         if not flow:
             raise ValueError("flow 不能为空")
+        if str(flow) not in _SUPPORTED_AUTH_FLOWS:
+            raise ValueError(f"不支持的 Auth Sentinel flow: {flow}")
         if not device_id:
             raise ValueError("device_id 不能为空")
         self.flow = str(flow)
@@ -478,19 +473,10 @@ class SentinelSDK:
         sec_ch_ua_bitness = str(pv("sec_ch_ua_bitness", SEC_CH_UA_BITNESS))
         sec_ch_ua_model = str(pv("sec_ch_ua_model", SEC_CH_UA_MODEL))
 
-        page_url = _FLOW_PAGE_URL.get(
-            self.flow, "https://auth.openai.com/create-account/password"
-        )
-        build_id = (
-            "" if self.flow in _AUTH_FLOWS_NO_BUILD else str(pv("build_id", OPENAI_BUILD_ID))
-        )
-        # challenge 请求的初始 p[5] 都来自版本化 SDK；最终提交头由 Auth 页包装
-        # SDK 生成：密码/资料/登录页为 backend-api，OTP 页为版本化地址。
-        script_src = (
-            f"https://sentinel.openai.com/sentinel/{SENTINEL_SV}/sdk.js"
-            if self.flow == "email_otp_validate"
-            else "https://sentinel.openai.com/backend-api/sentinel/sdk.js"
-        )
+        page_url = _SENTINEL_PAGE_URL
+        build_id = ""
+        # 所有 flow 使用同一版本化资源地址；本地 SDK 载荷仍由 _SDK_PATH 执行。
+        script_src = f"https://sentinel.openai.com/sentinel/{SENTINEL_SV}/sdk.js"
 
         return {
             "type": "requirements",

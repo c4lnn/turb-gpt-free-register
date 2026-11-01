@@ -72,7 +72,7 @@ def submit_manual_otp(email: str, code: str) -> dict:
     with _lock:
         _codes[key].append(code)
         _event_for(key).set()
-    logger.info("[ManualOTP] 已提交验证码：email=%s code=%s", email, code)
+    logger.info("[ManualOTP] 已提交验证码：email=%s code_present=%s", email, bool(code))
     return {"ok": True, "email": email, "code": code}
 
 
@@ -144,11 +144,8 @@ def wait_for_manual_otp(email: str, *, timeout: int = 180, job_id: int | None = 
                 ev.wait(timeout=1.0)
 
             # 支持任务被手动停止
-            try:
-                from core.registration_service import check_stop_requested
-                check_stop_requested()
-            except Exception:
-                pass
+            from core.registration_service import check_stop_requested
+            check_stop_requested()
         raise TimeoutError(f"等待手动验证码超时（{timeout}s）：{email}")
     finally:
         clear_waiting(email)

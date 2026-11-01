@@ -221,6 +221,27 @@ class AccountLivenessTests(unittest.TestCase):
         reauth.assert_called_once()
         self.assertTrue(session.session.closed)
 
+
+    def test_deactivated_reauth_error_stops_without_full_login_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = _DummyBrowserSession(proxy="proxy")
+            error = liveness.AccountUnusableError(
+                "account banned", error_code="account_banned",
+            )
+            with patch.object(liveness, "_LOG_DIR", Path(tmp)), \
+                 patch.object(liveness, "_stored_access_token", return_value="old-token"), \
+                 patch.object(liveness, "_account_totp_secret", return_value=""), \
+                 patch.object(liveness, "_new_fingerprint_pinned_session", return_value=session), \
+                 patch.object(liveness, "_warm_authenticated_session"), \
+                 patch.object(liveness, "human_delay"), \
+                 patch.object(liveness, "_login_via_reauth", side_effect=error), \
+                 patch.object(liveness, "_login_via_full_web_flow") as full_login:
+                result = liveness.check_account_liveness("user@example.com", proxy="proxy")
+
+        self.assertEqual(result["status"], "deactivated")
+        self.assertEqual(result["error"], "account_banned")
+        self.assertFalse(liveness._is_retryable_network_error(error))
+        full_login.assert_not_called()
     def test_reauth_403_falls_back_to_clean_full_web_login_on_same_route(self):
         with tempfile.TemporaryDirectory() as tmp:
             reauth_session = _DummyBrowserSession(proxy="socks5://proxy.example:1080")
@@ -357,6 +378,97 @@ class AccountLivenessTests(unittest.TestCase):
                 logging.getLogger().removeHandler(handler)
                 handler.close()
 
+    def test_password_login_delegates_to_shared_verify_helper(self):
+        # 迁移回归：查活不再持有本地 password/verify 副本，改走共享 openai_auth 助手。
+        session = _DummyBrowserSession(proxy="")
+        with patch.object(liveness, "_account_registration_password", return_value="pw"), \
+             patch.object(liveness, "verify_login_password", return_value={
+                 "continue_url": "https://auth.openai.com/authorize/continue?x=1",
+             }) as verify, \
+             patch.object(liveness, "_follow_continue_and_fetch", return_value={"accessToken": "t"}) as follow:
+            result = liveness._login_via_password_or_otp(session, "a@b.c", 1.0)
 
+        verify.assert_called_once_with(session, "pw")
+        follow.assert_called_once()
+        self.assertEqual(result["accessToken"], "t")
+
+
+    def test_reauth_transport_retry_keeps_liveness_otp_on_final_document_id(self):
+        class Response:
+            def __init__(self, status_code=200, payload=None, url=""):
+                self.status_code = status_code
+                self.payload = payload or {}
+                self.url = url
+
+            def raise_for_status(self):
+                if self.status_code >= 400:
+                    error = RuntimeError(f"HTTP {self.status_code}")
+                    error.response = self
+                    raise error
+
+            def json(self):
+                return self.payload
+
+        class ReauthSession(_DummyBrowserSession):
+            def __init__(self):
+                super().__init__(proxy="proxy")
+                self.document_navigation_id = "document-1"
+                self.navigation_responses = [TimeoutError("socket timed out"), Response()]
+                self.gets = []
+                self.posts = []
+                self.rotation_history = []
+
+            def get_auth_navigate_headers(self, referer="", **_kwargs):
+                return {"referer": referer}
+
+            def get_auth_headers(self, referer=""):
+                return {
+                    "referer": referer,
+                    "x-openai-document-navigation-id": self.document_navigation_id,
+                }
+
+            def rotate_document_navigation_id(self):
+                previous = self.document_navigation_id
+                self.document_navigation_id = previous + "-next"
+                self.rotation_history.append((previous, self.document_navigation_id))
+                return self.document_navigation_id
+
+            def get(self, url, *, headers, allow_redirects=True):
+                self.gets.append((url, self.document_navigation_id))
+                if url.endswith("/log-in"):
+                    return Response(url=url)
+                response = self.navigation_responses.pop(0)
+                if isinstance(response, Exception):
+                    raise response
+                response.url = "https://auth.openai.com/email-verification"
+                return response
+
+            def post(self, url, *, headers, data=None):
+                self.posts.append((url, headers, data))
+                return Response(payload={
+                    "continue_url": "https://chatgpt.com/api/auth/callback/openai",
+                })
+
+        session = ReauthSession()
+        auth_url = "https://auth.openai.com/api/accounts/authorize?state=test"
+        with patch.object(liveness, "_trigger_reauth_with_retry", return_value=auth_url), \
+             patch.object(liveness, "wait_for_otp", return_value="123456"), \
+             patch.object(liveness, "human_delay"), \
+             patch.object(liveness, "_follow_continue_and_fetch", return_value={"accessToken": "fresh-token"}), \
+             patch("config.twofa.TWOFA_REAUTH_MAX_ATTEMPTS", 2), \
+             patch("config.twofa.TWOFA_REAUTH_RETRY_DELAY", 0):
+            result = liveness._login_via_reauth(session, "user@example.test", 1.0)
+
+        self.assertEqual(result["accessToken"], "fresh-token")
+        self.assertEqual(
+            [document_id for url, document_id in session.gets if not url.endswith("/log-in")],
+            ["document-1", "document-1"],
+        )
+        self.assertEqual(session.rotation_history, [("document-1", "document-1-next")])
+        self.assertEqual(
+            session.posts[0][1]["x-openai-document-navigation-id"],
+            "document-1-next",
+        )
+        self.assertEqual(len(session.posts), 1)
 if __name__ == "__main__":
     unittest.main()

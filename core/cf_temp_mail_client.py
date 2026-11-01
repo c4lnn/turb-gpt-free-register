@@ -23,6 +23,7 @@ from typing import Any
 
 import requests
 
+from core.email_transport import requests_request
 from config import email as _email_cfg
 from core.otp_utils import extract_otp, looks_like_openai_email
 
@@ -246,7 +247,7 @@ def _request(
     headers = _build_headers(content_type=content_type or json_body is not None, bearer_jwt=bearer_jwt)
     query = _auth_params(params)
     try:
-        response = requests.request(
+        response = requests_request(
             method.upper(),
             url,
             headers=headers,

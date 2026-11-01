@@ -22,6 +22,7 @@ from urllib.parse import quote, unquote, urlparse, urlunparse
 import requests
 
 from config import email as _email_cfg
+from core.email_transport import requests_session
 from core.otp_utils import extract_otp
 
 logger = logging.getLogger(__name__)
@@ -575,7 +576,7 @@ def fetch_latest_otp(
 
     while time.time() < deadline:
         try:
-            session = requests.Session()
+            session = requests_session()
             yy_result = _fetch_yangyang_otp(session, account.code_url, headers, after_ts=after_ts) if is_yangyang else None
             if yy_result:
                 code, yy_meta = yy_result

@@ -152,7 +152,26 @@ def _run_twofa(
             f"source={proxy_source} device_id={session.device_id}",
         )
         _append_log(email, f"[2FA] 指纹摘要：{session.fingerprint_summary_text()}")
-        secret = setup_2fa(session, email, access_token=access_token)
+        credentials = db.get_account_credentials(email)
+        registration_password = str(credentials.get("registration_password") or "").strip()
+
+        def persist_access_token(new_token: str) -> None:
+            if not db.update_account_access_token(account_id, new_token):
+                raise RuntimeError("账号不存在，无法持久化 2FA 慢路径新 access token")
+
+        def recover_existing_secret() -> str:
+            return db.promote_pending_totp_secret(email)
+
+        secret = setup_2fa(
+            session,
+            email,
+            access_token=access_token,
+            password=registration_password,
+            on_access_token=persist_access_token,
+            try_existing_access_token=True,
+            skip_if_mfa_enabled=True,
+            on_already_enabled=recover_existing_secret,
+        )
         db.update_account_totp_secret(
             account_id,
             {"ok": True, "status": "success", "totp_secret": secret, "message": "2FA 设置完成"},

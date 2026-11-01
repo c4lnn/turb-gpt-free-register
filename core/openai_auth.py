@@ -9,6 +9,9 @@ import logging
 import random
 import secrets
 import time
+from urllib.parse import urlparse, urljoin
+
+import pyotp
 
 from config import openai_protocol as _protocol_cfg
 from core.session import BrowserSession
@@ -51,6 +54,32 @@ class AccountUnusableError(Exception):
     def __init__(self, message: str, error_code: str = ""):
         super().__init__(message)
         self.error_code = error_code
+
+
+class PasswordRejectedError(RuntimeError):
+    """已有账号登录密码被服务端明确拒绝。
+
+    仅当服务端响应明确表示密码不正确时抛出；429/403/5xx、网络错误以及
+    未知的 4xx 不得归入此类，以免误触发邮箱 OTP 回退。携带解析后的结构化
+    result（可能含服务端 advertise 的继续路径），供上层选择支持的 OTP 切换。
+    """
+
+    def __init__(self, message: str, result: dict | None = None):
+        super().__init__(message)
+        self.result = result or {}
+
+
+class PasswordRegistrationRejectedError(RuntimeError):
+    """新号设置密码（user/register）被服务端明确拒绝。
+
+    仅当服务端明确拒绝本次设置密码（如 registration_disallowed）时抛出；
+    未知 4xx、CF 挑战、429、网络结果不明均不得归入此类，不得据此进入
+    passwordless OTP 回退。携带解析后的结构化 result。
+    """
+
+    def __init__(self, message: str, result: dict | None = None):
+        super().__init__(message)
+        self.result = result or {}
 
 
 # 远端返回这些 error code 时，判定邮箱素材已废，不再重试。
@@ -129,6 +158,76 @@ def _extract_error_code(resp) -> str:
     if isinstance(err, dict):
         return str(err.get("code") or "")
     return ""
+
+def _raise_for_account_unusable_response(resp) -> None:
+    """在通用 HTTP 异常前保留结构化账号废弃结果。"""
+    code = _extract_error_code(resp)
+    if code in _ACCOUNT_DEAD_CODES:
+        raise AccountUnusableError(
+            f"账号已废弃（{code}）", error_code=code,
+        )
+
+
+
+def _response_text(resp) -> str:
+    return str(getattr(resp, "text", "") or "")
+
+
+def _try_response_json(resp) -> dict:
+    try:
+        payload = resp.json()
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _looks_like_json(resp) -> bool:
+    """按响应 Content-Type 判断是否为结构化 JSON，避免把 HTML 落地误当 page 状态。"""
+    ctype = str(getattr(getattr(resp, "headers", None), "get", lambda *_: "")("Content-Type") or "")
+    return "json" in ctype.lower()
+
+
+# 登录密码被明确拒绝的结构化 error.code（保守集合；精确码待真实运行确认）。
+# 不含 invalid_credentials（也可能是非密码原因），不按"password+invalid"泛化正文。
+_PASSWORD_REJECTION_CODES = frozenset({
+    "invalid_password",
+    "password_incorrect",
+    "incorrect_password",
+    "wrong_password",
+    "password_rejected",
+})
+
+# 设置密码（user/register）被明确拒绝的结构化 error.code（保守集合）。
+# 不含 already exists（属账号已存在冲突，不是"可回退 OTP"的拒绝），不含 409 invalid_state。
+_REGISTRATION_REJECTION_CODES = frozenset({
+    "registration_disallowed",
+    "registration_not_allowed",
+    "signup_disallowed",
+})
+
+
+def _is_explicit_password_rejection(status: int, body: str, code: str) -> bool:
+    """仅把明确的密码拒绝归为密码错误；限流/CF/5xx/网络/未知 4xx 一律不归。"""
+    if status not in (400, 401, 422):
+        return False
+    if code and code.strip().lower() in _PASSWORD_REJECTION_CODES:
+        return True
+    low = (body or "").lower()
+    return "incorrect password" in low or "wrong password" in low
+
+
+def _is_explicit_registration_rejection(status: int, body: str, code: str) -> bool:
+    """仅把 user/register 的明确业务拒绝（registration_disallowed）归为设置密码拒绝。
+
+    already exists / 409 invalid_state 表示账号已存在或状态冲突，不是"可继续 OTP"
+    的密码设置拒绝，不得据此进入回退。
+    """
+    if status not in (400, 401, 403, 409, 422):
+        return False
+    if code and code.strip().lower() in _REGISTRATION_REJECTION_CODES:
+        return True
+    low = (body or "").lower()
+    return "registration_disallowed" in low or "registration not allowed" in low
 
 
 def _proxy_retry_config() -> tuple[int, float]:
@@ -373,10 +472,22 @@ def follow_authorize(session: BrowserSession, authorize_url: str) -> str:
         try:
             logger.info(f"[步骤4] 跟随 authorize URL 重定向 (尝试 {attempt}/{max_attempts})...")
             resp = session.get(authorize_url, headers=headers, allow_redirects=True)
+            _rotate_document_navigation_id(session)
             resp.raise_for_status()
             final_url = str(getattr(resp, "url", "") or "")
-            _rotate_document_navigation_id(session)
-            logger.info(f"[步骤4] 重定向完成, 最终URL: {final_url}")
+            # 保留本次已取得的最终响应的可安全解析状态，供注册专用分类入口使用；
+            # 不新增第二次 authorize 导航。落地为 HTML 文档时无结构化 page.type/mode，
+            # 仅记录落地 URL 与状态码，由 get_registration_state 按路径严格判定。
+            session.registration_authorize_state = {
+                "landing_url": final_url,
+                "status": int(getattr(resp, "status_code", 0) or 0),
+                "page": _try_response_json(resp) if _looks_like_json(resp) else {},
+            }
+            landing = urlparse(final_url)
+            logger.info(
+                "[步骤4] 重定向完成, 最终落点: %s%s",
+                landing.netloc, landing.path,
+            )
             return final_url
         except Exception as exc:
             last_exc = exc
@@ -417,25 +528,6 @@ def request_sentinel_token(session: BrowserSession, flow: str) -> dict:
 
     if not session.device_id:
         raise SentinelRequestError("Sentinel 设备上下文尚未初始化")
-    iframe_flow = flow == "username_password_create"
-    context_name = "password" if iframe_flow else "top_level"
-    ready_contexts = getattr(session, "_sentinel_frame_contexts", None)
-    if not isinstance(ready_contexts, set):
-        ready_contexts = set()
-        session._sentinel_frame_contexts = ready_contexts
-    if context_name not in ready_contexts:
-        from config import SENTINEL_SV
-        frame_url = f"https://sentinel.openai.com/backend-api/sentinel/frame.html?sv={SENTINEL_SV}"
-        _request_with_proxy_retry(
-            session,
-            f"Sentinel iframe:{flow}",
-            lambda: session.get(
-                frame_url,
-                headers=session.get_sentinel_frame_headers(user_initiated=iframe_flow),
-                allow_redirects=True,
-            ),
-        )
-        ready_contexts.add(context_name)
 
     profile = dict(getattr(session, "browser_profile", None) or {})
     cookie = session.auth_cookie_header() if hasattr(session, "auth_cookie_header") else ""
@@ -584,6 +676,15 @@ def register_user(
     logger.info("[步骤7] 提交邮箱和密码：%s", email)
     resp = session.post(url, headers=headers, data=body)
     if resp.status_code != 200:
+        body_text = _response_text(resp)
+        code = _extract_error_code(resp)
+        if _is_explicit_registration_rejection(resp.status_code, body_text, code):
+            # 保留结构化 result（可能含服务端 advertise 的 continue_url），
+            # 供上层判断是否存在可继续的 OTP 路径；不得据此擅自回退。
+            raise PasswordRegistrationRejectedError(
+                f"设置密码被服务端明确拒绝: status={resp.status_code} code={code or 'unknown'}",
+                result=_try_response_json(resp),
+            )
         logger.error("[步骤7] user/register 失败 status=%s", resp.status_code)
         resp.raise_for_status()
     data = resp.json()
@@ -598,9 +699,9 @@ def navigate_email_otp_send(session: BrowserSession, continue_url: str | None = 
     headers = session.get_auth_navigate_headers(referer="https://auth.openai.com/create-account/password")
     headers["sec-fetch-site"] = "same-origin"
     headers["sec-fetch-user"] = "?1"
+    _rotate_document_navigation_id(session)
     resp = session.get(url, headers=headers, allow_redirects=True)
     resp.raise_for_status()
-    _rotate_document_navigation_id(session)
     final_url = str(getattr(resp, "url", "") or "")
     if "/email-verification" not in final_url:
         raise RuntimeError(f"OTP 发送导航落点异常: {final_url}")
@@ -617,11 +718,11 @@ def send_email_otp(session: BrowserSession, referer: str = "https://auth.openai.
     headers["sec-fetch-site"] = "same-origin"
     headers["sec-fetch-user"] = "?1"
     logger.info("[OTP] 请求重新发送邮箱验证码...")
+    _rotate_document_navigation_id(session)
     resp = session.get(url, headers=headers, allow_redirects=True)
     if resp.status_code >= 400:
         logger.warning("[OTP] 重新发送验证码失败 status=%s", resp.status_code)
         resp.raise_for_status()
-    _rotate_document_navigation_id(session)
     logger.info("[OTP] 重新发送验证码请求完成，status=%s", resp.status_code)
 
 
@@ -724,3 +825,425 @@ def create_account(session: BrowserSession, name: str, birthday: str, sentinel_h
         log_cookies("create_account_complete")
     logger.info("[步骤12] 创建接口返回成功，等待 OAuth 回调建立登录态")
     return data
+
+
+# ============================================================
+# 账号状态识别与已有账号登录（协议分流）
+# ============================================================
+
+_AUTH_HOSTS = frozenset({"auth.openai.com", "chatgpt.com"})
+
+
+def _url_host_path(url: str) -> tuple[str, str]:
+    try:
+        parsed = urlparse(str(url or ""))
+    except Exception:
+        return "", ""
+    return (parsed.hostname or "").lower(), (parsed.path or "")
+
+
+def get_auth_continue_url(result) -> str:
+    """从 auth step 响应统一提取继续地址；main 只调用此处，不复制字段探测。"""
+    if not isinstance(result, dict):
+        return ""
+    page = result.get("page") or {}
+    page = page if isinstance(page, dict) else {}
+    return str(
+        result.get("continue_url")
+        or result.get("external_url")
+        or result.get("url")
+        or page.get("continue_url")
+        or page.get("external_url")
+        or page.get("url")
+        or ""
+    ).strip()
+
+
+def _step_from_page_type(page_type: str) -> str:
+    pt = (page_type or "").strip().lower()
+    if pt == "mfa_challenge":
+        return "totp"
+    if pt in ("email_otp_verification", "email_otp_send"):
+        return "otp"
+    if pt in ("login_password", "create_account_password"):
+        return "password"
+    if pt in ("about_you", "about-you"):
+        return "profile"
+    if pt == "external_url":
+        return "callback"
+    return "unknown"
+
+
+def _step_from_continue_url(continue_url: str) -> str:
+    cu = str(continue_url or "").strip()
+    if not cu:
+        return "unknown"
+    host, path = _url_host_path(cu)
+    if host and host not in _AUTH_HOSTS:
+        return "unknown"
+    low_path = path.lower()
+    if "/mfa-challenge/" in low_path:
+        return "totp"
+    if ("/email-verification" in low_path
+            or "/email-otp/send" in low_path
+            or "/email-otp/resend" in low_path):
+        return "otp"
+    if "/log-in/password" in low_path or "/create-account/password" in low_path:
+        return "password"
+    if "/about-you" in low_path:
+        return "profile"
+    if host == "chatgpt.com" or "/authorize/continue" in low_path:
+        return "callback"
+    return "unknown"
+
+
+def get_auth_step(result) -> str:
+    """从 auth step 响应判定下一步认证因子，并校验 host/path 与证据冲突。
+
+    返回 password/otp/totp/profile/callback/unknown；page.type 与 continue_url
+    都明确但指向不同因子时判 unknown（证据冲突），不猜测。
+    """
+    if not isinstance(result, dict):
+        return "unknown"
+    page = result.get("page") or {}
+    page = page if isinstance(page, dict) else {}
+    page_type = str(page.get("type") or "").strip().lower()
+    continue_url = get_auth_continue_url(result)
+
+    # continue_url 存在但主机不在允许域内 → 严格 unknown，不允许已知 page.type 独断。
+    if continue_url:
+        host, _path = _url_host_path(continue_url)
+        if host and host not in _AUTH_HOSTS:
+            return "unknown"
+
+    page_step = _step_from_page_type(page_type)
+    url_step = _step_from_continue_url(continue_url)
+    if page_step != "unknown" and url_step != "unknown" and page_step != url_step:
+        return "unknown"
+    return page_step if page_step != "unknown" else url_step
+
+
+def _classify_landing_path(landing_url: str, intent: str = "signup") -> tuple[str, str, bool]:
+    """按 OSS 的 authorize 落地 URL 子串及 intent 分类。"""
+    low_url = str(landing_url or "").strip().lower()
+    if "/create-account" in low_url or "/about-you" in low_url:
+        return "new_password", "password", False
+    if "/log-in" in low_url:
+        if "/log-in/password" in low_url:
+            return "existing", "password", False
+        return "existing", "otp", True
+    if "/email-verification" in low_url:
+        if (str(intent or "signup").strip().lower() or "signup") == "signup":
+            return "new_password", "password", False
+        return "existing", "otp", True
+    return "unknown", "unknown", False
+
+
+def _registration_state(
+    kind: str, step: str, page: dict, continue_url: str, source: str,
+    otp_delivery_required: bool = False,
+) -> dict:
+    return {
+        "kind": kind,
+        "step": step,
+        "page": page,
+        "continue_url": continue_url,
+        "classification_source": source,
+        "otp_delivery_required": otp_delivery_required,
+    }
+
+
+def get_registration_state(session, landing_url, intent="signup", page_state=None) -> dict:
+    """仅按 OSS 落地 URL 分类；未知落地由 authorize_continue 探测。"""
+    authorize_state = getattr(session, "registration_authorize_state", None)
+    authorize_state = authorize_state if isinstance(authorize_state, dict) else {}
+    page = page_state if isinstance(page_state, dict) else authorize_state.get("page") or {}
+    page = page if isinstance(page, dict) else {}
+    landing = str(landing_url or authorize_state.get("landing_url") or "").strip()
+    kind, step, otp_delivery_required = _classify_landing_path(landing, intent)
+    source = "landing_url" if kind != "unknown" else "unclassified_landing"
+    return _registration_state(kind, step, page, landing, source, otp_delivery_required)
+
+
+def _classify_authorize_probe(data: dict, *, strict: bool = False) -> dict:
+    """按 OSS authorize_continue 响应映射认证状态；strict 用于拒绝未知慢路径落点。"""
+    page = data.get("page") if isinstance(data.get("page"), dict) else {}
+    payload = page.get("payload") if isinstance(page.get("payload"), dict) else {}
+    page_type = str(page.get("type") or "").strip().lower()
+    mode = str(payload.get("email_verification_mode") or "").strip().lower()
+    continue_url = get_auth_continue_url(data)
+    low_url = continue_url.lower()
+
+    if page_type == "create_account_password" or "/create-account/password" in low_url:
+        kind, step, otp_delivery_required = "new_password", "password", False
+    elif page_type == "email_otp_verification":
+        if mode == "passwordless_signup":
+            kind, step, otp_delivery_required = "new_passwordless", "otp", False
+        else:
+            kind, step = "existing", "otp"
+            otp_delivery_required = mode != "passwordless_login"
+    elif page_type == "login_password" or "/log-in/password" in low_url:
+        kind, step, otp_delivery_required = "existing", "password", False
+    elif page_type == "mfa_challenge":
+        kind, step, otp_delivery_required = "existing", "totp", False
+    elif strict:
+        kind, step, otp_delivery_required = "existing", "unknown", False
+    else:
+        # 注册兼容路径保留 OSS 对未知 page.type 的 OTP 处理方式。
+        kind, step, otp_delivery_required = "existing", "otp", True
+
+    return _registration_state(
+        kind, step, page, continue_url, "authorize_continue", otp_delivery_required,
+    )
+
+
+def probe_registration_state(session, email: str, *, strict: bool = False) -> dict:
+    """用 authorize_continue 探测落点；strict 慢路径拒绝无效或未知响应。"""
+    sentinel_resp = request_sentinel_token(session, "authorize_continue")
+    sentinel_header, so_header = build_sentinel_header(
+        session, sentinel_resp, "authorize_continue",
+    )
+    headers = session.get_auth_headers(referer="https://auth.openai.com/create-account")
+    headers["accept"] = "application/json"
+    headers["content-type"] = "application/json"
+    headers["openai-sentinel-token"] = sentinel_header
+    if so_header:
+        headers["openai-sentinel-so-token"] = so_header
+    response = session.post(
+        "https://auth.openai.com/api/accounts/authorize/continue",
+        headers=headers,
+        data=json.dumps({"username": {"kind": "email", "value": email}}),
+        allow_redirects=False,
+    )
+    status = int(getattr(response, "status_code", 0) or 0)
+    if status not in (200, 204):
+        raise RuntimeError(f"authorize_continue 状态探测失败: HTTP {status}")
+
+    try:
+        data = response.json()
+    except Exception:
+        if strict:
+            raise RuntimeError("authorize_continue 响应无法解析") from None
+        return _registration_state("new_password", "password", {}, "", "probe_parse_fallback")
+    if not isinstance(data, dict):
+        if strict:
+            raise RuntimeError("authorize_continue 响应结构无效")
+        return _registration_state("new_password", "password", {}, "", "probe_parse_fallback")
+    state = _classify_authorize_probe(data, strict=strict)
+    if strict and state["step"] == "unknown":
+        raise RuntimeError("authorize_continue 返回未知登录落点")
+    return state
+
+
+
+
+def _extract_factor_id(result, continue_url: str) -> str:
+    """从 step 响应提取 MFA factor_id：优先 page.payload.factor_id，回退 continue_url。"""
+    if isinstance(result, dict):
+        page = result.get("page") or {}
+        if isinstance(page, dict):
+            payload = page.get("payload") or {}
+            if isinstance(payload, dict):
+                factor_id = str(payload.get("factor_id") or "").strip()
+                if factor_id:
+                    return factor_id
+    cu = str(continue_url or "")
+    if "/mfa-challenge/" in cu:
+        return cu.rstrip("/").rsplit("/", 1)[-1]
+    return ""
+
+
+def _totp_code(secret: str) -> str:
+    try:
+        return pyotp.TOTP(str(secret or "")).now()
+    except Exception:
+        return ""
+
+
+def _mfa_issue_challenge(session, factor_id: str) -> dict:
+    headers = session.get_auth_headers(referer="https://auth.openai.com/")
+    headers["accept"] = "*/*"
+    headers.pop("openai-sentinel-token", None)
+    headers.pop("openai-sentinel-so-token", None)
+    resp = session.post(
+        "https://auth.openai.com/api/accounts/mfa/issue_challenge",
+        headers=headers,
+        data=json.dumps({"id": factor_id, "type": "totp", "force_fresh_challenge": False}),
+        allow_redirects=False,
+    )
+    if resp.status_code >= 400:
+        _raise_for_account_unusable_response(resp)
+        resp.raise_for_status()
+    return resp.json()
+
+
+def _mfa_verify(session, factor_id: str, code: str) -> dict:
+    flow = "verify_mfa"
+    sentinel_resp = request_sentinel_token(session, flow)
+    sentinel_header, so_header = build_sentinel_header(session, sentinel_resp, flow)
+    headers = session.get_auth_headers(referer="https://auth.openai.com/")
+    headers["accept"] = "application/json"
+    headers["openai-sentinel-token"] = sentinel_header
+    if (sentinel_resp.get("so") or {}).get("required") is True:
+        headers["openai-sentinel-so-token"] = so_header
+    resp = session.post(
+        "https://auth.openai.com/api/accounts/mfa/verify",
+        headers=headers,
+        data=json.dumps({"id": factor_id, "type": "totp", "code": code}),
+        allow_redirects=False,
+    )
+    if resp.status_code >= 400:
+        _raise_for_account_unusable_response(resp)
+        resp.raise_for_status()
+    return resp.json()
+
+
+def verify_login_password(
+    session, password: str,
+) -> dict:
+    """密码验证；每次为 password_verify flow 取得独立 Sentinel 凭据。"""
+    flow = "password_verify"
+    sentinel_resp = request_sentinel_token(session, flow)
+    sentinel_header, so_header = build_sentinel_header(session, sentinel_resp, flow)
+    headers = session.get_auth_headers(referer="https://auth.openai.com/")
+    headers["accept"] = "application/json"
+    headers["openai-sentinel-token"] = sentinel_header
+    if (sentinel_resp.get("so") or {}).get("required") is True:
+        headers["openai-sentinel-so-token"] = so_header
+    resp = session.post(
+        "https://auth.openai.com/api/accounts/password/verify",
+        headers=headers,
+        data=json.dumps({"password": password}),
+        allow_redirects=False,
+    )
+    if resp.status_code >= 400:
+        body_text = _response_text(resp)
+        code = _extract_error_code(resp)
+        _raise_for_account_unusable_response(resp)
+        if _is_explicit_password_rejection(resp.status_code, body_text, code):
+            raise PasswordRejectedError(
+                f"登录密码被服务端明确拒绝: status={resp.status_code} code={code or 'unknown'}",
+                result=_try_response_json(resp),
+            )
+        resp.raise_for_status()
+    return resp.json()
+
+
+
+
+def _login_otp_resend(session) -> dict:
+    """POST /api/accounts/email-otp/resend：复用当前 challenge 重发，不切换 state。"""
+    url = "https://auth.openai.com/api/accounts/email-otp/resend"
+    headers = session.get_auth_headers(referer="https://auth.openai.com/email-verification")
+    logger.info("[登录] 复用当前 challenge 重发邮箱 OTP")
+    resp = session.post(url, headers=headers, allow_redirects=False)
+    if resp.status_code >= 400:
+        resp.raise_for_status()
+    return {
+        "page": {"type": "email_otp_verification", "payload": {}},
+        "continue_url": "https://auth.openai.com/email-verification",
+    }
+
+
+def _login_otp_follow_send(session, continue_url: str) -> dict:
+    """跟随服务端指示的 email-otp/send 继续路径触发新发码（password/verify 后）。"""
+    url = str(continue_url or "")
+    if url.startswith("/"):
+        url = urljoin("https://auth.openai.com", url)
+    headers = session.get_auth_navigate_headers(referer="https://auth.openai.com/log-in/password")
+    headers["sec-fetch-site"] = "same-origin"
+    headers["sec-fetch-user"] = "?1"
+    logger.info("[登录] 跟随服务端指示的 email-otp/send 发送验证码")
+    _rotate_document_navigation_id(session)
+    resp = session.get(url, headers=headers, allow_redirects=True)
+    resp.raise_for_status()
+    final_url = str(getattr(resp, "url", "") or "")
+    return {
+        "page": {"type": "email_otp_verification", "payload": {}},
+        "continue_url": final_url or "https://auth.openai.com/email-verification",
+    }
+
+
+def _is_login_otp_send_path(continue_url: str) -> bool:
+    """continue_url 是否明确指向登录路径的 email-otp/send（校验 host + 精确 path）。
+
+    相对路径（无 host）视为 auth.openai.com 同源，同样按精确 path 校验。
+    """
+    cu = str(continue_url or "").strip()
+    if not cu:
+        return False
+    host, path = _url_host_path(cu)
+    if host and host != "auth.openai.com":
+        return False
+    return path.rstrip("/").endswith("/email-otp/send")
+
+
+def request_login_otp(session, result, *, resend: bool = False) -> dict:
+    """登录路径邮箱 OTP 投递/重发，返回规范化下一步状态。
+
+    - resend=True：POST /api/accounts/email-otp/resend（复用当前 challenge）。
+    - resend=False：仅当 continue_url 明确指向 /email-otp/send 时才 GET 该地址
+      （服务端指示的新发码）；否则仅对已知 password/otp 步骤 POST resend 复用
+      challenge，绝不无条件新建 challenge。
+    - unknown/profile/callback 或无可支持路径 → 明确失败，不发任何请求。
+    """
+    continue_url = get_auth_continue_url(result)
+    step = get_auth_step(result)
+    has_send_path = _is_login_otp_send_path(continue_url)
+
+    if resend:
+        if step not in ("password", "otp") and not has_send_path:
+            raise RuntimeError(f"OTP 重发不支持当前步骤: step={step}")
+        return _login_otp_resend(session)
+
+    if has_send_path:
+        return _login_otp_follow_send(session, continue_url)
+
+    if step in ("password", "otp"):
+        return _login_otp_resend(session)
+
+    raise RuntimeError(f"OTP 投递无支持路径: step={step}")
+
+
+def verify_login_totp(session, result, secret: str) -> dict:
+    """密码/邮箱 OTP 后识别并完成 TOTP 校验。缺 factor_id 或缺 secret 即失败。"""
+    continue_url = get_auth_continue_url(result)
+    factor_id = _extract_factor_id(result, continue_url)
+    if not factor_id:
+        raise RuntimeError("进入 MFA 但未拿到 factor_id")
+    secret = str(secret or "").strip()
+    if not secret:
+        raise RuntimeError("进入 MFA 但账号没有 totp_secret，无法生成动态码")
+    _mfa_issue_challenge(session, factor_id)
+    code = _totp_code(secret)
+    if not code:
+        raise RuntimeError("无法生成 TOTP 动态码")
+    logger.info("[登录] 提交 TOTP 动态码，factor_id_present=%s", bool(factor_id))
+    return _mfa_verify(session, factor_id, code)
+
+
+def get_mfa_enabled(session, access_token: str) -> bool:
+    """读取服务端 MFA 状态。仅接受布尔 true/false；其他类型/缺失/解析失败 raise 未知。"""
+    token = str(access_token or "").strip()
+    if not token:
+        raise RuntimeError("查询 MFA 状态缺少 access_token")
+    url = "https://chatgpt.com/backend-api/accounts/mfa_info"
+    headers = session.get_chatgpt_headers(referer="https://chatgpt.com/")
+    headers["authorization"] = f"Bearer {token}"
+    headers["oai-device-id"] = session.device_id
+    headers["oai-language"] = session.navigator_language()
+    resp = session.get(url, headers=headers)
+    if resp.status_code != 200:
+        resp.raise_for_status()
+    try:
+        payload = resp.json()
+    except Exception:
+        raise RuntimeError("mfa_info 响应无法解析，无法确认 2FA 状态") from None
+    if not isinstance(payload, dict) or "mfa_enabled" not in payload:
+        raise RuntimeError("mfa_info 响应缺少 mfa_enabled 字段，无法确认 2FA 状态")
+    value = payload.get("mfa_enabled")
+    if value is True:
+        return True
+    if value is False:
+        return False
+    raise RuntimeError("mfa_info 的 mfa_enabled 值不明确，无法确认 2FA 状态")

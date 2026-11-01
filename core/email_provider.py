@@ -76,21 +76,23 @@ def _pick_from_source(source: str) -> str:
     return pick_account().email
 
 
-def acquire_email() -> str:
-    """根据 EMAIL_SOURCE 领取一个用于注册的邮箱地址。"""
-    sources = parse_email_sources()
-    last_exc: Exception | None = None
-    for source in sources:
-        try:
-            email = _pick_from_source(source)
-            logger.info(f"[EmailProvider] 使用邮箱来源: {source}, email={email}")
-            return email
-        except Exception as exc:
-            last_exc = exc
-            logger.warning(f"[EmailProvider] 来源 {source} 领取邮箱失败: {type(exc).__name__}: {exc}")
-            continue
-    raise RuntimeError(f"所有邮箱来源均领取失败: {sources}; last={last_exc}")
+def acquire_email(*, direct: bool = False) -> str:
+    """根据 EMAIL_SOURCE 领取邮箱；注册流程可选择忽略环境 HTTP(S) 代理。"""
+    from core.email_transport import direct_email_requests
 
+    with direct_email_requests(direct):
+        sources = parse_email_sources()
+        last_exc: Exception | None = None
+        for source in sources:
+            try:
+                email = _pick_from_source(source)
+                logger.info(f"[EmailProvider] 使用邮箱来源: {source}, email={email}")
+                return email
+            except Exception as exc:
+                last_exc = exc
+                logger.warning(f"[EmailProvider] 来源 {source} 领取邮箱失败: {type(exc).__name__}: {exc}")
+                continue
+        raise RuntimeError(f"所有邮箱来源均领取失败: {sources}; last={last_exc}")
 
 def acquire_email_after_input(email: str | None = None) -> str:
     """在浏览器已找到邮箱输入框后领取邮箱。
@@ -106,7 +108,7 @@ def acquire_email_after_input(email: str | None = None) -> str:
 
     if not bool(getattr(_email_cfg, "USE_EMAIL_SERVICE", False)):
         raise RuntimeError("页面已找到邮箱输入框，但自动取邮箱未启用且未配置 REGISTER_EMAIL")
-    allocated = str(acquire_email() or "").strip()
+    allocated = str(acquire_email(direct=True) or "").strip()
     if not allocated:
         raise RuntimeError("邮箱服务返回了空邮箱地址")
     logger.info("[EmailProvider] 已找到邮箱输入框，开始分配邮箱: %s", allocated)
@@ -185,6 +187,7 @@ def wait_for_otp(
     poll_interval: int | None = None,
     settle_seconds: int | None = None,
     email_source: str | None = None,
+    direct: bool = False,
 ) -> str:
     """等待并返回该邮箱最新的 ChatGPT OTP（6 位数字字符串）。
 
@@ -224,23 +227,21 @@ def wait_for_otp(
         or _registered_email_source(email)
         or resolve_email_source(email)
     )
-    if source == "cloudflare":
-        from core.cf_temp_mail_client import fetch_latest_otp
+    from core.email_transport import direct_email_requests
+    with direct_email_requests(direct):
+        if source == "cloudflare":
+            from core.cf_temp_mail_client import fetch_latest_otp
+        elif source == "cloudflare_domain":
+            from core.qqmail_client import fetch_latest_otp
+        elif source == "icloud":
+            from core.icloud_client import fetch_latest_otp
+        elif source == "generic_api":
+            from core.generic_api_mail_client import fetch_latest_otp
+        elif source == "remail":
+            from core.remail_client import fetch_latest_otp
+        else:
+            from core.outlook_client import fetch_latest_otp
         return fetch_latest_otp(email, after_ts=after_ts, **extra_kwargs)
-    if source == "cloudflare_domain":
-        from core.qqmail_client import fetch_latest_otp
-        return fetch_latest_otp(email, after_ts=after_ts, **extra_kwargs)
-    if source == "icloud":
-        from core.icloud_client import fetch_latest_otp
-        return fetch_latest_otp(email, after_ts=after_ts, **extra_kwargs)
-    if source == "generic_api":
-        from core.generic_api_mail_client import fetch_latest_otp
-        return fetch_latest_otp(email, after_ts=after_ts, **extra_kwargs)
-    if source == "remail":
-        from core.remail_client import fetch_latest_otp
-        return fetch_latest_otp(email, after_ts=after_ts, **extra_kwargs)
-    from core.outlook_client import fetch_latest_otp
-    return fetch_latest_otp(email, after_ts=after_ts, **extra_kwargs)
 
 
 def release_email(email: str, status: str = "failed", note: str | None = None) -> str:
@@ -284,8 +285,10 @@ def release_email_if_unconsumed(email: str, note: str | None = None) -> bool:
     elif source == "icloud":
         changed = db.release_unconsumed_icloud_email(email, note=note)
     else:
-        # 临时邮箱不重新进入本地池，只清理进程上下文；已有本地账号时保留上下文。
-        if db.get_account_by_email(email) is not None:
+        # 临时邮箱不重新进入本地池，只清理进程上下文；已有完整账号时保留上下文。
+        # 只有密码的中间记录不构成完整账号，不能据此阻止回收。
+        account = db.get_account_by_email(email)
+        if account is not None and db.is_complete_account(account):
             return False
         release_email(email, status="failed", note=note)
         changed = True

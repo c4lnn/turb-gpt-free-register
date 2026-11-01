@@ -500,8 +500,10 @@ REGISTER_PASSWORD = "你的固定密码"
 
 保存位置：
 
-- 账号 `extra_json.registration_password`
+- 账号 `extra_json.registration_password`（设置密码成功后立即保存；完整注册前作为中间凭据，不计完整账号）
 - 批次归档 `accounts/YYYYMMDD-.../注册成功账号.json` 的 `extra.registration_password`
+
+密码候选值在提交设置请求前会以明文记入注册日志。不要公开或转发该日志；OTP、TOTP secret、Cookie、Bearer token 不应记录。
 
 注意：账号表里的 `password` 字段仍用于 Outlook 邮箱素材密码，不会被 OpenAI 注册密码覆盖。
 

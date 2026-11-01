@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """已注册账号查活：优先复用已有 AT 预热后走 reauth OTP，成功刷新 AT 即视为正常。"""
 import logging
-import json
 import threading
 import time
 from datetime import datetime
@@ -17,6 +16,11 @@ from core.openai_auth import (
     follow_authorize,
     send_email_otp,
     validate_email_otp,
+    verify_login_password,
+    get_auth_continue_url,
+    _extract_factor_id,
+    _mfa_issue_challenge,
+    _mfa_verify,
     EmailOtpInvalidError,
     AccountUnusableError,
     detect_account_unusable_text,
@@ -228,87 +232,6 @@ def _safe_fingerprint_text_for_account(session: BrowserSession) -> str:
     return " ".join(parts)
 
 
-def _extract_continue_url(result: dict | None) -> str:
-    if not isinstance(result, dict):
-        return ""
-    page = result.get("page") or {}
-    page = page if isinstance(page, dict) else {}
-    return str(
-        result.get("continue_url")
-        or result.get("external_url")
-        or result.get("url")
-        or page.get("continue_url")
-        or page.get("external_url")
-        or page.get("url")
-        or ""
-    ).strip()
-
-
-def _extract_factor_id(result: dict | None, continue_url: str) -> str:
-    if isinstance(result, dict):
-        page = result.get("page") or {}
-        page = page if isinstance(page, dict) else {}
-        payload = page.get("payload") or {}
-        if isinstance(payload, dict):
-            factor_id = str(payload.get("factor_id") or "").strip()
-            if factor_id:
-                return factor_id
-        if isinstance(page.get("payload"), dict):
-            factor_id = str(page["payload"].get("factor_id") or "").strip()
-            if factor_id:
-                return factor_id
-    if "/mfa-challenge/" in continue_url:
-        return continue_url.rstrip("/").rsplit("/", 1)[-1]
-    return ""
-
-
-def _password_verify(session: BrowserSession, password: str) -> dict:
-    from core.openai_auth import build_sentinel_header, request_sentinel_token
-
-    sentinel_resp = request_sentinel_token(session, "password_verify")
-    sentinel_header, so_header = build_sentinel_header(session, sentinel_resp, "password_verify")
-    headers = session.get_auth_headers(referer="https://auth.openai.com/log-in/password")
-    headers["openai-sentinel-token"] = sentinel_header
-    if so_header:
-        headers["openai-sentinel-so-token"] = so_header
-    resp = session.post(
-        "https://auth.openai.com/api/accounts/password/verify",
-        headers=headers,
-        data=json.dumps({"password": password}),
-        allow_redirects=False,
-    )
-    resp.raise_for_status()
-    return resp.json()
-
-
-def _mfa_issue_challenge(session: BrowserSession, factor_id: str) -> dict:
-    headers = session.get_auth_headers(referer="https://auth.openai.com/mfa-challenge")
-    headers.pop("openai-sentinel-token", None)
-    headers.pop("openai-sentinel-so-token", None)
-    resp = session.post(
-        "https://auth.openai.com/api/accounts/mfa/issue_challenge",
-        headers=headers,
-        data=json.dumps({"id": factor_id, "type": "totp", "force_fresh_challenge": False}),
-        allow_redirects=False,
-    )
-    resp.raise_for_status()
-    return resp.json()
-
-
-def _mfa_verify(session: BrowserSession, factor_id: str, code: str) -> dict:
-    headers = session.get_auth_headers(referer="https://auth.openai.com/mfa-challenge")
-    headers.pop("openai-sentinel-token", None)
-    headers.pop("openai-sentinel-so-token", None)
-    resp = session.post(
-        "https://auth.openai.com/api/accounts/mfa/verify",
-        headers=headers,
-        data=json.dumps({"id": factor_id, "type": "totp", "code": code}),
-        allow_redirects=False,
-    )
-    resp.raise_for_status()
-    return resp.json()
-
-
 def _follow_continue_and_fetch(session: BrowserSession, continue_url: str, *, referer: str) -> dict:
     """完成 callback/session，并对 403 保留同会话 Cookie 做阶段内重试。
 
@@ -509,7 +432,7 @@ def _login_via_email_otp(
     page = validate_result.get("page") if isinstance(validate_result, dict) else {}
     page = page if isinstance(page, dict) else {}
     page_type = str(page.get("type") or "")
-    continue_url = _extract_continue_url(validate_result)
+    continue_url = get_auth_continue_url(validate_result)
     if not continue_url:
         raise RuntimeError(f"OTP 登录成功但没有 OAuth continue_url: {validate_result}")
     if "about-you" in str(continue_url) or page_type in {"about_you", "about-you"}:
@@ -536,8 +459,8 @@ def _login_via_password_or_otp(
         )
 
     logger.info("[查活] 账号存在密码，优先走密码登录：%s", email)
-    password_result = _password_verify(session, password)
-    continue_url = _extract_continue_url(password_result)
+    password_result = verify_login_password(session, password)
+    continue_url = get_auth_continue_url(password_result)
     page = password_result.get("page") if isinstance(password_result, dict) else {}
     page = page if isinstance(page, dict) else {}
     page_type = str(page.get("type") or "")
@@ -555,7 +478,7 @@ def _login_via_password_or_otp(
         if not code:
             raise RuntimeError(f"无法生成 TOTP 验证码：{email}")
         mfa_result = _mfa_verify(session, factor_id, code)
-        mfa_continue_url = _extract_continue_url(mfa_result) or continue_url
+        mfa_continue_url = get_auth_continue_url(mfa_result) or continue_url
         if not mfa_continue_url:
             raise RuntimeError(f"MFA 验证成功但没有 continue_url: {mfa_result}")
         return _follow_continue_and_fetch(

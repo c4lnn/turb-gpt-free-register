@@ -91,6 +91,20 @@ class SentinelSDKContractTests(unittest.TestCase):
 
 
 
+
+    def test_verify_mfa_uses_auth_page_without_frontend_build(self):
+        sdk = sentinel_runner.SentinelSDK(
+            flow="verify_mfa", device_id="device",
+            browser_profile={"build_id": "chatgpt-build"},
+        )
+        message = sdk._build_requirements_message()
+        self.assertEqual(message["flow"], "verify_mfa")
+        self.assertEqual(message["page_url"], "https://auth.openai.com/")
+        self.assertEqual(message["build_id"], "")
+
+    def test_unknown_auth_flow_is_rejected_before_sdk_spawn(self):
+        with self.assertRaisesRegex(ValueError, "不支持的 Auth Sentinel flow"):
+            sentinel_runner.SentinelSDK(flow="unknown-flow", device_id="device")
     def test_proof_presence_follows_the_current_challenge_requirement(self):
         for required in (False, True):
             with self.subTest(pow_required=required):

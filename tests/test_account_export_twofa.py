@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 import core.account_export as account_export
-
+import core.openai_auth as openai_auth
 
 class _CircuitSession:
     def __init__(self):
@@ -53,6 +53,48 @@ class _OtpSession(_CircuitSession):
         return response
 
 
+class _ReauthSession(_CircuitSession):
+    def __init__(self, navigation_responses, post_responses=()):
+        super().__init__()
+        self.document_navigation_id = "document-1"
+        self.navigation_responses = iter(navigation_responses)
+        self.post_responses = iter(post_responses)
+        self.gets = []
+        self.posts = []
+        self.rotation_history = []
+
+    def get_auth_navigate_headers(self, referer="", **_kwargs):
+        return {"referer": referer}
+
+    def get_auth_headers(self, referer=""):
+        return {
+            "referer": referer,
+            "x-openai-document-navigation-id": self.document_navigation_id,
+        }
+
+    def rotate_document_navigation_id(self):
+        old = self.document_navigation_id
+        self.document_navigation_id = old + "-next"
+        self.rotation_history.append((old, self.document_navigation_id))
+        return self.document_navigation_id
+
+    def get(self, url, *, headers, allow_redirects=True):
+        self.gets.append((url, self.document_navigation_id))
+        if url.endswith("/log-in"):
+            return _Response(200)
+        response = next(self.navigation_responses)
+        if isinstance(response, Exception):
+            raise response
+        response.url = "https://auth.openai.com/email-verification"
+        return response
+
+    def post(self, url, *, headers, data=None, allow_redirects=False):
+        self.posts.append((url, headers, data, allow_redirects))
+        response = next(self.post_responses)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
 class AccountExportTwofaTests(unittest.TestCase):
     def test_otp_temporary_403_reuses_same_code_session_and_backs_off(self):
         session = _OtpSession([_Response(403), _Response(403), _Response(200, {"continue_url": "https://chatgpt.com/callback"})])
@@ -68,8 +110,7 @@ class AccountExportTwofaTests(unittest.TestCase):
         self.assertEqual(session.reset_count, 2)
         resend.assert_not_called()
 
-    def test_otp_403_exhaustion_has_diagnostics_and_plaintext_code_log(self):
-        # D8：错误分类消息不打验证码，但任务日志按「凭证明文可追溯」明文保留验证码。
+    def test_otp_403_exhaustion_has_diagnostics_without_logging_code(self):
         session = _OtpSession([_Response(403, headers={"CF-Ray": "abc123-NRT"}) for _ in range(2)])
         with patch("config.twofa.TWOFA_REAUTH_MAX_ATTEMPTS", 2), \
              patch("config.twofa.TWOFA_REAUTH_RETRY_DELAY", 0), \
@@ -79,7 +120,7 @@ class AccountExportTwofaTests(unittest.TestCase):
         self.assertIn("HTTP 403", str(caught.exception))
         self.assertIn("abc123-NRT", str(caught.exception))
         self.assertNotIn("012345", str(caught.exception))
-        self.assertIn("012345", str(captured.output))
+        self.assertNotIn("012345", str(captured.output))
         self.assertEqual(len(session.calls), 2)
         self.assertEqual(session.reset_count, 1)
 
@@ -124,23 +165,62 @@ class AccountExportTwofaTests(unittest.TestCase):
 
     def test_setup_uses_bounded_otp_retry_without_resending_mail(self):
         session = _OtpSession([_Response(403), _Response(200, {"continue_url": "https://chatgpt.com/callback"})])
+        events = []
+        state = {
+            "page": {"type": "email_otp_verification"},
+            "continue_url": "https://auth.openai.com/email-verification",
+            "otp_delivery_required": False,
+        }
         with patch.object(account_export, "_trigger_reauth_with_retry", return_value="auth-url"), \
              patch.object(account_export, "_follow_reauth_with_retry"), \
-             patch("core.openai_auth.send_email_otp") as send, \
+             patch("core.openai_auth.probe_registration_state", return_value=state), \
+             patch("core.openai_auth.request_sentinel_token", return_value={"proof": "otp"}), \
+             patch("core.openai_auth.build_sentinel_header", return_value=("otp-header", "otp-so")), \
              patch.object(account_export, "human_delay"), \
              patch.object(account_export, "_exchange_new_token", return_value="token"), \
              patch.object(account_export, "_enroll_totp", return_value=("secret", "session")), \
-             patch.object(account_export, "_activate_totp") as activate, \
+             patch.object(account_export, "_activate_totp", side_effect=lambda *args: events.append("activate")) as activate, \
              patch("config.twofa.TWOFA_REAUTH_RETRY_DELAY", 0):
-            self.assertEqual(account_export.setup_2fa(session, "a@example.test", otp_code="012345"), "secret")
-        send.assert_called_once_with(session)
+            self.assertEqual(account_export.setup_2fa(
+                session, "a@example.test", otp_code="012345",
+                on_pending_secret=lambda secret: events.append(("pending", secret)),
+            ), "secret")
         activate.assert_called_once_with(session, "token", "secret", "session")
+        self.assertEqual(events, [("pending", "secret"), "activate"])
+
+    def test_inline_setup_persists_before_activation_and_stops_on_persistence_failure(self):
+        session = Mock()
+        events = []
+        with patch.object(account_export, "_enroll_totp", return_value=("secret", "session-id")), \
+             patch.object(account_export, "human_delay"), \
+             patch.object(account_export, "_activate_totp", side_effect=lambda *args: events.append("activate")):
+            result = account_export.setup_2fa_inline(
+                session, "access-token", on_pending_secret=lambda secret: events.append(("pending", secret)),
+            )
+        self.assertEqual(result, "secret")
+        self.assertEqual(events, [("pending", "secret"), "activate"])
+
+        with patch.object(account_export, "_enroll_totp", return_value=("secret", "session-id")), \
+             patch.object(account_export, "_activate_totp") as activate:
+            with self.assertRaisesRegex(OSError, "disk full"):
+                account_export.setup_2fa_inline(
+                    session, "access-token",
+                    on_pending_secret=lambda _secret: (_ for _ in ()).throw(OSError("disk full")),
+                )
+        activate.assert_not_called()
 
     def test_setup_still_fetches_one_fresh_code_after_401(self):
-        session = _OtpSession([_Response(401), _Response(200, {"continue_url": "callback"})])
+        session = _OtpSession([_Response(401), _Response(200, {"continue_url": "https://chatgpt.com/api/auth/callback/openai"})])
+        state = {
+            "page": {"type": "email_otp_verification"},
+            "continue_url": "https://auth.openai.com/email-verification",
+            "otp_delivery_required": False,
+        }
         with patch.object(account_export, "_trigger_reauth_with_retry", return_value="auth-url"), \
              patch.object(account_export, "_follow_reauth_with_retry"), \
-             patch("core.openai_auth.send_email_otp"), \
+             patch("core.openai_auth.probe_registration_state", return_value=state), \
+             patch("core.openai_auth.request_sentinel_token", return_value={"proof": "otp"}), \
+             patch("core.openai_auth.build_sentinel_header", return_value=("otp-header", "otp-so")), \
              patch.object(account_export, "human_delay"), \
              patch.object(account_export, "_exchange_new_token", return_value="token"), \
              patch.object(account_export, "_enroll_totp", return_value=("secret", "session")), \
@@ -153,6 +233,49 @@ class AccountExportTwofaTests(unittest.TestCase):
         self.assertIn('012345', session.calls[0][1]['data'])
         self.assertIn('654321', session.calls[1][1]['data'])
         self.assertEqual(session.reset_count, 0)
+
+    def test_password_landing_does_not_reuse_authorize_continue_sentinel(self):
+        session = Mock()
+        sentinel = {"_sentinel_flow": "authorize_continue", "_sentinel_device_id": "device"}
+        state = {
+            "page": {"type": "login_password"},
+            "continue_url": "https://auth.openai.com/log-in/password",
+            "_sentinel_response": sentinel,
+        }
+        with patch.object(account_export, "_trigger_reauth_with_retry", return_value="auth-url"), \
+             patch.object(account_export, "_follow_reauth_with_retry"), \
+             patch("core.openai_auth.probe_registration_state", return_value=state), \
+             patch("core.openai_auth.verify_login_password", return_value={
+                 "continue_url": "https://chatgpt.com/api/auth/callback/openai",
+             }) as verify, \
+             patch.object(account_export, "_exchange_new_token", return_value="new-token"), \
+             patch.object(account_export, "_enroll_totp", return_value=("secret", "session-id")), \
+             patch.object(account_export, "_activate_totp"), \
+             patch.object(account_export, "human_delay"):
+            self.assertEqual(account_export.setup_2fa(
+                session, "user@example.test", password="saved-password",
+            ), "secret")
+        verify.assert_called_once_with(session, "saved-password")
+
+    def test_independent_setup_uses_existing_access_token_before_reauth(self):
+        session = Mock()
+        events = []
+        with patch("core.openai_auth.get_mfa_enabled", return_value=False), \
+             patch.object(account_export, "_enroll_totp", return_value=("secret", "session-id")), \
+             patch.object(account_export, "_activate_totp", side_effect=lambda *args: events.append("activate")), \
+             patch.object(account_export, "_verify_mfa_after_activation"), \
+             patch.object(account_export, "_trigger_reauth_with_retry") as trigger, \
+             patch.object(account_export, "human_delay"):
+            result = account_export.setup_2fa(
+                session,
+                "user@example.test",
+                access_token="old-token",
+                try_existing_access_token=True,
+                on_pending_secret=lambda secret: events.append(("pending", secret)),
+            )
+        self.assertEqual(result, "secret")
+        self.assertEqual(events, [("pending", "secret"), "activate"])
+        trigger.assert_not_called()
 
     def test_callback_failure_does_not_fetch_or_use_stale_session_token(self):
         session = Mock()
@@ -284,5 +407,108 @@ class AccountExportTwofaTests(unittest.TestCase):
         self.assertEqual(session.reset_count, 1)
 
 
+    def test_reauth_navigation_id_is_reused_by_authorize_password_and_otp_posts(self):
+        auth_url = "https://auth.openai.com/api/accounts/authorize?state=test"
+        session = _ReauthSession(
+            [_Response(200)],
+            [
+                _Response(200, {
+                    "page": {"type": "login_password"},
+                    "continue_url": "https://auth.openai.com/log-in/password",
+                }),
+                _Response(200, {
+                    "page": {"type": "email_otp_verification"},
+                    "continue_url": "https://auth.openai.com/email-verification",
+                }),
+                _Response(200, {
+                    "continue_url": "https://chatgpt.com/api/auth/callback/openai",
+                }),
+            ],
+        )
+
+        with patch.object(account_export, "_trigger_reauth_with_retry", return_value=auth_url), \
+             patch.object(account_export, "human_delay"), \
+             patch("core.openai_auth.request_sentinel_token", side_effect=[
+                 {"token": "continue"}, {"token": "password"}, {"token": "otp"},
+             ]) as sentinel, \
+             patch("core.openai_auth.build_sentinel_header", return_value=("sentinel-header", None)), \
+             patch.object(account_export, "_exchange_new_token", return_value="fresh-token"), \
+             patch.object(account_export, "_enroll_totp", return_value=("totp-secret", "session-id")), \
+             patch.object(account_export, "_activate_totp"), \
+             patch.object(account_export, "_verify_mfa_after_activation"):
+            result = account_export.setup_2fa(
+                session,
+                "user@example.test",
+                otp_code="123456",
+                password="saved-password",
+            )
+
+        self.assertEqual(result, "totp-secret")
+        self.assertEqual(
+            [call.args[1] for call in sentinel.call_args_list],
+            ["authorize_continue", "password_verify", "email_otp_validate"],
+        )
+        self.assertEqual(session.rotation_history, [("document-1", "document-1-next")])
+        self.assertEqual(
+            [request[1]["x-openai-document-navigation-id"] for request in session.posts],
+            ["document-1-next"] * 3,
+        )
+        self.assertEqual(
+            [request[0].rsplit("/", 1)[-1] for request in session.posts],
+            ["continue", "verify", "validate"],
+        )
+
+    def test_authorize_http_error_rotates_before_retry_and_probe_uses_success_id(self):
+        auth_url = "https://auth.openai.com/api/accounts/authorize?state=test"
+        session = _ReauthSession(
+            [_Response(403), _Response(200)],
+            [_Response(200, {
+                "page": {"type": "email_otp_verification"},
+                "continue_url": "https://auth.openai.com/email-verification",
+            })],
+        )
+
+        with patch("config.twofa.TWOFA_REAUTH_MAX_ATTEMPTS", 2), \
+             patch("config.twofa.TWOFA_REAUTH_RETRY_DELAY", 0), \
+             patch.object(account_export.time, "sleep"), \
+             patch("core.openai_auth.request_sentinel_token", return_value={"token": "continue"}), \
+             patch("core.openai_auth.build_sentinel_header", return_value=("sentinel-header", None)):
+            landing_url = account_export._follow_reauth_with_retry(session, auth_url)
+            state = openai_auth.probe_registration_state(session, "user@example.test", strict=True)
+
+        self.assertEqual(landing_url, "https://auth.openai.com/email-verification")
+        self.assertEqual(state["step"], "otp")
+        self.assertEqual(
+            [document_id for url, document_id in session.gets if not url.endswith("/log-in")],
+            ["document-1", "document-1-next"],
+        )
+        self.assertEqual(
+            session.rotation_history,
+            [
+                ("document-1", "document-1-next"),
+                ("document-1-next", "document-1-next-next"),
+            ],
+        )
+        self.assertEqual(
+            session.posts[0][1]["x-openai-document-navigation-id"],
+            "document-1-next-next",
+        )
+
+    def test_reauth_transport_error_keeps_id_until_response_retry(self):
+        auth_url = "https://auth.openai.com/api/accounts/authorize?state=test"
+        session = _ReauthSession([TimeoutError("timed out"), _Response(200)])
+
+        with patch("config.twofa.TWOFA_REAUTH_MAX_ATTEMPTS", 2), \
+             patch("config.twofa.TWOFA_REAUTH_RETRY_DELAY", 0), \
+             patch.object(account_export.time, "sleep"):
+            landing_url = account_export._follow_reauth_with_retry(session, auth_url)
+
+        self.assertEqual(landing_url, "https://auth.openai.com/email-verification")
+        self.assertEqual(
+            [document_id for url, document_id in session.gets if not url.endswith("/log-in")],
+            ["document-1", "document-1"],
+        )
+        self.assertEqual(session.rotation_history, [("document-1", "document-1-next")])
+        self.assertEqual(session.reset_count, 1)
 if __name__ == "__main__":
     unittest.main()

@@ -3411,6 +3411,13 @@ function bindJobsBodyEvents(bodyEl) {
   bindJobsBodyEvents($('#jobsBodyV2'));
 })();
 
+const REGISTRATION_FACT_LABELS = {
+  kind: {new_password: '普通新号', new_passwordless: 'passwordless 新号', existing: '已有账号', unknown: '未知'},
+  password: {not_attempted: '未尝试', submission_unknown: '提交结果未确认', rejected: '本轮被拒绝', confirmed: '设置已生效', verified: '本轮已验证'},
+  persistence: {not_attempted: '未尝试', saved: '已保存', failed: '失败', unknown: '未确认'},
+  twofa: {not_attempted: '未开始', already_enabled: '服务端已启用', disabled_by_config: '配置关闭', enabled: '设置成功', failed: '设置失败', unknown: '状态未确认'},
+};
+
 function renderJobs() {
   const total = JOBS_TOTAL;
   const rows = JOBS;
@@ -3424,6 +3431,16 @@ function renderJobs() {
       const completed = formatDateTime(j.completed_at);
       const err = j.error_message || '';
       const manualOtp = j.status === 'running' && j.email && j.manual_otp_required;
+      const facts = j.registration;
+      const diagnostic = facts ? [
+        `类型: ${REGISTRATION_FACT_LABELS.kind[facts.account_kind] || facts.account_kind}`,
+        `阶段: ${facts.auth_step || '-'}`,
+        `认证: ${facts.authenticated ? '已完成' : '未完成'}`,
+        `密码: ${REGISTRATION_FACT_LABELS.password[facts.password_state] || facts.password_state || '-'}`,
+        `凭据保存: ${REGISTRATION_FACT_LABELS.persistence[facts.credential_persistence] || '-'}`,
+        `完整账号: ${facts.account_saved ? '已保存' : '未保存'}`,
+        `2FA: ${REGISTRATION_FACT_LABELS.twofa[facts.twofa_status] || '-'}`,
+      ].join('；') : '';
       return `
       <tr>
         <td class="col-check"><input type="checkbox" class="job-row-check" data-job-id="${esc(j.id)}" ${JOB_SELECTED.has(Number(j.id)) ? 'checked' : ''} ${running ? 'disabled title="运行中的任务不能选择"' : ''}></td>
@@ -3443,7 +3460,7 @@ function renderJobs() {
             <button type="button" class="jobs-v2-op jobs-v2-op--del" data-delete-job="${esc(j.id)}" ${running ? 'disabled title="运行中的任务不能删除；如需删除请先停止"' : 'title="删除"'}>${icons.del}</button>
           </div>
         </td>
-      </tr>`;
+      </tr>${diagnostic ? `<tr><td colspan="9" style="white-space:normal"><details><summary>认证诊断</summary><div class="sub-cell">${esc(diagnostic)}</div></details></td></tr>` : ''}`;
     }).join('') || '<tr><td colspan="9" style="text-align:center;color:#909399;padding:28px;">暂无任务</td></tr>';
   }
 

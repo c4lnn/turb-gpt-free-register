@@ -24,6 +24,7 @@ from urllib.parse import quote, urlsplit, urlunsplit
 
 import requests
 
+from core.email_transport import requests_request
 from config import email as _email_cfg
 from core.otp_utils import extract_otp
 
@@ -133,7 +134,7 @@ def _request(
 
     url = _base_url() + (path if str(path).startswith("/") else f"/{path}")
     try:
-        response = requests.request(
+        response = requests_request(
             method.upper(),
             url,
             params=params,

@@ -43,6 +43,7 @@ class StopRequested(RuntimeError):
 
 def _activate_job(job_id: int) -> None:
     _THREAD_CTX.job_id = int(job_id)
+    _THREAD_CTX.registration = {}
     with _STOP_LOCK:
         _STOP_EVENTS.setdefault(int(job_id), threading.Event())
         _ACTIVE_JOBS.add(int(job_id))
@@ -52,10 +53,21 @@ def _deactivate_job(job_id: int) -> None:
     with _STOP_LOCK:
         _STOP_EVENTS.pop(int(job_id), None)
         _ACTIVE_JOBS.discard(int(job_id))
-    try:
-        delattr(_THREAD_CTX, "job_id")
-    except Exception:
-        pass
+    for attr in ("job_id", "registration"):
+        try:
+            delattr(_THREAD_CTX, attr)
+        except AttributeError:
+            pass
+
+def record_registration_progress(progress: dict) -> None:
+    """保留当前任务事实；异常和停止收口也使用同一上下文。"""
+    if getattr(_THREAD_CTX, "job_id", None) is not None:
+        _THREAD_CTX.registration = progress
+
+
+def _existing_account_task() -> bool:
+    return getattr(_THREAD_CTX, "registration", {}).get("account_kind") == "existing"
+
 
 
 def is_stop_requested(job_id: int | None = None) -> bool:
@@ -130,6 +142,8 @@ def _prepare_registration_args() -> tuple[str | None, str, str]:
 
 def _release_unconsumed_job_email(email: str | None, reason: str, *, job_id: int | None = None) -> None:
     """任务失败兜底：把已领取但未生成账号的邮箱永久标记为 failed。"""
+    if _existing_account_task():
+        return
     if not email:
         return
     try:
@@ -175,11 +189,13 @@ def _should_disable_failed_registration_email(error: object) -> bool:
 
 def _disable_job_email(email: str | None, reason: str) -> bool:
     """把本次任务邮箱停用，避免后续再次领取。"""
+    if _existing_account_task():
+        return False
     if not email:
         return False
     try:
         # 后置 Codex/Flow 失败不能把已经落库的账号改成 disabled。
-        if db.get_account_by_email(email) is not None:
+        if db.is_complete_account(db.get_account_by_email(email)):
             db.mark_registration_success(email)
             return False
         changed = db.disable_registration_email(email, reason=f"自动停用: {reason[:180]}")
@@ -325,12 +341,15 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                 birthday=birthday,
                 on_email_acquired=_on_email_acquired,
             )
+            if isinstance(result, dict) and isinstance(result.get("registration"), dict):
+                record_registration_progress(result["registration"])
             if is_stop_requested(job_id):
                 _release_unconsumed_job_email(email, "用户手动停止")
                 db.update_job(
                     job_id,
                     status="stopped",
                     network_traffic=(result or {}).get("network_traffic") if isinstance(result, dict) else None,
+                    registration=getattr(_THREAD_CTX, "registration", {}),
                     error="用户手动停止",
                     completed_at=datetime.now().isoformat(timespec="seconds"),
                 )
@@ -343,6 +362,7 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                     email=result.get("email"),
                     account_id=result.get("account_id"),
                     network_traffic=result.get("network_traffic"),
+                    registration=getattr(_THREAD_CTX, "registration", {}),
                     completed_at=datetime.now().isoformat(timespec="seconds"),
                 )
                 log_logger.info(f"[Job {job_id}] 成功: {result.get('email')}")
@@ -359,6 +379,7 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                     error=str(err)[:500],
                     error_code=(result or {}).get("error_code") if isinstance(result, dict) else None,
                     error_stage=(result or {}).get("error_stage") if isinstance(result, dict) else None,
+                    registration=getattr(_THREAD_CTX, "registration", {}),
                     completed_at=datetime.now().isoformat(timespec="seconds"),
                 )
                 email_to_handle = str(result_email or email or "").strip()
@@ -366,7 +387,13 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                     _disable_job_email(email_to_handle, str(err))
                 else:
                     _release_unconsumed_job_email(email_to_handle, str(err))
-                log_logger.error(f"[Job {job_id}] 失败: {err}")
+                log_logger.error(
+                    "[Job %s] 失败: stage=%s error_code=%s reason=%s",
+                    job_id,
+                    (result or {}).get("error_stage") if isinstance(result, dict) else None,
+                    (result or {}).get("error_code") if isinstance(result, dict) else None,
+                    err,
+                )
     except StopRequested as exc:
         _release_unconsumed_job_email(email, str(exc))
         log_logger.warning(f"[Job {job_id}] 已停止: {exc}")
@@ -374,6 +401,7 @@ def _run_one_job(job_id: int, log_file: str) -> None:
             job_id,
             status="stopped",
             error="用户手动停止",
+            registration=getattr(_THREAD_CTX, "registration", {}),
             completed_at=datetime.now().isoformat(timespec="seconds"),
         )
     except Exception as exc:
@@ -388,6 +416,7 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                 job_id,
                 status="stopped",
                 error="用户手动停止",
+                registration=getattr(_THREAD_CTX, "registration", {}),
                 completed_at=datetime.now().isoformat(timespec="seconds"),
             )
             return
@@ -398,6 +427,7 @@ def _run_one_job(job_id: int, log_file: str) -> None:
             error=f"{type(exc).__name__}: {exc}"[:500],
             error_code=getattr(exc, "category", None),
             error_stage=getattr(exc, "stage", None),
+            registration=getattr(_THREAD_CTX, "registration", {}),
             completed_at=datetime.now().isoformat(timespec="seconds"),
         )
     finally:
@@ -506,21 +536,23 @@ def _account_for_job(job: dict, account_snapshot: dict | None = None) -> dict | 
                 account = by_id.get(int(account_id))
             except (TypeError, ValueError):
                 account = None
-            if account is not None:
+            if db.is_complete_account(account):
                 return account
         email = str(job.get("email") or "").strip().lower()
-        return by_email.get(email) if email else None
+        account = by_email.get(email) if email else None
+        return account if db.is_complete_account(account) else None
 
     account_id = job.get("account_id")
     if account_id is not None:
         try:
             account = db.get_account(int(account_id))
-            if account is not None:
+            if db.is_complete_account(account):
                 return account
         except (TypeError, ValueError):
             pass
     email = str(job.get("email") or "").strip()
-    return db.get_account_by_email(email) if email else None
+    account = db.get_account_by_email(email) if email else None
+    return account if db.is_complete_account(account) else None
 
 
 def get_retry_info(job: dict, *, account_snapshot: dict | None = None) -> dict:
@@ -541,6 +573,11 @@ def get_retry_info(job: dict, *, account_snapshot: dict | None = None) -> dict:
         info["retry_reason"] = f"后续重试任务 #{successful_retry.get('id')} 已成功"
         info["successful_retry_job_id"] = successful_retry.get("id")
         return info
+    registration = job.get("registration") or {}
+    if registration.get("account_kind") == "existing" and not registration.get("authenticated"):
+        info["retry_reason"] = "已有账号登录未完成，请检查凭据与验证因子后重新发起该账号登录"
+        return info
+
 
     account = _account_for_job(job, account_snapshot=account_snapshot)
     if account and job.get("account_id") is not None and status in ("failed", "stopped"):

@@ -47,6 +47,7 @@ from config import (
 # OTP_POLL_INTERVAL / OTP_MAX_WAIT 是 WebUI 可热改的，从模块读
 from config import email as _email_cfg
 from core.otp_utils import looks_like_openai_email, extract_otp
+from core.email_transport import configure_curl_session
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +82,7 @@ def _cache_key(email: str) -> str:
 
 
 def _http_session() -> CurlSession:
-    s = CurlSession(impersonate=IMPERSONATE)
+    s = configure_curl_session(CurlSession(impersonate=IMPERSONATE))
     s.headers.update({
         "User-Agent": USER_AGENT,
         "Origin": OUTLOOK_API_BASE.rstrip("/"),
@@ -397,7 +398,7 @@ def _is_remote_disabled_error(exc: Exception | str) -> bool:
 
 
 def _ms_http() -> CurlSession:
-    s = CurlSession(impersonate=IMPERSONATE)
+    s = configure_curl_session(CurlSession(impersonate=IMPERSONATE))
     s.headers.update({
         "User-Agent": USER_AGENT,
         "Accept": "application/json",

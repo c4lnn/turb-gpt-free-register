@@ -135,11 +135,20 @@ def signin_openai(session: BrowserSession, csrf_token: str, email: str) -> str:
     }
     url = "https://chatgpt.com/api/auth/signin/openai?" + urlencode(query_params)
 
-    # 构造请求头
-    headers = session.get_nextauth_headers(referer="https://chatgpt.com/auth/login")
-    headers["content-type"] = "application/x-www-form-urlencoded"
-    headers = {key: value for key, value in headers.items() if key.lower() != "origin"}
+    # Referer 表示当前登录页面上下文；与 signin POST URL 的参数不同。
+    referer_params = {
+        "callback_path": "/",
+        "screen_hint": "login_or_signup",
+        "login_hint": email,
+        "auth_session_logging_id": session.auth_session_logging_id,
+        "ext-oai-did": session.device_id,
+    }
+    referer = "https://chatgpt.com/auth/login_with?" + urlencode(referer_params)
 
+    # 构造 signin 请求头，仅在此端点覆盖 Origin 和 Referer。
+    headers = session.get_nextauth_headers(referer=referer)
+    headers["content-type"] = "application/x-www-form-urlencoded"
+    headers["origin"] = "https://chatgpt.com"
     # 构造请求体
     body = urlencode({
         "callbackUrl": "/",

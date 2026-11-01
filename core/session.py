@@ -891,21 +891,6 @@ class BrowserSession:
         # x-datadog-*，只保留标准 CORS 请求头。
         return headers
 
-    def get_sentinel_frame_headers(self, user_initiated: bool = False) -> dict:
-        """Sentinel SDK iframe 的同站文档导航头。"""
-        headers = self._get_common_headers()
-        headers.update({
-            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-            "referer": "https://auth.openai.com/",
-            "sec-fetch-site": "same-site",
-            "sec-fetch-mode": "navigate",
-            "sec-fetch-dest": "iframe",
-            "priority": "u=0, i",
-            "upgrade-insecure-requests": "1",
-        })
-        if user_initiated:
-            headers["sec-fetch-user"] = "?1"
-        return headers
 
 
     @staticmethod

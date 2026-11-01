@@ -89,6 +89,11 @@ _SQLITE_PATH_BINDINGS = {
     "_DOMAIN_EMAIL_JSON": _PROJECT_ROOT / "用于注册的域名邮箱.json",
 }
 
+# 账号注册状态：中间凭据记录标记为 password_set，完整落库后转 complete。
+# 历史记录没有该字段时按完整账号处理，不批量改写。
+_PENDING_REGISTRATION_STATE = "password_set"
+_COMPLETE_REGISTRATION_STATE = "complete"
+
 
 class EmailPoolLifecycleError(ValueError):
     """邮箱池生命周期操作的稳定冲突结果。"""
@@ -97,6 +102,14 @@ class EmailPoolLifecycleError(ValueError):
         self.code = str(code)
         self.details = details
         super().__init__(message or self.code)
+
+
+class CredentialPersistenceError(RuntimeError):
+    """已生效凭据持久化失败的终止状态。
+
+    服务端已确认密码生效但本地权威写入失败/结果未确认时抛出；
+    不得落入“设置密码失败 → OTP 回退”的捕获分支。
+    """
 
 
 def _email_pool_lifecycle_path() -> Path:
@@ -640,7 +653,7 @@ def mark_registration_failed(
 ) -> bool:
     """将未生成账号的已领取邮箱置为 failed；账号已存在时保持 used。"""
     with _LOCK:
-        if _find_by_email(_load_accounts(), email) is not None:
+        if is_complete_account(_find_by_email(_load_accounts(), email)):
             return mark_registration_success(email)
         kind, rows, row = _pool_rows_for_email_locked(email)
         if row is None or rows is None or kind is None:
@@ -688,7 +701,7 @@ def migrate_email_pool_statuses() -> dict[str, int]:
         account_emails = {
             str(row.get("email") or "").strip().casefold()
             for row in accounts
-            if str(row.get("email") or "").strip()
+            if is_complete_account(row) and str(row.get("email") or "").strip()
         }
         jobs = _load_jobs()
         active_emails = {
@@ -843,6 +856,17 @@ def _extract_registration_password(row: dict) -> str:
     return str(extra.get("registration_password") or row.get("registration_password") or "").strip()
 
 
+def is_complete_account(row: dict | None) -> bool:
+    """账号是否为完整保存记录（非 password_set 中间凭据）。
+
+    仅显式 ``registration_state="password_set"`` 视为未完成；
+    历史记录没有该字段时按完整账号处理，不批量改写。
+    """
+    if not isinstance(row, dict):
+        return False
+    return str(row.get("registration_state") or "").strip() != _PENDING_REGISTRATION_STATE
+
+
 def _account_line(row: dict) -> str:
     base = row.get("original_email_line") or row.get("email") or ""
     token = row.get("access_token") or ""
@@ -872,7 +896,8 @@ def _sync_generic_api_email_txt(rows: list[dict]) -> None:
 
 
 def _sync_accounts_txt(rows: list[dict]) -> None:
-    lines = [_registered_email_line(r) for r in sorted(rows, key=lambda x: int(x.get("id") or 0))]
+    complete = [r for r in rows if is_complete_account(r)]
+    lines = [_registered_email_line(r) for r in sorted(complete, key=lambda x: int(x.get("id") or 0))]
     _write_text_atomic(_ACCOUNTS_TXT, "\n".join(lines) + ("\n" if lines else ""))
 
 
@@ -880,28 +905,29 @@ def _sync_tokens_txt(rows: list[dict]) -> None:
     tokens = [
         r.get("access_token") or ""
         for r in sorted(rows, key=lambda x: int(x.get("id") or 0))
-        if r.get("access_token")
+        if is_complete_account(r) and r.get("access_token")
     ]
     _write_text_atomic(_TOKENS_TXT, "\n".join(tokens) + ("\n" if tokens else ""))
 
 
 def _viewer_snapshot(outlook_rows: list[dict], account_rows: list[dict]) -> dict:
+    complete_rows = [r for r in account_rows if is_complete_account(r)]
     account_by_email = {
         (a.get("email") or "").lower(): a
-        for a in account_rows
+        for a in complete_rows
     }
     return {
         "generated_at": _now(),
         "accounts": [
             _decorate_account(r, include_checkout_session_id=False)
-            for r in sorted(account_rows, key=lambda x: int(x.get("id") or 0), reverse=True)
+            for r in sorted(complete_rows, key=lambda x: int(x.get("id") or 0), reverse=True)
         ],
         "outlook": [
             _decorate_outlook(r, account_by_email)
             for r in sorted(outlook_rows, key=lambda x: int(x.get("id") or 0), reverse=True)
         ],
         "summary": {
-            "accounts": len(account_rows),
+            "accounts": len(complete_rows),
             "outlook_total": len(outlook_rows),
             **{f"outlook_{status}": sum(1 for r in outlook_rows if r.get("status") == status) for status in EMAIL_POOL_STATUSES},
         },
@@ -1266,6 +1292,20 @@ def _save_accounts(rows: list[dict]) -> None:
     _render_static_viewer(account_rows=rows)
 
 
+def _save_accounts_backend_only(rows: list[dict]) -> None:
+    """仅原子写入 accounts 权威后端，不刷新衍生 TXT/token/静态查看器。
+
+    用于中间凭据提前保存：中间记录不得进入完整账号的派生输出，
+    也不得触发邮箱池 used 或成功统计等副作用。
+    """
+    for row in rows:
+        row["copy_line"] = _account_line(row)
+    if _sqlite_enabled():
+        _SQLITE_STORE.replace_all("accounts", rows)
+    else:
+        _write_json(_ACCOUNTS_JSON, rows)
+
+
 def _load_jobs() -> list[dict]:
     if _sqlite_enabled():
         return _SQLITE_STORE.load("jobs")
@@ -1311,6 +1351,146 @@ def _save_accounts_with_pool(accounts: list[dict], pool_kind: str, pool_rows: li
 def _find_by_email(rows: list[dict], email: str) -> dict | None:
     target = (email or "").lower()
     return next((r for r in rows if (r.get("email") or "").lower() == target), None)
+
+
+def _merge_extra_json(existing_raw: Any, incoming: dict | None) -> str | None:
+    """无损合并 extra_json：新值覆盖同名键，但空值不删除已知密码。
+
+    ``registration_password`` 是已确认生效的 OpenAI 登录密码；合并时缺失或
+    空值保留旧值，明确非空的新值才覆盖，避免完整保存把提前保存的密码清空。
+    """
+    merged = _parse_extra_json(existing_raw)
+    for key, value in (incoming or {}).items():
+        if key == "registration_password":
+            new_password = str(value or "").strip()
+            if new_password:
+                merged[key] = new_password
+        else:
+            merged[key] = value
+    return json.dumps(merged, ensure_ascii=False) if merged else None
+
+
+def save_registration_password(email: str, password: str, *, extra: dict | None = None) -> int:
+    """提前保存服务端已确认生效的 OpenAI 登录密码为中间凭据记录。
+
+    仅写入 accounts 权威后端（JSON 或 SQLite），不更新邮箱池 used、完成时间、
+    token 或任何完整成功副作用。新记录标记 ``registration_state="password_set"``；
+    已有记录只补凭据，不降级完整状态，也不清空既有 token/secret/来源/元数据。
+
+    返回同一账号身份的 id；权威写入失败抛出 CredentialPersistenceError，
+    调用方据此进入凭据持久化失败收口，而非密码设置失败回退。
+    """
+    email = str(email or "").strip()
+    password = str(password or "").strip()
+    if not email or not password:
+        raise CredentialPersistenceError("已确认密码提前保存需要非空的邮箱与密码")
+
+    with _LOCK:
+        accounts = _load_accounts()
+        existing = _find_by_email(accounts, email)
+        merged_extra = _merge_extra_json(
+            existing.get("extra_json") if existing is not None else None,
+            {**(extra or {}), "registration_password": password},
+        )
+        if existing is None:
+            row_id = _next_id(accounts)
+            now = _now()
+            row = {
+                "id": row_id,
+                "email": email,
+                "created_at": now,
+                "updated_at": now,
+                "registration_state": _PENDING_REGISTRATION_STATE,
+                "extra_json": merged_extra,
+            }
+            accounts.append(row)
+        else:
+            row = existing
+            row_id = int(row["id"])
+            row["extra_json"] = merged_extra
+            if not is_complete_account(row):
+                row["registration_state"] = _PENDING_REGISTRATION_STATE
+            row["updated_at"] = _now()
+        try:
+            _save_accounts_backend_only(accounts)
+        except Exception as exc:
+            raise CredentialPersistenceError(f"已生效密码持久化失败: {email}") from exc
+        return row_id
+
+
+def get_account_credentials(email: str) -> dict:
+    """按账号身份读取凭据；记录缺失时返回空值/None。"""
+    with _LOCK:
+        row = _find_by_email(_load_accounts(), email)
+        if row is None:
+            return {
+                "registration_password": "",
+                "totp_secret": None,
+                "pending_tfa_secret": None,
+                "account_id": None,
+                "complete": False,
+            }
+        extra = _parse_extra_json(row.get("extra_json"))
+        return {
+            "registration_password": _extract_registration_password(row),
+            "totp_secret": str(row.get("totp_secret") or "").strip() or None,
+            "pending_tfa_secret": str(extra.get("pending_tfa_secret") or "").strip() or None,
+            "account_id": int(row.get("id") or 0) or None,
+            "complete": is_complete_account(row),
+        }
+
+
+def save_pending_totp_secret(email: str, secret: str) -> int:
+    """在 activation 前权威保存可恢复的 TOTP secret，不触发成功副作用。"""
+    email = str(email or "").strip()
+    secret = str(secret or "").strip()
+    if not email or not secret:
+        raise CredentialPersistenceError("pending TOTP secret 持久化需要非空邮箱与 secret")
+    with _LOCK:
+        accounts = _load_accounts()
+        row = _find_by_email(accounts, email)
+        if row is None:
+            now = _now()
+            row = {
+                "id": _next_id(accounts), "email": email, "created_at": now,
+                "updated_at": now, "registration_state": _PENDING_REGISTRATION_STATE,
+            }
+            accounts.append(row)
+        else:
+            row["updated_at"] = _now()
+        extra = _parse_extra_json(row.get("extra_json"))
+        extra["pending_tfa_secret"] = secret
+        row["extra_json"] = json.dumps(extra, ensure_ascii=False)
+        try:
+            _save_accounts_backend_only(accounts)
+        except Exception as exc:
+            raise CredentialPersistenceError(f"pending TOTP secret 持久化失败: {email}") from exc
+        return int(row["id"])
+
+
+def promote_pending_totp_secret(email: str) -> str:
+    """将已确认绑定的 pending secret 升为正式 secret 并清除 pending 标记。"""
+    email = str(email or "").strip()
+    with _LOCK:
+        accounts = _load_accounts()
+        row = _find_by_email(accounts, email)
+        if row is None:
+            raise CredentialPersistenceError(f"账号不存在，无法确认 pending TOTP secret: {email}")
+        extra = _parse_extra_json(row.get("extra_json"))
+        secret = str(extra.get("pending_tfa_secret") or "").strip()
+        if not secret:
+            secret = str(row.get("totp_secret") or "").strip()
+        if not secret:
+            raise CredentialPersistenceError(f"账号缺少可恢复 TOTP secret: {email}")
+        row["totp_secret"] = secret
+        extra.pop("pending_tfa_secret", None)
+        row["extra_json"] = json.dumps(extra, ensure_ascii=False) if extra else None
+        row["updated_at"] = _now()
+        try:
+            _save_accounts_backend_only(accounts)
+        except Exception as exc:
+            raise CredentialPersistenceError(f"pending TOTP secret 确认失败: {email}") from exc
+        return secret
 
 
 def _decorate_account(row: dict, *, include_checkout_session_id: bool = True) -> dict:
@@ -1576,7 +1756,6 @@ def insert_account(
         generic_row = _find_by_email(generic_rows, email)
         domain_row = _find_domain_email(domain_rows, email)
         icloud_row = _find_by_email(icloud_rows, email)
-        extra_json = json.dumps(extra, ensure_ascii=False) if extra else None
 
         if existing is None:
             row_id = _next_id(accounts)
@@ -1590,9 +1769,11 @@ def insert_account(
             row = existing
             row_id = int(row["id"])
 
+        extra_json = _merge_extra_json(row.get("extra_json"), extra)
+
         row.update({
             "access_token": access_token,
-            "totp_secret": totp_secret if totp_secret is not None else row.get("totp_secret"),
+            "totp_secret": totp_secret if totp_secret else row.get("totp_secret"),
             "user_id": user_id if user_id is not None else row.get("user_id"),
             "user_name": user_name if user_name is not None else row.get("user_name"),
             "plan_type": plan_type if plan_type is not None else row.get("plan_type"),
@@ -1600,7 +1781,8 @@ def insert_account(
             "device_id": device_id if device_id is not None else row.get("device_id"),
             "proxy_used": proxy_used if proxy_used is not None else row.get("proxy_used"),
             "email_source": email_source if email_source is not None else row.get("email_source"),
-            "extra_json": extra_json if extra_json is not None else row.get("extra_json"),
+            "extra_json": extra_json,
+            "registration_state": _COMPLETE_REGISTRATION_STATE,
             "codex_status": codex_status if codex_status is not None else row.get("codex_status"),
             "codex_error": codex_error if codex_error is not None else row.get("codex_error"),
             "updated_at": _now(),
@@ -1987,6 +2169,22 @@ def update_account_totp_secret(acc_id: int, result: dict | None = None) -> bool:
             row["totp_setup_message"] = result.get("message")
         row["copy_line"] = _account_line(row)
         row["updated_at"] = _now()
+        _save_accounts(accounts)
+        return True
+
+def update_account_access_token(acc_id: int, access_token: str) -> bool:
+    """仅更新账号 access token，保留密码、TOTP 和其它账号字段。"""
+    token = str(access_token or "").strip()
+    if not token:
+        raise ValueError("access_token 不能为空")
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None:
+            return False
+        row["access_token"] = token
+        row["updated_at"] = _now()
+        row["copy_line"] = _account_line(row)
         _save_accounts(accounts)
         return True
 
@@ -2435,6 +2633,9 @@ def _filtered_decorated_accounts(
     checkout_type_filter: str | None = None,
 ) -> list[dict]:
     rows = _load_accounts()
+    # 默认完整账号列表/统计/导出/静态查看器排除中间凭据记录；
+    # 只有密码的 password_set 记录不冒充完整账号。
+    rows = [r for r in rows if is_complete_account(r)]
     if archived in (True, "1", "true", "yes", "only"):
         rows = [r for r in rows if bool(r.get("archived"))]
     elif archived in ("all", "include"):
@@ -2689,6 +2890,8 @@ def get_retry_account_snapshot() -> dict[str, dict[int | str, dict]]:
         by_id: dict[int, dict] = {}
         by_email: dict[str, dict] = {}
         for row in _load_accounts():
+            if not is_complete_account(row):
+                continue
             account = {
                 "id": row.get("id"),
                 "email": row.get("email"),
@@ -2914,7 +3117,7 @@ def archive_accounts(account_ids: list[int] | None, archived: bool = True) -> tu
 
 def count_accounts() -> int:
     with _LOCK:
-        return len(_load_accounts())
+        return sum(1 for r in _load_accounts() if is_complete_account(r))
 
 
 def delete_account(acc_id: int | None = None, email: str | None = None) -> bool:
@@ -3252,7 +3455,7 @@ def release_outlook(email: str, status: str = "failed", note: str | None = None)
 def release_unconsumed_outlook(email: str, note: str | None = None) -> bool:
     """将未生成本地账号的已领取 Outlook 邮箱置为 failed，永久不复用。"""
     with _LOCK:
-        if _find_by_email(_load_accounts(), email) is not None:
+        if is_complete_account(_find_by_email(_load_accounts(), email)):
             return False
         rows = _load_outlook()
         row = _find_by_email(rows, email)
@@ -3286,6 +3489,7 @@ def list_outlook_pool(status: str | None = None, limit: int = 500) -> list[dict]
         account_by_email = {
             (a.get("email") or "").lower(): a
             for a in _load_accounts()
+            if is_complete_account(a)
         }
         rows = _load_outlook()
         if status:
@@ -3397,7 +3601,7 @@ def release_generic_api_email(email: str, status: str = "failed", note: str | No
 def release_unconsumed_generic_api_email(email: str, note: str | None = None) -> bool:
     """将未生成本地账号的已领取通用 API 邮箱置为 failed。"""
     with _LOCK:
-        if _find_by_email(_load_accounts(), email) is not None:
+        if is_complete_account(_find_by_email(_load_accounts(), email)):
             return False
         rows = _load_generic_api_emails()
         row = _find_by_email(rows, email)
@@ -3431,6 +3635,7 @@ def list_generic_api_email_pool(status: str | None = None, limit: int = 500) -> 
         account_by_email = {
             (a.get("email") or "").lower(): a
             for a in _load_accounts()
+            if is_complete_account(a)
         }
         rows = _load_generic_api_emails()
         if status:
@@ -3757,6 +3962,7 @@ def update_job(
     completed_at: str | None = None,
     account_id: int | None = None,
     network_traffic: dict | None = None,
+    registration: dict | None = None,
 ) -> None:
     with _LOCK:
         rows = _load_jobs()
@@ -3781,6 +3987,11 @@ def update_job(
             row["account_id"] = account_id
         if network_traffic is not None:
             row["network_traffic"] = dict(network_traffic)
+        if registration is not None:
+            existing = row.get("registration")
+            merged = dict(existing) if isinstance(existing, dict) else {}
+            merged.update(dict(registration))
+            row["registration"] = merged
         _save_jobs(rows)
 
 
@@ -4155,7 +4366,7 @@ def release_domain_email(email: str, status: str = "failed", note: str | None = 
 def release_unconsumed_domain_email(email: str, note: str | None = None) -> bool:
     """将未生成本地账号的域名邮箱置为 failed。"""
     with _LOCK:
-        if _find_by_email(_load_accounts(), email) is not None:
+        if is_complete_account(_find_by_email(_load_accounts(), email)):
             return False
         rows = _load_domain_pool()
         row = _find_domain_email(rows, email)
@@ -4288,7 +4499,7 @@ def release_icloud_email(email: str, status: str = "failed", note: str | None = 
 
 def release_unconsumed_icloud_email(email: str, note: str | None = None) -> bool:
     with _LOCK:
-        if _find_by_email(_load_accounts(), email) is not None:
+        if is_complete_account(_find_by_email(_load_accounts(), email)):
             return False
         rows = _load_icloud_emails()
         row = _find_by_email(rows, email)
