@@ -185,7 +185,10 @@ class RegistrationPipelineTests(unittest.TestCase):
         self.assertEqual(result["registration"]["account_kind"], "unknown")
         self.assertEqual(observed["flows"], [])
         self.assertFalse(observed["saved"])
-        probe.assert_called_once_with(session, "user@example.com")
+        probe.assert_called_once_with(
+            session, "user@example.com",
+            referer="https://auth.openai.com/", screen_hint="signup",
+        )
         self.assertTrue(session.closed)
 
     def test_email_otp_sentinel_failure_stops_before_validation(self):
@@ -316,7 +319,10 @@ class RegistrationPipelineTests(unittest.TestCase):
             result = self._run()
 
         self.assertTrue(result["success"])
-        probe.assert_called_once_with(session, "user@example.com")
+        probe.assert_called_once_with(
+            session, "user@example.com",
+            referer="https://auth.openai.com/", screen_hint="signup",
+        )
         send.assert_called_once_with(session, referer="https://auth.openai.com/create-account/password")
         validate_otp.assert_called_once()
         register.assert_not_called()
@@ -393,7 +399,10 @@ class RegistrationPipelineTests(unittest.TestCase):
                 patch.object(registration, "create_account") as profile:
             result = self._run()
         self.assertTrue(result["success"])
-        probe.assert_called_once_with(session, "user@example.com")
+        probe.assert_called_once_with(
+            session, "user@example.com",
+            referer="https://auth.openai.com/", screen_hint="signup",
+        )
         password.assert_not_called()
         profile.assert_not_called()
         self.assertTrue(session.closed)

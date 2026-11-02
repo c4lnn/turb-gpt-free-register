@@ -672,7 +672,7 @@ def register_user(
 ) -> dict:
     """按成功样本提交邮箱和密码，返回 OTP 发送导航地址。"""
     url = "https://auth.openai.com/api/accounts/user/register"
-    headers = session.get_auth_headers(referer="https://auth.openai.com/create-account/password")
+    headers = session.get_auth_headers(referer="https://auth.openai.com/")
     headers["openai-sentinel-token"] = sentinel_header
     if so_header:
         headers["openai-sentinel-so-token"] = so_header
@@ -730,7 +730,14 @@ def send_email_otp(session: BrowserSession, referer: str = "https://auth.openai.
     logger.info("[OTP] 重新发送验证码请求完成，status=%s", resp.status_code)
 
 
-def validate_email_otp(session: BrowserSession, code: str, sentinel_header: str | None = None, so_header: str | None = None) -> dict:
+def validate_email_otp(
+    session: BrowserSession,
+    code: str,
+    sentinel_header: str | None = None,
+    so_header: str | None = None,
+    *,
+    referer: str = "https://auth.openai.com/email-verification",
+) -> dict:
     """
     步骤10: 提交邮箱验证码验证。
     POST https://auth.openai.com/api/accounts/email-otp/validate
@@ -750,7 +757,7 @@ def validate_email_otp(session: BrowserSession, code: str, sentinel_header: str 
     """
     url = "https://auth.openai.com/api/accounts/email-otp/validate"
 
-    headers = session.get_auth_headers(referer="https://auth.openai.com/email-verification")
+    headers = session.get_auth_headers(referer=referer)
     if sentinel_header:
         headers["openai-sentinel-token"] = sentinel_header
     if so_header:
@@ -805,7 +812,7 @@ def create_account(session: BrowserSession, name: str, birthday: str, sentinel_h
     """
     url = "https://auth.openai.com/api/accounts/create_account"
 
-    headers = session.get_auth_headers(referer="https://auth.openai.com/about-you")
+    headers = session.get_auth_headers(referer="https://auth.openai.com/")
     headers["openai-sentinel-token"] = sentinel_header
     if so_header:
         headers["openai-sentinel-so-token"] = so_header
@@ -1001,20 +1008,30 @@ def _classify_authorize_probe(data: dict, *, strict: bool = False) -> dict:
     )
 
 
-def probe_registration_state(session, email: str, *, strict: bool = False) -> dict:
+def probe_registration_state(
+    session,
+    email: str,
+    *,
+    strict: bool = False,
+    referer: str = "https://auth.openai.com/create-account",
+    screen_hint: str | None = None,
+) -> dict:
     """用 authorize_continue 探测落点；strict 慢路径拒绝无效或未知响应。"""
     sentinel_resp = request_sentinel_token(session, "authorize_continue")
     sentinel_header, _ = build_sentinel_header(
         session, sentinel_resp, "authorize_continue", consume_so=False,
     )
-    headers = session.get_auth_headers(referer="https://auth.openai.com/create-account")
+    headers = session.get_auth_headers(referer=referer)
     headers["accept"] = "application/json"
     headers["content-type"] = "application/json"
     headers["openai-sentinel-token"] = sentinel_header
+    payload = {"username": {"kind": "email", "value": email}}
+    if screen_hint is not None:
+        payload["screen_hint"] = screen_hint
     response = session.post(
         "https://auth.openai.com/api/accounts/authorize/continue",
         headers=headers,
-        data=json.dumps({"username": {"kind": "email", "value": email}}),
+        data=json.dumps(payload),
         allow_redirects=False,
     )
     status = int(getattr(response, "status_code", 0) or 0)

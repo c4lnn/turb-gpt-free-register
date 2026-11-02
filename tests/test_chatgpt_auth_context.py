@@ -85,7 +85,7 @@ class ChatgptAuthContextTests(unittest.TestCase):
             "login_hint": [email],
         })
         self.assertEqual(parse_qs(body, keep_blank_values=True), {
-            "callbackUrl": ["/"],
+            "callbackUrl": ["https://chatgpt.com/"],
             "csrfToken": ["csrf-placeholder"],
             "json": ["true"],
         })

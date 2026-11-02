@@ -151,7 +151,7 @@ def signin_openai(session: BrowserSession, csrf_token: str, email: str) -> str:
     headers["origin"] = "https://chatgpt.com"
     # 构造请求体
     body = urlencode({
-        "callbackUrl": "/",
+        "callbackUrl": "https://chatgpt.com/",
         "csrfToken": csrf_token,
         "json": "true",
     })

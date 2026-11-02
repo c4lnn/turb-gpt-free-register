@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import json
 import unittest
 from unittest.mock import Mock, patch
 
@@ -456,6 +457,10 @@ class AccountExportTwofaTests(unittest.TestCase):
         self.assertEqual(
             [request[0].rsplit("/", 1)[-1] for request in session.posts],
             ["continue", "verify", "validate"],
+        )
+        self.assertNotIn("screen_hint", json.loads(session.posts[0][2]))
+        self.assertEqual(
+            session.posts[0][1]["referer"], "https://auth.openai.com/create-account",
         )
 
     def test_authorize_http_error_rotates_before_retry_and_probe_uses_success_id(self):

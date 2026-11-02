@@ -219,7 +219,10 @@ def _validate_registration_otp(session, email, otp_after_ts, otp_code, state):
             header, so_header = build_sentinel_header(session, proof, "email_otp_validate")
             human_delay("challenge")
         try:
-            return validate_email_otp(session, current_otp, header, so_header)
+            return validate_email_otp(
+                session, current_otp, header, so_header,
+                referer="https://auth.openai.com/",
+            )
         except EmailOtpInvalidError:
             if attempt == 3:
                 raise
@@ -374,7 +377,11 @@ def run_registration(
             progress["auth_step"] = "classification_probe"
             logger.info("[认证] signup 落地状态未知，执行一次 authorize_continue 探测")
             try:
-                state = probe_registration_state(session, email)
+                state = probe_registration_state(
+                    session, email,
+                    referer="https://auth.openai.com/",
+                    screen_hint="signup",
+                )
             except StopRequested:
                 raise
             except Exception as exc:

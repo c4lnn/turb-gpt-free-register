@@ -4,6 +4,7 @@ import uuid
 import unittest
 from unittest.mock import patch
 
+from config import browser as browser_config
 import core.openai_auth as openai_auth
 import core.codex_oauth as codex_oauth
 from core.session import BrowserSession
@@ -163,7 +164,40 @@ class OpenAIRegistrationFlowTests(unittest.TestCase):
         create_headers = session.posts[-1][1]
 
         self.assertEqual(validate_headers["x-openai-document-navigation-id"], navigation_id)
+        self.assertEqual(validate_headers["referer"], "https://auth.openai.com/email-verification")
         self.assertEqual(create_headers["x-openai-document-navigation-id"], navigation_id)
+
+    def test_registration_auth_json_posts_use_root_referer_and_preserve_payloads(self):
+        session = _ProtocolSession()
+        openai_auth.register_user(
+            session, "user@example.test", "password-placeholder", "sentinel-placeholder",
+        )
+        openai_auth.validate_email_otp(
+            session, "123456", "sentinel-placeholder", referer="https://auth.openai.com/",
+        )
+        openai_auth.create_account(
+            session, "Test User", "1990-01-01", "sentinel-placeholder",
+        )
+
+        expected = [
+            ("https://auth.openai.com/api/accounts/user/register", {
+                "password": "password-placeholder", "username": "user@example.test",
+            }),
+            ("https://auth.openai.com/api/accounts/email-otp/validate", {"code": "123456"}),
+            ("https://auth.openai.com/api/accounts/create_account", {
+                "name": "Test User", "birthdate": "1990-01-01",
+            }),
+        ]
+        self.assertEqual([post[0] for post in session.posts], [item[0] for item in expected])
+        for (url, headers, body, _redirects), (expected_url, expected_body) in zip(session.posts, expected):
+            with self.subTest(endpoint=expected_url.rsplit("/", 1)[-1]):
+                self.assertEqual(url, expected_url)
+                self.assertEqual(headers["referer"], "https://auth.openai.com/")
+                self.assertEqual(headers["origin"], "https://auth.openai.com")
+                self.assertEqual(headers["content-type"], "application/json")
+                self.assertEqual(headers["x-openai-document-navigation-id"], "document-1")
+                self.assertEqual(json.loads(body), expected_body)
+
 
     def test_send_email_otp_rotates_before_navigation(self):
         session = _ProtocolSession()
@@ -395,17 +429,31 @@ class OpenAIRegistrationFlowTests(unittest.TestCase):
                     )
                     if so_case == "invalid":
                         proof["_sentinel_so_header"] = "invalid-so"
+                    context = {}
+                    if not strict:
+                        context = {
+                            "referer": "https://auth.openai.com/",
+                            "screen_hint": "signup",
+                        }
                     with patch.object(openai_auth, "request_sentinel_token", return_value=proof):
                         state = openai_auth.probe_registration_state(
-                            session, "user@example.test", strict=strict,
+                            session, "user@example.test", strict=strict, **context,
                         )
                     self.assertEqual(state["step"], "password")
                     self.assertEqual(len(session.posts), 1)
                     url, headers, body, _ = session.posts[0]
                     self.assertEqual(url, "https://auth.openai.com/api/accounts/authorize/continue")
-                    self.assertEqual(json.loads(body), {
+                    expected_body = {
                         "username": {"kind": "email", "value": "user@example.test"},
-                    })
+                    }
+                    if not strict:
+                        expected_body["screen_hint"] = "signup"
+                    self.assertEqual(json.loads(body), expected_body)
+                    expected_referer = (
+                        "https://auth.openai.com/" if not strict
+                        else "https://auth.openai.com/create-account"
+                    )
+                    self.assertEqual(headers["referer"], expected_referer)
                     self.assertEqual(json.loads(headers["openai-sentinel-token"]),
                                      json.loads(proof["_sentinel_header"]))
                     self.assertNotIn("openai-sentinel-so-token", headers)
@@ -524,14 +572,22 @@ class OpenAIRegistrationFlowTests(unittest.TestCase):
         with patch.object(openai_auth, "request_sentinel_token", return_value={"token": "proof"}), \
                 patch.object(openai_auth, "build_sentinel_header", return_value=("sentinel", None)), \
                 patch.object(session, "post", return_value=response) as post:
-            state = openai_auth.probe_registration_state(session, "user@example.com")
+            state = openai_auth.probe_registration_state(
+                session, "user@example.com",
+                referer="https://auth.openai.com/",
+                screen_hint="signup",
+            )
 
         self.assertEqual(state["kind"], "new_passwordless")
         self.assertFalse(state["otp_delivery_required"])
         post.assert_called_once()
         args, kwargs = post.call_args
         self.assertEqual(args[0], "https://auth.openai.com/api/accounts/authorize/continue")
-        self.assertEqual(json.loads(kwargs["data"]), {"username": {"kind": "email", "value": "user@example.com"}})
+        self.assertEqual(json.loads(kwargs["data"]), {
+            "username": {"kind": "email", "value": "user@example.com"},
+            "screen_hint": "signup",
+        })
+        self.assertEqual(kwargs["headers"]["referer"], "https://auth.openai.com/")
         self.assertEqual(kwargs["headers"]["openai-sentinel-token"], "sentinel")
 
     def test_probe_registration_state_fails_on_http_error(self):
@@ -989,6 +1045,60 @@ class OpenAIRegistrationFlowTests(unittest.TestCase):
             openai_auth.get_mfa_enabled(Session({"mfa_enabled": "false"}), "tok")
         with self.assertRaises(RuntimeError):
             openai_auth.get_mfa_enabled(Session({}), "tok")
+
+    def test_get_mfa_enabled_uses_each_session_locale_profile(self):
+        class Session(BrowserSession):
+            def __init__(self, profile):
+                self.browser_profile = profile
+                self.device_id = "device-placeholder"
+                self.client_build_number = "build-placeholder"
+                self.client_version = "version-placeholder"
+                self.oai_session_id = "session-placeholder"
+                self.datadog_origin = "rum"
+                self.datadog_trace_id = "1"
+                self.datadog_parent_id = "2"
+                self.response = _Response(payload={"mfa_enabled": True})
+                self.request_headers = None
+
+            def get(self, url, *, headers, allow_redirects=True):
+                self.request_headers = dict(headers)
+                return self.response
+
+        with patch.object(browser_config, "AUTO_BROWSER_LOCALE_FROM_IP", True):
+            profiles = [
+                browser_config.build_browser_environment(
+                    {"country": "BR", "timezone": "America/Sao_Paulo"}, base_profile={},
+                ),
+                browser_config.build_browser_environment(
+                    {"country": "VN", "timezone": "Asia/Ho_Chi_Minh"}, base_profile={},
+                ),
+            ]
+        with patch.object(browser_config, "AUTO_BROWSER_LOCALE_FROM_IP", False), \
+             patch.object(browser_config, "BROWSER_LOCALE_PROFILE", "jp"):
+            profiles.append(browser_config.build_browser_environment({}, base_profile={}))
+
+        sessions = [Session(profile) for profile in profiles]
+        for session, profile in zip(sessions, profiles):
+            with self.subTest(locale=profile["navigator_language"]):
+                self.assertTrue(openai_auth.get_mfa_enabled(session, "access-token-placeholder"))
+                self.assertEqual(
+                    session.request_headers["oai-language"], profile["navigator_language"],
+                )
+                self.assertEqual(
+                    session.request_headers["accept-language"], profile["accept_language"],
+                )
+                self.assertEqual(profile["navigator_languages"][0], profile["navigator_language"])
+                self.assertTrue(profile["accept_language"].startswith(profile["navigator_language"]))
+                self.assertTrue(profile["timezone_iana"])
+
+        self.assertEqual(
+            [session.request_headers["oai-language"] for session in sessions],
+            [profile["navigator_language"] for profile in profiles],
+        )
+        self.assertEqual(
+            len({session.request_headers["oai-language"] for session in sessions}),
+            len(sessions),
+        )
 
     def _probe_registration_navigation_id(self, session):
         with patch.object(

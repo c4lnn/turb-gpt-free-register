@@ -152,15 +152,15 @@ signup()
 |---|---|
 | 注册预检 CSRF warmup | 无 Referer；这是初始化设备 cookie 的 CORS 请求，不是登录页导航。 |
 | `get_csrf_token()` | `https://chatgpt.com/auth/login`。 |
-| 注册 signin | `https://chatgpt.com/auth/login_with`，query 动态包含 `callback_path`、`screen_hint`、`login_hint`、`auth_session_logging_id`、`ext-oai-did`；另有 `Origin: https://chatgpt.com`。 |
+| 注册 signin | `https://chatgpt.com/auth/login_with`，query 动态包含 `callback_path`、`screen_hint`、`login_hint`、`auth_session_logging_id`、`ext-oai-did`；另有 `Origin: https://chatgpt.com`；form 的 `callbackUrl=https://chatgpt.com/`，查活共享同一 signin。 |
 | authorize | `https://chatgpt.com/`。 |
 | `/create-account/password` | 当前落点若以 `https://auth.openai.com/` 开头则使用该 URL，否则使用 `https://auth.openai.com/`。 |
-| `/api/accounts/authorize/continue` 状态探测 | `https://auth.openai.com/create-account`。 |
-| `/api/accounts/user/register` | `https://auth.openai.com/create-account/password`。 |
+| `/api/accounts/authorize/continue` 状态探测 | 注册为 `https://auth.openai.com/`，body 额外携带 `screen_hint=signup`；2FA 重认证保留 `/create-account` Referer，不发送 screen hint。 |
+| `/api/accounts/user/register` | `https://auth.openai.com/`。 |
 | `/api/accounts/email-otp/send` | 注册密码后导航及已有账号首次发码为 `https://auth.openai.com/create-account/password`；登录 follow-send 用 `/log-in/password`，重发导航默认用 `/email-verification`。 |
 | `/api/accounts/email-otp/resend` | `https://auth.openai.com/email-verification`。 |
-| `/api/accounts/email-otp/validate` | `https://auth.openai.com/email-verification`。 |
-| `/api/accounts/create_account` | `https://auth.openai.com/about-you`。 |
+| `/api/accounts/email-otp/validate` | 注册调用为 `https://auth.openai.com/`；查活调用保留 `https://auth.openai.com/email-verification`。 |
+| `/api/accounts/create_account` | `https://auth.openai.com/`。 |
 | 注册 callback | 初始使用分类落点；经历 OTP、TOTP、profile 后分别更新为 email-verification、mfa、about-you。`follow_oauth_callback()` 的默认值是 about-you。 |
 | `/api/auth/session` | `https://chatgpt.com/`。 |
 
@@ -235,7 +235,7 @@ OSS 将 Auth JSON 头拆成 `_auth_json_headers()`，每次调用生成新的 `x
 
 | 操作 | flow | 业务请求与 SO 策略 |
 |---|---|---|
-| 状态探测 | `authorize_continue` | POST `/api/accounts/authorize/continue`；只发送主 token，不消费、不校验或发送 SO，即使 challenge 声明 SO required。 |
+| 状态探测 | `authorize_continue` | POST `/api/accounts/authorize/continue`；注册携带 `screen_hint=signup`，2FA 重认证不发送该字段；只发送主 token，不消费、不校验或发送 SO，即使 challenge 声明 SO required。 |
 | 密码验证 | `password_verify` | POST `/api/accounts/password/verify`；每次新取主 token，仅在当前 challenge 要求时发送 SO。 |
 | MFA challenge | 无 | POST `/api/accounts/mfa/issue_challenge`；不携带主/SO token。 |
 | MFA verify | `verify_mfa` | POST `/api/accounts/mfa/verify`；每次新取匹配 flow 的主 token，仅在当前 challenge 要求时发送 SO。 |
