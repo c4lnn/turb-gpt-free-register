@@ -109,3 +109,5 @@ webui.pid
 logs/
 run/
 AGENTS.md
+
+*.har

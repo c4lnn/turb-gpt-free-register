@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import patch
 
 import core.openai_auth as openai_auth
+import core.codex_oauth as codex_oauth
 from core.session import BrowserSession
 
 
@@ -374,6 +375,83 @@ class OpenAIRegistrationFlowTests(unittest.TestCase):
         self.assertEqual(state["kind"], "existing")
         self.assertEqual(state["step"], "otp")
         self.assertTrue(state["otp_delivery_required"])
+
+    def test_probe_omits_so_when_required_for_registration_and_reauth(self):
+        class ProbeSession(_ProtocolSession):
+            def post(self, url, *, headers, data=None, allow_redirects=False):
+                super().post(url, headers=headers, data=data, allow_redirects=allow_redirects)
+                return _Response(payload={
+                    "page": {"type": "login_password"},
+                    "continue_url": "https://auth.openai.com/log-in/password",
+                })
+
+        for strict in (False, True):
+            for so_case in ("missing", "valid", "invalid"):
+                with self.subTest(strict=strict, so_case=so_case):
+                    session = ProbeSession()
+                    proof = self._solved_response(
+                        session, "authorize_continue", so_required=True,
+                        include_so=so_case == "valid",
+                    )
+                    if so_case == "invalid":
+                        proof["_sentinel_so_header"] = "invalid-so"
+                    with patch.object(openai_auth, "request_sentinel_token", return_value=proof):
+                        state = openai_auth.probe_registration_state(
+                            session, "user@example.test", strict=strict,
+                        )
+                    self.assertEqual(state["step"], "password")
+                    self.assertEqual(len(session.posts), 1)
+                    url, headers, body, _ = session.posts[0]
+                    self.assertEqual(url, "https://auth.openai.com/api/accounts/authorize/continue")
+                    self.assertEqual(json.loads(body), {
+                        "username": {"kind": "email", "value": "user@example.test"},
+                    })
+                    self.assertEqual(json.loads(headers["openai-sentinel-token"]),
+                                     json.loads(proof["_sentinel_header"]))
+                    self.assertNotIn("openai-sentinel-so-token", headers)
+
+    def test_probe_rejects_invalid_main_credentials_before_request(self):
+        for defect in ("missing", "flow", "device", "challenge", "proof"):
+            with self.subTest(defect=defect):
+                session = _ProtocolSession()
+                proof = self._solved_response(session, "authorize_continue", so_required=True)
+                token = json.loads(proof["_sentinel_header"])
+                if defect == "missing":
+                    proof["_sentinel_header"] = None
+                else:
+                    field = {"flow": "flow", "device": "id", "challenge": "c", "proof": "p"}[defect]
+                    token[field] = "" if defect == "proof" else "different"
+                    proof["_sentinel_header"] = json.dumps(token)
+                with patch.object(openai_auth, "request_sentinel_token", return_value=proof):
+                    with self.assertRaises(openai_auth.SentinelRequestError):
+                        openai_auth.probe_registration_state(session, "user@example.test")
+                self.assertEqual(session.posts, [])
+
+    def test_codex_otp_keeps_required_so_validation_for_shared_flow(self):
+        for so_case in ("missing", "mismatched", "valid"):
+            with self.subTest(so_case=so_case):
+                session = _ProtocolSession()
+                proof = self._solved_response(
+                    session, "authorize_continue", so_required=True,
+                    include_so=so_case != "missing",
+                )
+                if so_case == "mismatched":
+                    so = json.loads(proof["_sentinel_so_header"])
+                    so["c"] = "previous-challenge"
+                    proof["_sentinel_so_header"] = json.dumps(so)
+                with patch.object(codex_oauth, "request_sentinel_token", return_value=proof):
+                    if so_case == "valid":
+                        codex_oauth._submit_email_otp(session, "123456")
+                    else:
+                        with self.assertRaises(openai_auth.SentinelRequestError):
+                            codex_oauth._submit_email_otp(session, "123456")
+                if so_case == "valid":
+                    self.assertEqual(len(session.posts), 1)
+                    url, headers, _, _ = session.posts[0]
+                    self.assertEqual(url, "https://auth.openai.com/api/accounts/email-otp/validate")
+                    self.assertEqual(headers["openai-sentinel-so-token"], proof["_sentinel_so_header"])
+                else:
+                    self.assertEqual(session.posts, [])
 
     def test_probe_registration_state_missing_otp_mode_is_existing(self):
         session = _ProtocolSession()

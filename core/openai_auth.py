@@ -574,8 +574,10 @@ def request_sentinel_token(session: BrowserSession, flow: str) -> dict:
 
 
 
-def build_sentinel_header(session: BrowserSession, sentinel_resp: dict, flow: str) -> tuple:
-    """只消费本次已求解结果，拒绝跨 flow、设备或 challenge 混用。"""
+def build_sentinel_header(
+    session: BrowserSession, sentinel_resp: dict, flow: str, *, consume_so: bool = True,
+) -> tuple:
+    """校验当前主凭据；按调用点策略消费 SO。"""
     if (sentinel_resp.get("_sentinel_flow") != flow
             or sentinel_resp.get("_sentinel_device_id") != session.device_id):
         raise SentinelRequestError("Sentinel 凭据与当前 flow 或设备不一致")
@@ -593,6 +595,8 @@ def build_sentinel_header(session: BrowserSession, sentinel_resp: dict, flow: st
     proof_required = not (isinstance(pow_info, dict) and pow_info.get("required") is False)
     if proof_required and (not isinstance(parsed.get("p"), str) or not parsed["p"].strip()):
         raise SentinelRequestError("Sentinel 当前 challenge 所需 proof 缺失")
+    if not consume_so:
+        return header, None
     so_required = (sentinel_resp.get("so") or {}).get("required") is True
     if so_header:
         try:
@@ -1000,15 +1004,13 @@ def _classify_authorize_probe(data: dict, *, strict: bool = False) -> dict:
 def probe_registration_state(session, email: str, *, strict: bool = False) -> dict:
     """用 authorize_continue 探测落点；strict 慢路径拒绝无效或未知响应。"""
     sentinel_resp = request_sentinel_token(session, "authorize_continue")
-    sentinel_header, so_header = build_sentinel_header(
-        session, sentinel_resp, "authorize_continue",
+    sentinel_header, _ = build_sentinel_header(
+        session, sentinel_resp, "authorize_continue", consume_so=False,
     )
     headers = session.get_auth_headers(referer="https://auth.openai.com/create-account")
     headers["accept"] = "application/json"
     headers["content-type"] = "application/json"
     headers["openai-sentinel-token"] = sentinel_header
-    if so_header:
-        headers["openai-sentinel-so-token"] = so_header
     response = session.post(
         "https://auth.openai.com/api/accounts/authorize/continue",
         headers=headers,
