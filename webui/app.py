@@ -30,12 +30,12 @@ from core.openai.account import live_check_service
 from core.link import masi_cdk_pool
 from webui.auth import init_auth, register_auth_routes
 from core.openai.register import registration_service as svc
-from core.mail.email_pool_status import EMAIL_POOL_STATUSES, validate_status, EmailPoolStatusError
-from core.openai.account.account_status_contracts import build_account_status_contract
-from core.openai.account.account_status_contracts import (
+from core.infra.contracts.email_pool import EMAIL_POOL_STATUSES, validate_status, EmailPoolStatusError
+from core.infra.contracts.account_status import build_account_status_contract
+from core.infra.contracts.account_status import (
     CODEX_AUTH_STATUSES, CODEX_OPERATION_STATUSES, LIVE_CHECK_STATUSES,
 )
-from core.mail.email_provider import VALID_EMAIL_SOURCES
+from core.infra.contracts.email_source import VALID_EMAIL_SOURCES
 from webui import config_editor
 
 logger = logging.getLogger(__name__)

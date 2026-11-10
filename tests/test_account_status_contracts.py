@@ -9,7 +9,7 @@ from core.infra import db
 from core.infra.sqlite_store import SQLiteRuntimeStore
 from flask import Flask
 from webui.app import _account_status_filter_args
-from core.openai.account.account_status_contracts import (
+from core.infra.contracts.account_status import (
     build_account_status_contract,
     classify_checkout_session_type,
     classify_plan_category,

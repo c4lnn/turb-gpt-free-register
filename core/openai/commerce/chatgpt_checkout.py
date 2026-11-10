@@ -16,7 +16,8 @@ from email.utils import parsedate_to_datetime
 from typing import Any, Callable, Mapping
 from urllib.parse import urlparse
 
-from core.openai.commerce.chatgpt_plan import normalize_token
+from core.infra.contracts.account_status import classify_checkout_session_id
+from core.infra.jwt import normalize_token
 from core.openai.transport.session import BrowserSession
 
 logger = logging.getLogger(__name__)
@@ -294,17 +295,6 @@ def extract_checkout_session_id(value: Any) -> str | None:
             if found:
                 return found
     return None
-
-
-def classify_checkout_session_id(session_id: str) -> str:
-    value = str(session_id or "").strip()
-    if value.startswith("oaics_"):
-        return "oaics"
-    if value.startswith("cs_live_"):
-        return "cs_live"
-    if value.startswith("cs_"):
-        return "other_cs"
-    return "unknown"
 
 
 def _iter_mappings(value: Any):

@@ -14,7 +14,7 @@ import os
 import re
 from pathlib import Path
 
-from core.mail.email_provider import VALID_EMAIL_SOURCES
+from core.infra.contracts.email_source import VALID_EMAIL_SOURCES
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _CONFIG_DIR = _PROJECT_ROOT / "config"

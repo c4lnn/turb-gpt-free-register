@@ -19,7 +19,7 @@ from typing import Any
 from core.openai.codex import codex_retry_service
 from core.infra import db
 from core.infra import job_context
-from core.openai.account.account_status_contracts import codex_auth_status
+from core.infra.contracts.account_status import codex_auth_status
 
 logger = logging.getLogger(__name__)
 

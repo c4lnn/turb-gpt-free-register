@@ -11,11 +11,11 @@ from datetime import datetime
 from typing import Any
 
 from core.infra import db
+from core.infra.jwt import normalize_token
 from core.openai.commerce.chatgpt_checkout import (
     CheckoutSettings,
     check_checkout_session,
     checkout_settings_from_config,
-    normalize_token,
     public_checkout_result,
     validate_checkout_settings,
 )

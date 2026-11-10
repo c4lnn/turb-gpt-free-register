@@ -15,17 +15,9 @@ EMAIL_SOURCE 支持单个或多个来源：
 import logging
 from typing import Iterable
 
-logger = logging.getLogger(__name__)
+from core.infra.contracts.email_source import VALID_EMAIL_SOURCES
 
-# 供配置层和运行时共享的稳定来源契约。新增来源时应同步补充 WebUI 显示名称。
-VALID_EMAIL_SOURCES = (
-    "outlook",
-    "generic_api",
-    "cloudflare_domain",
-    "icloud",
-    "cloudflare",
-    "remail",
-)
+logger = logging.getLogger(__name__)
 
 # 保留私有别名，避免同模块内既有调用的语义发生变化。
 _VALID_SOURCES = VALID_EMAIL_SOURCES

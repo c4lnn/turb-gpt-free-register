@@ -23,7 +23,7 @@ from typing import Any
 
 from config import email as _email_cfg
 from core.infra.sqlite_store import SQLiteRuntimeStore
-from core.mail.email_pool_status import (
+from core.infra.contracts.email_pool import (
     EMAIL_POOL_STATUSES,
     EMAIL_POOL_STATUS_SET,
     TERMINAL_EMAIL_POOL_STATUSES,
@@ -37,7 +37,7 @@ from core.mail.email_pool_status import (
     validate_status,
     LEGACY_EMAIL_POOL_STATUS_MAP,
 )
-from core.openai.account.account_status_contracts import (
+from core.infra.contracts.account_status import (
     build_account_status_contract,
     codex_auth_status,
     codex_operation_status,
@@ -46,7 +46,7 @@ from core.openai.account.account_status_contracts import (
     normalize_extract_link_status,
     extract_link_capabilities as contract_extract_link_capabilities,
 )
-from core.mail.email_provider import VALID_EMAIL_SOURCES
+from core.infra.contracts.email_source import VALID_EMAIL_SOURCES
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _DATA_DIR = _PROJECT_ROOT
@@ -3232,7 +3232,7 @@ def import_outlook_accounts(records: list[dict], *, reactivate_existing: bool = 
 
 def normalize_registered_icloud_import_record(raw: dict) -> tuple[dict | None, str | None]:
     """校验 iCloud 已注册账号导入行；仅解析 JWT，不验证远端有效性。"""
-    from core.openai.commerce.chatgpt_plan import normalize_token, token_claims
+    from core.infra.jwt import normalize_token, token_claims
 
     email = str((raw or {}).get("email") or "").strip()
     access_token = normalize_token(str((raw or {}).get("access_token") or (raw or {}).get("token") or ""))

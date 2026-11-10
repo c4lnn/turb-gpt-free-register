@@ -56,7 +56,7 @@ from core.openai.account.account_export import (
     create_batch_archive_dir,
 )
 from core.mail.email_provider import acquire_email, wait_for_otp, release_email_if_unconsumed
-from core.mail.email_pool_status import canonical_status
+from core.infra.contracts.email_pool import canonical_status
 from core.infra.humanize import delay as human_delay
 from core.openai.register.name_samples import random_display_name
 from core.openai.register.profile_utils import generate_random_birthday

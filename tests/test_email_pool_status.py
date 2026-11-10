@@ -10,7 +10,7 @@ from core.mail import cf_temp_mail_client
 from core.infra import db
 from core.mail import email_provider
 from core.openai.register import registration_service
-from core.mail.email_pool_status import (
+from core.infra.contracts.email_pool import (
     EMAIL_POOL_STATUSES,
     can_transition,
     canonical_status,

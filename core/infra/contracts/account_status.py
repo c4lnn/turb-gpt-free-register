@@ -9,8 +9,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from core.openai.commerce.chatgpt_checkout import classify_checkout_session_id
-
 
 CODEX_AUTH_STATUSES = (
     "not_started", "success", "failed", "skipped", "unknown",
@@ -224,6 +222,18 @@ def live_check_capabilities(status: Any) -> dict[str, bool]:
         "can_start": can_check and not running,
         "account_available": value == "live",
     }
+
+
+def classify_checkout_session_id(session_id: str) -> str:
+    """按 checkout session id 前缀判别类型；纯字符串契约，无网络依赖。"""
+    value = str(session_id or "").strip()
+    if value.startswith("oaics_"):
+        return "oaics"
+    if value.startswith("cs_live_"):
+        return "cs_live"
+    if value.startswith("cs_"):
+        return "other_cs"
+    return "unknown"
 
 
 def classify_checkout_session_type(session_id: Any) -> str:

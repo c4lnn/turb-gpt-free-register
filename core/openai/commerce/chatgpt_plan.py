@@ -2,7 +2,6 @@
 """ChatGPT 账号套餐/试用资格查询。"""
 from __future__ import annotations
 
-import base64
 import ipaddress
 import json
 import logging
@@ -10,10 +9,11 @@ import random
 import socket
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Optional
 from urllib.parse import quote, urlparse
 
+from core.infra.jwt import normalize_token, token_claims
 from core.openai.transport.session import BrowserSession, close_browser_session
 
 logger = logging.getLogger(__name__)
@@ -23,15 +23,6 @@ ACCOUNTS_CHECK_PATH = "/backend-api/accounts/check/v4-2023-04-27"
 
 def now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
-
-
-def normalize_token(token: str) -> str:
-    token = (token or "").strip().strip('"').strip("'")
-    if token.lower().startswith("authorization:"):
-        token = token.split(":", 1)[1].strip()
-    if token.lower().startswith("bearer "):
-        token = token[7:].strip()
-    return token
 
 
 def _mask_proxy(proxy: str) -> str:
@@ -168,42 +159,6 @@ def resolve_plan_check_route(explicit_proxy: Optional[str] = None) -> dict:
         "network_route": "proxy_chain" if upstream else "proxy",
         "proxy_used": _mask_proxy(selected),
         "proxy_fallback_reason": None,
-    }
-
-
-def decode_jwt_payload_unverified(token: str) -> dict:
-    """仅本地解析 JWT payload，不校验签名。"""
-    token = normalize_token(token)
-    try:
-        parts = token.split(".")
-        if len(parts) < 2:
-            return {}
-        payload = parts[1] + "=" * (-len(parts[1]) % 4)
-        return json.loads(base64.urlsafe_b64decode(payload.encode("ascii")))
-    except Exception:
-        return {}
-
-
-def token_claims(token: str) -> dict:
-    payload = decode_jwt_payload_unverified(token)
-    auth = payload.get("https://api.openai.com/auth") or {}
-    profile = payload.get("https://api.openai.com/profile") or {}
-    exp = payload.get("exp")
-    exp_iso = None
-    expired = None
-    if isinstance(exp, (int, float)):
-        exp_iso = datetime.fromtimestamp(exp, tz=timezone.utc).isoformat().replace("+00:00", "Z")
-        expired = datetime.now(tz=timezone.utc).timestamp() >= float(exp)
-    return {
-        "payload": payload,
-        "email": profile.get("email"),
-        "user_name": profile.get("name"),
-        "user_id": auth.get("chatgpt_user_id") or auth.get("user_id"),
-        "account_id": auth.get("chatgpt_account_id"),
-        "claim_plan_type": auth.get("chatgpt_plan_type"),
-        "exp": exp,
-        "token_expires_at": exp_iso,
-        "token_expired": expired,
     }
 
 
