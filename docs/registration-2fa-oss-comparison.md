@@ -249,7 +249,7 @@ OSS 将 Auth JSON 头拆成 `_auth_json_headers()`，每次调用生成新的 `x
 
 密码验证、MFA challenge 和 MFA verify 均使用 Auth JSON 的根路径 Referer、`Origin: https://auth.openai.com`、JSON `Content-Type`、同源 CORS `Sec-Fetch-*` 和独立 `x-access-flow-invocation-id`，并复用当前认证文档的 `x-openai-document-navigation-id`。challenge 的 `Accept` 为 `*/*`，密码验证和 MFA verify 为 `application/json`。Auth Sentinel runner 仅允许受控的 Auth flow；verify MFA 不回退到 `password_verify` 或 `authorize_continue`。
 
-依据：`core/openai_auth.py:525-612,666-678,733-757,791-811,1004-1018,1065-1119`、`main.py:209-222`、`core/account_export.py:499-524,801-823`、`core/codex_oauth.py:823-849`、`core/sentinel_runner.py:70-78,189-225`、`config/openai_protocol.py:44-45`。
+依据：`core/openai_auth.py:525-612,666-678,733-757,791-811,1004-1018,1065-1119`、`main.py:209-222`、`core/account_export.py:499-524,801-823`、`core/codex_oauth.py:823-849`、`core/openai/auth/sentinel_runner.py:71-79,190-227`、`config/openai_protocol.py:44-45`。
 
 ### OSS
 
@@ -433,7 +433,7 @@ OSS `login_password_verify()` 与 `submit_mfa_totp()` 使用实例缓存的 Sent
 - `core/openai_auth.py:342-522`：注册预检、authorize 导航。
 - `core/openai_auth.py:525-612,641-831`：Sentinel、密码注册、OTP、create_account。
 - `core/openai_auth.py:904-1037,1065-1251`：认证状态分类、登录 OTP、MFA challenge、MFA 状态查询。
-- `core/sentinel_runner.py:70-78,189-225`：受控 flow 与同一 challenge 主凭据校验。
+- `core/openai/auth/sentinel_runner.py:71-79,190-227`：受控 flow 与同一 challenge 主凭据校验。
 - `core/session.py:147-168,663-871`：设备与 document ID、通用头、NextAuth、ChatGPT/Auth 导航头。
 - `core/session.py:909-931,1048-1060`：target headers 和 GET/POST 封装。
 - `core/account_export.py:192-254,336-456`：OAuth callback、session 和重认证导航。

@@ -79,7 +79,7 @@ node --version
 - 设备 warmup 采用限定的 navigation 转 XHR 头形态（JSON、empty／cors／same-origin、priority u=0），不额外发送 Referer／Content-Type 或导航标志，不改变其它认证请求的头。失败尝试沿用有界重试、空 CookieJar 重建和池候选策略；成功会话直接继续注册，不新增独立探针或假邮箱 POST。设备仍须域／根路径适用、非空、未过期且无歧义；wreq 的 host-only cookie 来源从真实响应及重定向恢复，不放宽门禁。
 - `proxy` 表示已有代理连接／认证失败证据；`geo_service`、`geo_parse`、`geo_incomplete`、`geo_mismatch` 分别表示服务不可用、解析失败、信息不足与所选画像自身冲突，不用于合法跨国覆盖或同国轮换。独立查活、Codex 与补设 2FA 保持原策略。
 - Python 时区数据由依赖 `tzdata` 提供，Windows 同样需要安装。SDK Date/Intl 使用冻结的 IANA 时区并按实际日期计算夏令时，不用宿主时区或当天静态长名冒充其它日期。
-- 保留 `sentinel/sdk.js` 与 `sentinel/sentinel-runner.js`。每个单 flow 使用一个短生命周期 Node 宿主完成同 VM 的 requirements/solve，HTTP challenge 仍由 Python 当前会话发起；可通过 `NODE_EXECUTABLE` 指定 Node 程序。OSS 的 QuickJS 文件名不表示本项目需要另装 QuickJS 引擎。
+- 保留 `core/openai/auth/sentinel/sdk.js` 与 `core/openai/auth/sentinel/sentinel-runner.js`。每个单 flow 使用一个短生命周期 Node 宿主完成同 VM 的 requirements/solve，HTTP challenge 仍由 Python 当前会话发起；可通过 `NODE_EXECUTABLE` 指定 Node 程序。OSS 的 QuickJS 文件名不表示本项目需要另装 QuickJS 引擎。
 - SDK 消息通过内存中的 stdin/stdout 交互，原始输出、challenge、指纹和 token 不进入诊断日志或临时 JSON；失败不回退手工 requirements 或旧 runner。主 token 与当前上下文绑定，PoW/SO 要求读取本次 challenge。
 - 测试 WebUI 使用 5100，生产保持 5000。本轮真实初始化、SDK challenge 和一条新号密码／OTP／资料／最终会话／同步 2FA 已通过；受控失败边界与历史出口故障另列，不承诺所有路由成功。实际通过范围见 `docs/protocol-registration-flow-diff.md` 4.5.5。
 
@@ -597,7 +597,7 @@ ENABLE_CODEX_AUTO = False
 │   ├── proxy.py                    # 代理池
 │   ├── register.py                 # 默认注册信息
 │   └── ...
-├── core/
+├── core/                          # 注册与认证代码；Sentinel 资源位于 openai/auth/sentinel/
 │   ├── registration_service.py     # WebUI 注册线程池
 │   ├── codex_oauth.py              # Codex 协议授权
 │   ├── email_provider.py           # 邮箱来源调度
@@ -610,9 +610,6 @@ ENABLE_CODEX_AUTO = False
 │   ├── app.py                      # Flask API
 │   ├── config_editor.py            # 配置读写/热加载
 │   └── templates/index.html        # 单页控制台
-├── sentinel/
-│   ├── sdk.js
-│   └── sentinel-runner.js
 ├── tools/
 │   └── test_codex_oauth.py         # Codex 单独补跑
 └── L_API.md                        # 本地 L 接码接口说明

@@ -1,28 +1,4 @@
-# Git 提交规范
-
-## 上游合并提交
-
-合并上游提交时，提交信息 MUST 使用以下格式：
-
-```text
-merge(upstream): <中文功能摘要>
-
-Upstream-Commit: <上游提交的完整 SHA>
-```
-
-其中：
-
-- `subject` MUST 使用 `merge(upstream):` 前缀，并准确描述引入的上游功能。
-- `Upstream-Commit` MUST 记录被合并上游提交的 40 位完整 SHA。
-- 不得使用只有短 SHA、缺少功能说明的 Git 默认合并信息。
-
-示例：
-
-```text
-merge(upstream): 合并通用 API 取码兼容
-
-Upstream-Commit: 19b7950cf38cb67f5bad6766c8f63ae39df01947
-```
+# AGENTS.md
 
 ## 部署端口
 

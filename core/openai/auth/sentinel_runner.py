@@ -2,8 +2,8 @@
 """
 Sentinel SDK 宿主适配层。
 
-通过 subprocess 启动项目根目录的 sentinel/sentinel-runner.js，在 Node 的
-`node:vm` 沙箱中真实运行 sentinel/sdk.js，完成一次单 flow 的「requirements ->
+通过 subprocess 启动与本模块同目录的 sentinel/sentinel-runner.js，在 Node 的
+`node:vm` 沙箱中真实运行同目录的 sentinel/sdk.js，完成一次单 flow 的「requirements ->
 Python 发起 challenge -> solve」双阶段交互。
 
 契约（结构化 stdin/stdout，逐行 JSON，一个消息一行）：
@@ -57,10 +57,11 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
-# 项目根目录（core 的上一级）
+# Node 子进程仍从项目根目录启动
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
-# Node 资源放在项目根的 sentinel/ 子目录下
-_SENTINEL_DIR = _PROJECT_ROOT / "sentinel"
+
+# Node 资源与当前 Auth Sentinel adapter 同目录分组
+_SENTINEL_DIR = Path(__file__).resolve().parent / "sentinel"
 _RUNNER_PATH = _SENTINEL_DIR / "sentinel-runner.js"
 _SDK_PATH = _SENTINEL_DIR / "sdk.js"
 

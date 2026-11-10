@@ -212,7 +212,7 @@ HARDWARE_CONCURRENCY = 6
 JS_HEAP_SIZE_LIMIT = 4395630592
 DEVICE_MEMORY = 8
 
-# 这些列表必须与 sentinel/sentinel-runner.js 的 createBrowserContext 保持一致。
+# 这些列表必须与 core/openai/auth/sentinel/sentinel-runner.js 的 createBrowserContext 保持一致。
 NAVIGATOR_PROTO_SAMPLES = [
     "createAuctionNonce−function createAuctionNonce() { [native code] }",
     "clearOriginJoinedAdInterestGroups−function clearOriginJoinedAdInterestGroups() { [native code] }",

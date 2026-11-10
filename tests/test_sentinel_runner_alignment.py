@@ -180,7 +180,7 @@ class SentinelDateTimezoneTests(unittest.TestCase):
         script = """
 const fs = require('node:fs');
 const vm = require('node:vm');
-const runner = require('./sentinel/sentinel-runner.js');
+const runner = require('./core/openai/auth/sentinel/sentinel-runner.js');
 const message = JSON.parse(fs.readFileSync(0, 'utf8'));
 const {context, clearTimers} = runner.createBrowserContext(runner.buildOptions(message, message.flow));
 const result = vm.runInContext(`['2026-01-15T12:00:00Z', '2026-07-15T12:00:00Z'].map(value => {
