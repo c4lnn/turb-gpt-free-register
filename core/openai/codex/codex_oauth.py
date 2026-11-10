@@ -36,6 +36,8 @@ from urllib.parse import urlencode, urlparse, parse_qs, quote
 # 协议级常量（CLIENT_ID/URL/SCOPE/OUTPUT_DIRNAME）虽然不会改，统一从 _cfg 读，
 # 这样 reload 后立即生效，不用再分两套导入。
 from config import codex as _cfg
+from config import IMPERSONATE
+from core.infra.wreq_session import WreqSession
 from core.openai.transport.session import BrowserSession
 from core.infra.humanize import delay as human_delay
 from core.openai.auth.openai_auth import (
@@ -49,7 +51,6 @@ from core.openai.auth.openai_auth import (
 )
 from core.infra import db
 from core.sms import sms_provider
-from curl_cffi import requests as curl_requests
 
 logger = logging.getLogger(__name__)
 
@@ -243,7 +244,7 @@ def _cpa_request_json(method: str, path: str, body: dict | None = None) -> dict:
         "X-Management-Key": key,
     }
     url = f"{origin}{path}"
-    session = curl_requests.Session()
+    session = WreqSession(IMPERSONATE)
     try:
         resp = session.request(
             method.upper(),
@@ -308,7 +309,7 @@ def _sub2_codex_request_json(method: str, path: str, body: dict | None = None) -
     timeout = int(getattr(_sub2_cfg, "SUB2API_API_TIMEOUT", 20) or 20)
     normalized_path = "/" + str(path or "").lstrip("/")
     url = f"{base}{normalized_path}"
-    session = curl_requests.Session()
+    session = WreqSession(IMPERSONATE)
     try:
         resp = session.request(
             method.upper(),
@@ -449,7 +450,7 @@ def _cpa_request_raw(method: str, path: str, body: dict | None = None, *, respon
         "X-Management-Key": key,
     }
     url = f"{origin}{path}"
-    session = curl_requests.Session()
+    session = WreqSession(IMPERSONATE)
     try:
         resp = session.request(
             method.upper(),
@@ -892,12 +893,60 @@ def _sleep_before_phone_retry(attempt: int, max_retries: int, *, prefix: str = "
     time.sleep(seconds)
 
 
+class _PhoneNumberRejected(RuntimeError):
+    """当前号码被 OpenAI 拒收（发不出短信或验证码不被接受），应换号重试。"""
+
+
+def _request_add_phone(session: BrowserSession, phone: str) -> None:
+    """让 OpenAI 向该号码发送短信；未成功则标记号码不可用，由上层换号。"""
+    send_resp = _post_json(
+        session,
+        "https://auth.openai.com/api/accounts/add-phone/send",
+        {"phone_number": f"+{phone}", "channel": "sms"},
+        referer="https://auth.openai.com/add-phone",
+    )
+    send_text = _response_text(send_resp)
+    send_reason = _phone_failure_reason(send_text, send_resp.status_code)
+    if send_resp.status_code in (200, 204) and not send_reason:
+        return
+    # 号码无效 / 无法发送 / WhatsApp 通道 / 限流等，都属于这个号不能用。
+    logger.warning(
+        f"[Codex] add-phone/send 未成功 reason={send_reason or 'unknown'}, "
+        f"status={send_resp.status_code}: {send_text[:240]}，换号重试"
+    )
+    raise _PhoneNumberRejected(
+        f"add-phone/send 未成功 reason={send_reason or 'unknown'}, status={send_resp.status_code}"
+    )
+
+
+def _submit_phone_code(session: BrowserSession, code: str) -> None:
+    """向 OpenAI 提交短信验证码；被拒则标记号码不可用，由上层换号。"""
+    val_resp = _post_json(
+        session,
+        "https://auth.openai.com/api/accounts/phone-otp/validate",
+        {"code": code},
+        referer="https://auth.openai.com/phone-verification",
+    )
+    if val_resp.status_code == 200:
+        return
+    val_text = _response_text(val_resp)
+    val_reason = _phone_failure_reason(val_text, val_resp.status_code) or 'code_rejected'
+    logger.warning(
+        f"[Codex] phone-otp/validate 失败 reason={val_reason}, status={val_resp.status_code}: "
+        f"{val_text[:240]}，换号重试"
+    )
+    raise _PhoneNumberRejected(
+        f"phone-otp/validate 失败 reason={val_reason}, status={val_resp.status_code}"
+    )
+
+
 def _do_phone_verification(session: BrowserSession) -> None:
     """
-    用接码平台拿号 → add-phone/send 发短信 → 收码 → phone-otp/validate。
-    一个号收不到码或被 OpenAI 拒就取消换号，最多 SMS_MAX_RETRIES 次（热加载）。
+    add-phone/send 发短信 → 收码 → phone-otp/validate。
+    号码的取用与释放交给 core.sms.sms_provider.activation；一个号收不到码或被
+    OpenAI 拒就换号，最多 SMS_MAX_RETRIES 次（热加载）。
 
-    实际平台适配在 core.sms.sms_provider：
+    平台适配在 core.sms.sms_provider：
         - SMS_PROVIDER="grizzly"：GrizzlySMS handler_api.php
         - SMS_PROVIDER="smsbower"：独立 SMSBower V1 handler API
         - SMS_PROVIDER="l"：L_API.md 的 /take-phone 和 /fetch-code JSON 接口
@@ -905,88 +954,47 @@ def _do_phone_verification(session: BrowserSession) -> None:
     http = sms_provider._http()
     max_retries = _cfg.SMS_MAX_RETRIES
     provider = _sms_provider_name()
+
+    def _on_number(attempt: int):
+        """取号成功后的回调：打尝试日志并向 OpenAI 请求发短信。"""
+        def handler(activation_id: str, phone: str) -> None:
+            logger.info(
+                f"[Codex] 手机验证尝试 {attempt}/{max_retries}，"
+                f"provider={provider}, activation_id={sms_provider.activation_for_log(activation_id)}, "
+                f"号码={sms_provider.phone_for_log(phone)}"
+            )
+            _request_add_phone(session, phone)
+        return handler
+
     try:
         last_err = None
         for attempt in range(1, max_retries + 1):
-            activation_id = None
             try:
-                activation_id, phone = sms_provider.acquire_number(http)
-                logger.info(
-                    f"[Codex] 手机验证尝试 {attempt}/{max_retries}，"
-                    f"provider={provider}, activation_id={sms_provider.activation_for_log(activation_id)}, 号码={sms_provider.phone_for_log(phone)}"
-                )
-
-                # 发短信
-                send_resp = _post_json(
-                    session,
-                    "https://auth.openai.com/api/accounts/add-phone/send",
-                    {"phone_number": f"+{phone}", "channel": "sms"},
-                    referer="https://auth.openai.com/add-phone",
-                )
-                send_text = _response_text(send_resp)
-                send_reason = _phone_failure_reason(send_text, send_resp.status_code)
-                if send_resp.status_code not in (200, 204) or send_reason:
-                    # 号码无效 / 无法发送 / WhatsApp 通道 / 限流等 → 释放当前号并换号。
-                    logger.warning(
-                        f"[Codex] add-phone/send 未成功 reason={send_reason or 'unknown'}, "
-                        f"status={send_resp.status_code}: {send_text[:240]}，换号重试"
-                    )
-                    sms_provider.cancel(activation_id, http)
-                    _sleep_before_phone_retry(attempt, max_retries)
-                    continue
-
-                # 通知平台短信已发出（status=1）
-                sms_provider.set_status(activation_id, 1, http=http)
-
-                # 定时轮询接码平台获取短信。wait_for_sms_code 内部按 SMS_POLL_INTERVAL 轮询，
-                # 最长等待 SMS_CODE_WAIT；超时立即取消当前号并换号。
-                try:
+                with sms_provider.activation(http=http, on_number=_on_number(attempt)) as (activation_id, phone):
                     logger.info(
                         f"[Codex] 短信已发送，开始轮询验证码 activation_id={activation_id}, "
                         f"wait={_cfg.SMS_CODE_WAIT}s, interval={_cfg.SMS_POLL_INTERVAL}s"
                     )
                     sms_code = sms_provider.wait_for_sms_code(activation_id, http)
-                except sms_provider.SmsCodeTimeout:
-                    logger.warning(
-                        f"[Codex] 号码 {sms_provider.phone_for_log(phone)} 在 {_cfg.SMS_CODE_WAIT}s 内未收到短信，取消换号"
-                    )
-                    sms_provider.cancel(activation_id, http)
-                    _sleep_before_phone_retry(attempt, max_retries)
-                    continue
-
-                # 验手机码
-                val_resp = _post_json(
-                    session,
-                    "https://auth.openai.com/api/accounts/phone-otp/validate",
-                    {"code": sms_code},
-                    referer="https://auth.openai.com/phone-verification",
-                )
-                if val_resp.status_code != 200:
-                    val_text = _response_text(val_resp)
-                    val_reason = _phone_failure_reason(val_text, val_resp.status_code) or 'code_rejected'
-                    logger.warning(
-                        f"[Codex] phone-otp/validate 失败 reason={val_reason}, status={val_resp.status_code}: "
-                        f"{val_text[:240]}，换号重试"
-                    )
-                    sms_provider.cancel(activation_id, http)
-                    _sleep_before_phone_retry(attempt, max_retries)
-                    continue
-
-                # 成功
-                sms_provider.complete(activation_id, http)
+                    _submit_phone_code(session, sms_code)
                 logger.info("[Codex] 手机号验证通过")
                 return
-
             except sms_provider.SmsNoBalanceError:
                 # 余额不足，重试无意义，直接抛
                 raise
+            except sms_provider.SmsCodeTimeout as exc:
+                last_err = exc
+                logger.warning(
+                    f"[Codex] 号码在 {_cfg.SMS_CODE_WAIT}s 内未收到短信，已取消并换号"
+                )
+                _sleep_before_phone_retry(attempt, max_retries)
             except sms_provider.SmsProviderError as exc:
                 last_err = exc
                 logger.warning(f"[Codex] 接码尝试 {attempt} 失败：{exc}")
-                if activation_id:
-                    sms_provider.cancel(activation_id, http)
                 _sleep_before_phone_retry(attempt, max_retries)
-                continue
+            except _PhoneNumberRejected as exc:
+                last_err = exc
+                _sleep_before_phone_retry(attempt, max_retries)
 
         raise RuntimeError(
             f"[Codex] 手机号验证重试 {max_retries} 次仍失败（provider={provider}）"
@@ -1007,7 +1015,7 @@ def _get_workspace_id(session: BrowserSession) -> str:
     """
     raw = None
     try:
-        # curl_cffi cookies
+        # 原生 Cookie Jar
         for c in session.session.cookies.jar:
             if c.name == "oai-client-auth-session":
                 raw = c.value

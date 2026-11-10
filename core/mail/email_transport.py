@@ -38,9 +38,3 @@ def requests_request(method: str, url: str, **kwargs):
         return requests.request(method, url, **kwargs)
     with requests_session() as session:
         return session.request(method, url, **kwargs)
-
-
-def configure_curl_session(session):
-    if direct_email_requests_enabled():
-        session.trust_env = False
-    return session

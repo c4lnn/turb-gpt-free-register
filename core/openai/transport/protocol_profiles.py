@@ -26,7 +26,7 @@ def align_browser_profile(profile, name):
     family, version = re.fullmatch(r'(chrome|edge|firefox|safari)([\d_a]+)', name).groups()
     major = re.match(r'\d+', version).group()
     if family == 'safari':
-        # curl_cffi 用 safari184 / safari2601；wreq 用 safari18_3 / safari26_1。
+        # wreq 的 Safari 指纹按 safari18_3 / safari26_1 命名，这里还原成版本号。
         version = version.replace('_', '.') if '_' in version else (version[:2] + '.' + '.'.join(version[2:]) if len(version) > 2 else version + '.0')
     else:
         version = f'{major}.0.0.0'

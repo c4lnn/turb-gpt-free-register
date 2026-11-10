@@ -9,7 +9,7 @@ from contextlib import contextmanager
 import unittest
 from unittest.mock import Mock, patch
 
-from curl_cffi.requests import Cookies
+from requests.cookies import RequestsCookieJar
 from config import browser as browser_cfg
 from core.openai.auth import openai_auth
 from core.infra import job_context
@@ -35,11 +35,31 @@ class _Response:
             raise RuntimeError(f"HTTP {self.status_code}")
 
 
+class _FakeCookies:
+    """WreqCookies 的最小替身：会话只用到 set / get / jar / clear。"""
+
+    def __init__(self):
+        self._jar = RequestsCookieJar()
+
+    @property
+    def jar(self):
+        return self._jar
+
+    def set(self, name, value, domain="", path="/", secure=False, **_kwargs):
+        self._jar.set(name, str(value), domain=domain or "", path=path or "/", secure=secure)
+
+    def get(self, name, default=None, domain=None, path=None):
+        return self._jar.get(name, default, domain=domain, path=path)
+
+    def clear(self):
+        self._jar.clear()
+
+
 class _Transport:
     """受控 raw 传输：只服务 trace 与 csrf，其余返回 200 空响应。"""
 
     def __init__(self, trace, warmup):
-        self.cookies = Cookies()
+        self.cookies = _FakeCookies()
         self.trace = trace
         self.warmup = warmup
         self.closed = False
@@ -162,7 +182,7 @@ class RegistrationPreflightTests(unittest.TestCase):
 
     def test_missing_registration_backend_aborts_before_opening_transport(self):
         with patch("core.openai.transport.protocol_profiles.validate_protocol_profile", side_effect=ValueError("backend unavailable")), patch(
-            "core.openai.transport.wreq_session.WreqSession", side_effect=AssertionError("transport must not open")
+            "core.infra.wreq_session.WreqSession", side_effect=AssertionError("transport must not open")
         ):
             with self.assertRaisesRegex(ValueError, "backend unavailable"):
                 BrowserSession(proxy="", detect_exit_geo=False, server_device_id=True)
@@ -487,7 +507,7 @@ class RegistrationGeoGateTests(unittest.TestCase):
         with patch("core.openai.transport.session.pick_proxy", return_value="http://127.0.0.1:9"), patch(
             "core.infra.proxy_chain.open_proxy_pool_proxy", return_value=("http://127.0.0.1:9", relay)
         ), patch(
-            "core.openai.transport.wreq_session.WreqSession", return_value=raw
+            "core.infra.wreq_session.WreqSession", return_value=raw
         ), patch(
             "core.openai.transport.session.validate_browser_profile", side_effect=RuntimeError("synthetic profile failure")
         ):

@@ -67,7 +67,7 @@ class WreqCookies:
 
 
 class WreqSession:
-    def __init__(self, impersonate):
+    def __init__(self, impersonate, *, default_headers: bool = True):
         try:
             import wreq
             from wreq.blocking import Client
@@ -80,13 +80,18 @@ class WreqSession:
             raise ValueError(f"wreq 不支持指纹 {impersonate}，请检查浏览器配置及 wreq 版本")
         self.impersonate = profile_name
         self._wreq = wreq
-        jar = wreq.Jar()
         # default_headers 只在逐请求配置里生效；Client 层传入会被静默忽略。
         # 默认头的抑制统一在 request() 中施加，见该方法内的说明。
+        # 旁路模块（邮箱 / 接码 / 管理 API）要完整浏览器头，故构造期默认保留。
+        self._default_headers = bool(default_headers)
+        jar = wreq.Jar()
         self._client = Client(emulation=profile, cookie_provider=jar, no_proxy=True)
         self.cookies = WreqCookies(jar, wreq)
         self.proxies = {}
         self.timeout = 30
+        # 会话级默认头，语义同 requests.Session.headers：逐请求可覆盖。
+        # 旁路模块习惯用 s.headers.update({...}) 固化 UA/Origin/Referer。
+        self.headers = CaseInsensitiveDict()
 
     def _build_proxy(self, proxy):
         """把 requests 风格的代理 URL 转成 wreq Proxy，并保留账号密码。
@@ -118,8 +123,20 @@ class WreqSession:
         # 导航时发送，出现在 XHR 上属于明显的非浏览器特征。导航头由
         # BrowserSession 的导航头构造函数显式写入，不受此处影响。
         # 注意：只能逐请求传 False；传空串会发出空值头，传 None 会抛 TypeError。
-        options = {"default_headers": False}
-        for key in ("headers", "json", "cookies"):
+        # 旁路模块保留默认头，因为它们的站点不做导航/XHR 区分，且普遍缺少显式 UA。
+        options = {"default_headers": self._default_headers}
+        # 会话级默认头先铺底，逐请求 headers 覆盖同名项。值为 None 表示显式
+        # 移除该头（requests 约定），wreq 不接受 None，故在此滤掉。
+        merged_headers = {k: v for k, v in self.headers.items() if v is not None}
+        if "headers" in kwargs:
+            for key, value in (kwargs.pop("headers") or {}).items():
+                if value is None:
+                    merged_headers.pop(key, None)
+                else:
+                    merged_headers[key] = value
+        if merged_headers:
+            options["headers"] = merged_headers
+        for key in ("json", "cookies"):
             if key in kwargs:
                 options[key] = kwargs.pop(key)
         if "params" in kwargs:

@@ -107,7 +107,7 @@ pip install -r requirements.txt
 node --version
 ```
 
-注册入口固定使用已声明的 `wreq==0.13.0` 与 `chrome152`，HTTP UA／Client Hints 和 SDK navigator／userAgentData 同步为 152，平台仍为既有 macOS。缺依赖或不支持该档位时在认证前失败，不自动安装或退回 curl_cffi。共享 `PROTOCOL_HTTP_CLIENT`、`CURL_CFFI_IMPERSONATE`、`WREQ_EMULATION` 继续控制独立查活、Codex 和补设 2FA，不覆盖注册入口；注册同步 2FA 沿用成功注册会话及既有重认证流程。
+注册入口固定使用已声明的 `wreq==0.13.0` 与 `chrome152`，HTTP UA／Client Hints 和 SDK navigator／userAgentData 同步为 152，平台仍为既有 macOS。缺依赖或不支持该档位时在认证前失败，不自动安装或退回其它传输库。共享 `WREQ_EMULATION` 继续控制独立查活、Codex 和补设 2FA，不覆盖注册入口；注册同步 2FA 沿用成功注册会话及既有重认证流程。
 
 ### 注册地域与 SDK 运行要求
 
@@ -669,7 +669,7 @@ ENABLE_CODEX_AUTO = False
 
 - [LINUX DO](https://linux.do) — 社区交流与用户反馈
 - [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) — Codex OAuth 凭证格式参考
-- [curl_cffi](https://github.com/yifeikong/curl_cffi) — 底层 HTTP 库，提供 TLS 指纹 impersonate 能力
+- [wreq](https://github.com/0x676e67/wreq) — 底层 HTTP 库，提供 TLS 指纹与 HTTP/2 模拟能力
 
 ---
 

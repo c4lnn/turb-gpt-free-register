@@ -11,7 +11,7 @@ config 包的统一入口。
     from config.proxy import pick_proxy
 
 子模块清单：
-    config.browser           浏览器指纹 / curl_cffi impersonate / HTTP 超时
+    config.browser           浏览器指纹 / TLS impersonate / HTTP 超时
     config.openai_protocol   OpenAI OAuth 固定参数 / Sentinel 版本
     config.proxy             代理池 + 随机抽取
     config.register          注册默认信息（邮箱、密码、名称、生日）

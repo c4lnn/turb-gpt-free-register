@@ -21,9 +21,11 @@ import json
 import logging
 import threading
 import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from urllib.parse import urljoin
 
-from curl_cffi.requests import Session as CurlSession
+from core.infra.wreq_session import WreqSession
 
 # 注意：用 `from config import codex` 而不是 `from config.codex import X`，
 # 这样 WebUI 调 config.reload_all() 后，本模块通过 codex.X 读到的是最新值。
@@ -57,8 +59,8 @@ class SmsCodeTimeout(SmsProviderError):
     """单个号等短信超时（OpenAI 没发或没到达）。"""
 
 
-def _http() -> CurlSession:
-    s = CurlSession(impersonate=IMPERSONATE)
+def _http() -> WreqSession:
+    s = WreqSession(IMPERSONATE)
     s.timeout = _cfg.SMS_REQUEST_TIMEOUT
     return s
 
@@ -89,7 +91,7 @@ def activation_for_log(value: str) -> str:
     return f"***{text[-3:]}" if len(text) > 3 else "***"
 
 
-def _request_grizzly(http: CurlSession, params: dict) -> str:
+def _request_grizzly(http: WreqSession, params: dict) -> str:
     """
     发一个 GrizzlySMS API 请求，返回去空白的响应文本。
     统一识别公共错误码并抛对应异常。
@@ -139,7 +141,7 @@ def _l_headers() -> dict:
     }
 
 
-def _post_l_json(http: CurlSession, path: str, payload: dict) -> dict:
+def _post_l_json(http: WreqSession, path: str, payload: dict) -> dict:
     resp = http.post(_l_url(path), headers=_l_headers(), data=json.dumps(payload))
     text = (resp.text or "").strip()
     try:
@@ -181,7 +183,7 @@ def _h_headers() -> dict:
     }
 
 
-def _post_h_json(http: CurlSession, path: str, payload: dict) -> dict:
+def _post_h_json(http: WreqSession, path: str, payload: dict) -> dict:
     resp = http.post(_h_url(path), headers=_h_headers(), data=json.dumps(payload))
     text = (resp.text or "").strip()
     try:
@@ -206,7 +208,7 @@ def _post_h_json(http: CurlSession, path: str, payload: dict) -> dict:
     return data
 
 
-def _release_h_number(activation_id: str, http: CurlSession | None = None) -> dict:
+def _release_h_number(activation_id: str, http: WreqSession | None = None) -> dict:
     """调用 H_API /api/admin/h/release 释放单个号码。"""
     activation_id = str(activation_id or "").strip()
     if not activation_id:
@@ -228,7 +230,7 @@ def _release_h_number(activation_id: str, http: CurlSession | None = None) -> di
             http.close()
 
 
-def release_h_numbers(ids: list[str], http: CurlSession | None = None) -> dict:
+def release_h_numbers(ids: list[str], http: WreqSession | None = None) -> dict:
     """批量释放 H 号码。"""
     ids = [str(x or "").strip() for x in (ids or []) if str(x or "").strip()]
     if not ids:
@@ -248,7 +250,7 @@ def release_h_numbers(ids: list[str], http: CurlSession | None = None) -> dict:
             http.close()
 
 
-def _release_l_number(activation_id: str, http: CurlSession | None = None) -> dict:
+def _release_l_number(activation_id: str, http: WreqSession | None = None) -> dict:
     """调用 L_API /api/admin/l/release 释放单个号码。"""
     activation_id = str(activation_id or "").strip()
     if not activation_id:
@@ -271,7 +273,7 @@ def _release_l_number(activation_id: str, http: CurlSession | None = None) -> di
             http.close()
 
 
-def release_l_numbers(ids: list[str], http: CurlSession | None = None) -> dict:
+def release_l_numbers(ids: list[str], http: WreqSession | None = None) -> dict:
     """批量释放 L 号码，供工具/后续批处理复用。"""
     ids = [str(x or "").strip() for x in (ids or []) if str(x or "").strip()]
     if not ids:
@@ -329,7 +331,7 @@ def _h_phone_acquire_mode() -> str:
 # ============================================================
 
 def acquire_number(
-    http: CurlSession | None = None,
+    http: WreqSession | None = None,
     service: str | None = None,
     country: str | None = None,
 ) -> tuple[str, str]:
@@ -439,7 +441,7 @@ def acquire_number(
 
 def wait_for_sms_code(
     activation_id: str,
-    http: CurlSession | None = None,
+    http: WreqSession | None = None,
     max_wait: int | None = None,
     poll_interval: int | None = None,
 ) -> str:
@@ -535,7 +537,7 @@ def wait_for_sms_code(
 # 改状态
 # ============================================================
 
-def set_status(activation_id: str, status: int, http: CurlSession | None = None) -> str:
+def set_status(activation_id: str, status: int, http: WreqSession | None = None) -> str:
     """
     设置激活状态（setStatus）。
         1 = 号码已就绪（短信已发出）
@@ -558,7 +560,7 @@ def set_status(activation_id: str, status: int, http: CurlSession | None = None)
             http.close()
 
 
-def complete(activation_id: str, http: CurlSession | None = None) -> None:
+def complete(activation_id: str, http: WreqSession | None = None) -> None:
     """标记激活完成（status=6）。失败只告警不抛，避免影响主流程。"""
     if _provider() == "smsbower":
         from core.sms.smsbower_provider import get_provider
@@ -594,7 +596,7 @@ def _do_cancel_sync(activation_id: str, http_factory) -> None:
             )
             time.sleep(wait)
 
-    # 后台线程不能复用外部 http session（curl_cffi 非线程安全），自己建一个
+    # 后台线程不能复用外部 http session（传输会话非线程安全），自己建一个
     http = http_factory()
     try:
         for attempt in range(1, 3):
@@ -618,7 +620,7 @@ def _do_cancel_sync(activation_id: str, http_factory) -> None:
             pass
 
 
-def cancel(activation_id: str, http: CurlSession | None = None, background: bool = True) -> None:
+def cancel(activation_id: str, http: WreqSession | None = None, background: bool = True) -> None:
     """
     取消激活（status=8），释放号码避免白扣费。
 
@@ -661,3 +663,52 @@ def cancel(activation_id: str, http: CurlSession | None = None, background: bool
     )
     t.start()
     logger.debug(f"[SMS] 取消任务已派后台：activation_id={activation_id}")
+
+
+@contextmanager
+def activation(
+    *,
+    http: WreqSession | None = None,
+    service: str | None = None,
+    country: str | None = None,
+    on_number: Callable[[str, str], None] | None = None,
+) -> Iterator[tuple[str, str]]:
+    """号码生命周期上下文：取号 → 通知目标站点发短信 → 使用 → 释放。
+
+    封装「取号 → 置已发出 → 收码/验码 → 成功 complete / 异常 cancel」这条链路，
+    使调用方不必了解各接码平台的状态机差异（L 平台忽略状态设置、H 平台成功
+    后不主动释放、GrizzlySMS 取消需等够 2 分钟等）。
+
+    Args:
+        on_number: 拿到号码后的回调 ``(activation_id, phone)``，负责让目标站点
+            把短信发到该号码。抛异常表示该号不可用，上下文会取消号码并原样抛出，
+            由调用方决定是否换号重试。
+        service / country: 透传给 acquire_number 的选号条件。
+
+    Yields:
+        ``(activation_id, phone)``，phone 不带 ``+`` 前缀。
+
+    Raises:
+        SmsNoNumbersError / SmsNoBalanceError / SmsProviderError: 取自号或回调。
+        SmsCodeTimeout: 调用方在 with 块内收码超时时自行抛出，号码仍会被取消。
+    """
+    own_http = http is None
+    http = http or _http()
+    try:
+        activation_id, phone = acquire_number(http, service=service, country=country)
+        try:
+            if on_number is not None:
+                on_number(activation_id, phone)
+            set_status(activation_id, 1, http=http)
+        except BaseException:
+            cancel(activation_id, http)
+            raise
+        try:
+            yield activation_id, phone
+        except BaseException:
+            cancel(activation_id, http)
+            raise
+        complete(activation_id, http)
+    finally:
+        if own_http:
+            http.close()

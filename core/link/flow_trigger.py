@@ -10,7 +10,7 @@ import json
 import logging
 
 # 这是个内部 HTTP 接口（156.225.31.95），无 Cloudflare 拦截，
-# 不需要 curl_cffi 的 TLS 指纹模拟，直接用标准 requests 库。
+# 不需要 TLS 指纹模拟，直接用标准 requests 库。
 import requests
 
 # 用模块属性方式读 config，支持 WebUI 热加载（config.reload_all()）。

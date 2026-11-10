@@ -7,8 +7,7 @@ import logging
 import time
 from decimal import Decimal, InvalidOperation
 
-from curl_cffi.requests import Session as CurlSession
-
+from core.infra.wreq_session import WreqSession
 from config import IMPERSONATE
 from config import codex as _cfg
 from core.sms.sms_provider import SmsCodeTimeout, SmsNoBalanceError, SmsNoNumbersError, SmsProviderError
@@ -112,7 +111,7 @@ class SmsBowerProvider:
         self.acquired_at = acquired_at if acquired_at is not None else {}
 
     def _new_http(self):
-        session = CurlSession(impersonate=IMPERSONATE)
+        session = WreqSession(IMPERSONATE)
         session.timeout = int(getattr(self.config, "SMS_REQUEST_TIMEOUT", 30) or 30)
         return session
 

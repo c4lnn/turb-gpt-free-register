@@ -6,11 +6,6 @@ import json
 from urllib.parse import quote, urlencode
 from urllib.request import ProxyHandler, Request, build_opener, urlopen
 
-try:
-    from curl_cffi import requests as curl_requests
-except Exception:
-    curl_requests = None
-
 
 class ProviderError(RuntimeError):
     def __init__(self, message: str, *, status_code: int | None = None, retryable: bool = False):
@@ -52,15 +47,12 @@ class _BaseProvider:
             raise ValueError("提链服务地址为空")
         self.timeout = int(timeout)
         self.proxy = str(proxy or "").strip()
-        self.session = session if session is not None else (curl_requests.Session() if curl_requests else None)
-        self._owns_session = session is None
+        # 提链是内网/自建服务，不需要 TLS 指纹，默认走标准 urllib。
+        # session 仅作为测试注入点保留；注入后使用其 request/get 接口。
+        self.session = session
 
     def close(self) -> None:
-        if self._owns_session and self.session is not None:
-            try:
-                self.session.close()
-            except Exception:
-                pass
+        """默认 urllib 无需释放连接；注入的 session 由注入方负责关闭。"""
 
     def _request_json(self, method: str, path: str, *, headers: dict | None = None, json_body=None) -> dict:
         url = f"{self.base_url}{path}"

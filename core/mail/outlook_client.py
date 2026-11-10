@@ -35,8 +35,6 @@ from email.header import decode_header
 from urllib.parse import urlencode
 from pathlib import Path
 
-from curl_cffi.requests import Session as CurlSession
-
 from config import (
     OUTLOOK_ACCOUNTS_FILE,
     OUTLOOK_API_BASE,
@@ -47,7 +45,7 @@ from config import (
 # OTP_POLL_INTERVAL / OTP_MAX_WAIT 是 WebUI 可热改的，从模块读
 from config import email as _email_cfg
 from core.mail.otp_extract import looks_like_openai_email, extract_otp
-from core.mail.email_transport import configure_curl_session
+from core.infra.wreq_session import WreqSession
 
 logger = logging.getLogger(__name__)
 
@@ -81,8 +79,8 @@ def _cache_key(email: str) -> str:
     return str(email or "").strip().lower()
 
 
-def _http_session() -> CurlSession:
-    s = configure_curl_session(CurlSession(impersonate=IMPERSONATE))
+def _http_session() -> WreqSession:
+    s = WreqSession(IMPERSONATE)
     s.headers.update({
         "User-Agent": USER_AGENT,
         "Origin": OUTLOOK_API_BASE.rstrip("/"),
@@ -134,7 +132,7 @@ _sec_session: dict | None = None
 _sec_session_lock = threading.Lock()
 
 
-def _get_security_session(http: CurlSession) -> dict:
+def _get_security_session(http: WreqSession) -> dict:
     """获取或刷新安全会话（有效期内复用，过期自动续期）。"""
     global _sec_session
     now_ms = int(time.time() * 1000)
@@ -169,7 +167,7 @@ def _get_security_session(http: CurlSession) -> dict:
         return _sec_session
 
 
-def _secure_post(http: CurlSession, url: str, payload: dict, retry: int = 0) -> dict:
+def _secure_post(http: WreqSession, url: str, payload: dict, retry: int = 0) -> dict:
     """
     用 AES-GCM + HMAC-SHA256 加密请求体后发送到 mail.chatai.codes，
     返回已解析的 JSON dict。401/403 时自动刷新 session 重试一次。
@@ -397,8 +395,8 @@ def _is_remote_disabled_error(exc: Exception | str) -> bool:
     return "DEPLOYMENT_DISABLED" in text or "HTTP 402" in text or "Payment required" in text
 
 
-def _ms_http() -> CurlSession:
-    s = configure_curl_session(CurlSession(impersonate=IMPERSONATE))
+def _ms_http() -> WreqSession:
+    s = WreqSession(IMPERSONATE)
     s.headers.update({
         "User-Agent": USER_AGENT,
         "Accept": "application/json",
@@ -533,7 +531,7 @@ def _imap_msg_to_dict(msg) -> dict:
 
 def _ms_access_token(
     account: OutlookAccount,
-    http: CurlSession | None = None,
+    http: WreqSession | None = None,
     preferred_kind: str | None = None,
 ) -> tuple[str, str]:
     """用 refresh_token 换取可读邮件的 access_token。
@@ -635,7 +633,7 @@ def _ms_access_token(
             http.close()
 
 
-def _live_imap_access_token(account: OutlookAccount, http: CurlSession | None = None) -> str:
+def _live_imap_access_token(account: OutlookAccount, http: WreqSession | None = None) -> str:
     """使用 Outlook/Live OAuth 端点刷新 IMAP(New) access_token。
 
     一些外购 Outlook 素材的 refresh_token 不能在 login.microsoftonline.com 换取
@@ -701,7 +699,7 @@ def _normalize_ms_message(m: dict) -> dict:
     }
 
 
-def _fetch_graph_messages(http: CurlSession, token: str) -> list[dict]:
+def _fetch_graph_messages(http: WreqSession, token: str) -> list[dict]:
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/json",
@@ -728,7 +726,7 @@ def _fetch_graph_messages(http: CurlSession, token: str) -> list[dict]:
     return out
 
 
-def _fetch_outlook_rest_messages(http: CurlSession, token: str) -> list[dict]:
+def _fetch_outlook_rest_messages(http: WreqSession, token: str) -> list[dict]:
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/json",
@@ -886,7 +884,7 @@ def _fetch_via_graph_direct(account: OutlookAccount) -> list[dict]:
         http.close()
 
 
-def _fetch_via(session: CurlSession, protocol: str, account: OutlookAccount) -> list[dict]:
+def _fetch_via(session: WreqSession, protocol: str, account: OutlookAccount) -> list[dict]:
     """
     拉收件箱，返回 emails 列表。
 

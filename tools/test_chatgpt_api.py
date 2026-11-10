@@ -4,21 +4,21 @@
 ChatGPT backend-api 指纹环境请求测试脚本。
 
 用途：
-    先创建项目统一 BrowserSession 指纹环境（curl_cffi TLS 指纹 + UA/语言/时区画像 + oai-did cookie），
+    先创建项目统一 BrowserSession 指纹环境（wreq TLS 指纹 + UA/语言/时区画像 + oai-did cookie），
     再用该环境测试 ChatGPT backend-api 的 Bearer token 请求。
 
 用法：
     # 方式1：直接参数传 token
-    python3 tools/test_chatgpt_curl_cffi.py --token '<JWT>' --verbose
+    python3 tools/test_chatgpt_api.py --token '<JWT>' --verbose
 
     # 方式2：从文件读取 token（默认取第一条非空行；允许有 Bearer 前缀）
-    python3 tools/test_chatgpt_curl_cffi.py --token-file 注册成功的token.txt
+    python3 tools/test_chatgpt_api.py --token-file 注册成功的token.txt
 
     # 方式3：测试 subscriptions，需要传 account_id
-    python3 tools/test_chatgpt_curl_cffi.py --token '<JWT>' --endpoint subscriptions --account-id '<account_id>'
+    python3 tools/test_chatgpt_api.py --token '<JWT>' --endpoint subscriptions --account-id '<account_id>'
 
     # 代理：不传则沿用项目 pick_proxy()；传空字符串禁用代理；传具体地址使用指定代理
-    python3 tools/test_chatgpt_curl_cffi.py --token '<JWT>' --proxy ''
+    python3 tools/test_chatgpt_api.py --token '<JWT>' --proxy ''
 
 说明：
     - 本脚本不会把 token 落盘。
@@ -41,7 +41,7 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 
 from core.openai.transport.session import BrowserSession  # noqa: E402
 
-logger = logging.getLogger("chatgpt_curl_cffi_test")
+logger = logging.getLogger("chatgpt_api_test")
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -177,7 +177,7 @@ def _print_profile(env: BrowserSession) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="ChatGPT backend-api curl_cffi 指纹环境请求测试",
+        description="ChatGPT backend-api 指纹环境请求测试",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )

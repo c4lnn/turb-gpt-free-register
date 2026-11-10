@@ -5,7 +5,6 @@ from unittest.mock import Mock, patch
 from config import email as email_config
 from core.mail import email_provider
 from core.mail.email_transport import (
-    configure_curl_session,
     direct_email_requests,
     direct_email_requests_enabled,
     requests_request,
@@ -30,12 +29,6 @@ class DirectEmailTransportTests(unittest.TestCase):
             self.assertFalse(direct_email_requests_enabled())
         self.assertEqual(session_factory.call_count, 3)
         fake_session.request.assert_called_once_with("GET", "https://mail.example.test/otp")
-
-    def test_curl_provider_session_ignores_environment_proxies_in_direct_scope(self):
-        session = Mock(trust_env=True)
-        with direct_email_requests():
-            self.assertIs(configure_curl_session(session), session)
-        self.assertFalse(session.trust_env)
 
     def test_all_automatic_otp_provider_dispatches_run_in_direct_scope(self):
         providers = {

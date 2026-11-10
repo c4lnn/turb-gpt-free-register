@@ -2,7 +2,7 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from core.openai.transport.wreq_session import WreqSession
+from core.infra.wreq_session import WreqSession
 
 
 class WreqCookieOriginTests(unittest.TestCase):
@@ -97,7 +97,7 @@ class WreqDefaultHeaderTests(unittest.TestCase):
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
-        session = WreqSession("chrome152")
+        session = WreqSession("chrome152", default_headers=False)
         try:
             origin = f"http://127.0.0.1:{server.server_port}"
             session.post(origin + "/api/auth/signin/openai?prompt=login",
@@ -124,6 +124,57 @@ class WreqDefaultHeaderTests(unittest.TestCase):
             self.assertTrue(sent.get(name), f"缺少头: {name}")
         self.assertEqual(sent.get("content-length"), str(len(body)))
         self.assertEqual([name for name, value in headers if value == ""], [])
+
+
+class WreqBypassSessionTests(unittest.TestCase):
+    """旁路模块（邮箱 / 接码 / 管理 API）需要完整浏览器头，默认保留传输层默认头。"""
+
+    def _capture_get(self, session, path="/ping", **kwargs):
+        captured = {}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                captured["headers"] = {name.lower(): value for name, value in self.headers.items()}
+                payload = b"ok"
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            session.get(f"http://127.0.0.1:{server.server_port}{path}", **kwargs)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+        return captured["headers"]
+
+    def test_bypass_session_keeps_transport_default_headers(self):
+        session = WreqSession("chrome146")
+        try:
+            sent = self._capture_get(session)
+        finally:
+            session.close()
+        self.assertTrue(sent.get("user-agent", "").startswith("Mozilla/5.0"))
+        self.assertEqual(sent.get("sec-fetch-mode"), "navigate")
+        self.assertEqual(sent.get("upgrade-insecure-requests"), "1")
+
+    def test_session_headers_layer_overrides_defaults(self):
+        session = WreqSession("chrome146")
+        session.headers.update({"User-Agent": "custom-ua/1.0", "X-Session": "yes"})
+        try:
+            sent = self._capture_get(session, headers={"X-Request": "1"})
+        finally:
+            session.close()
+        self.assertEqual(sent.get("user-agent"), "custom-ua/1.0")
+        self.assertEqual(sent.get("x-session"), "yes")
+        self.assertEqual(sent.get("x-request"), "1")
 
 
 if __name__ == "__main__":

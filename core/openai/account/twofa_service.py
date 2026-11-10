@@ -70,7 +70,7 @@ def _normalize_proxy(proxy: str | None) -> str | None:
     2FA 入口只接受真实代理地址。
 
     注册流程里有些 `proxy_used` 字段保存的是环境标签，例如 `skyvern:jp`、
-    `browser_use:jp`，这类不是 curl_cffi 可用代理，会导致 Unsupported proxy syntax。
+    `browser_use:jp`，这类不是 HTTP 代理，会导致 Unsupported proxy syntax。
     """
     text = str(proxy or "").strip()
     if not text:
