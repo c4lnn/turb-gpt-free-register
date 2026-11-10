@@ -9,11 +9,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import main as registration
 from core.openai.codex import codex_oauth
 from core.infra import db, job_context
 from core.mail import email_provider
 from core.link import flow_trigger
+from core.openai.register import registration_flow as registration
 from core.openai.register import registration_service
 from config import register as register_config
 
@@ -349,7 +349,7 @@ class RegistrationPipelineTests(unittest.TestCase):
             self.assertEqual(db.count_accounts(), 0)
             raise TimeoutError("OTP delivery failed")
 
-        with self._pipeline({}) as (session, _), self.assertLogs("main", level="INFO") as captured, \
+        with self._pipeline({}) as (session, _), self.assertLogs(registration.logger, level="INFO") as captured, \
                 patch.object(registration, "register_user", side_effect=submit), \
                 patch.object(registration, "navigate_email_otp_send", side_effect=send):
             result = self._run()
@@ -592,7 +592,7 @@ class RegistrationPipelineTests(unittest.TestCase):
                         patch.object(registration, "release_email_if_unconsumed",
                             wraps=email_provider.release_email_if_unconsumed):
                     if outcome == "exception":
-                        with patch.object(registration, "run_registration", side_effect=raise_after_classification):
+                        with patch.object(registration_service, "run_registration", side_effect=raise_after_classification):
                             registration_service._run_one_job(job["id"], str(self.root / f"{outcome}.log"))
                     else:
                         registration_service._run_one_job(job["id"], str(self.root / f"{outcome}.log"))

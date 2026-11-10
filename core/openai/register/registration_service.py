@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from core.openai.codex import codex_retry_service
+from core.openai.register.registration_flow import run_registration
 from core.infra import db
 from core.infra import job_context
 from core.infra.contracts.account_status import codex_auth_status
@@ -267,7 +268,6 @@ def _run_one_job(job_id: int, log_file: str) -> None:
     email: str | None = None
     try:
         with _JobLogContext(log_file):
-            from main import run_registration
             log_logger.info(f"[Job {job_id}] 开始注册任务")
             email, name, birthday = _prepare_registration_args()
             db.update_job(job_id, email=email)
