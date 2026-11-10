@@ -1812,38 +1812,6 @@
       min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
     .config-main-v2 { min-width: 0; display: grid; gap: 16px; }
-    .config-cards-v2 {
-      display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px;
-    }
-    .config-card-v2 {
-      min-height: 108px; padding: 16px;
-      border: 1px solid #ebeef5; border-radius: 10px; background: #fff;
-      box-shadow: 0 0 12px rgba(0,0,0,.04);
-      display: flex; flex-direction: column; gap: 8px;
-      position: relative;
-    }
-    .config-card-v2-top {
-      display: flex; align-items: flex-start; justify-content: space-between; gap: 8px;
-    }
-    .config-card-v2-label {
-      font-size: 12px; color: #909399; line-height: 1.3;
-    }
-    .config-card-v2-icon {
-      width: 28px; height: 28px; border-radius: 8px; flex-shrink: 0;
-      color: #409eff; background: color-mix(in srgb, #409eff 12%, transparent);
-      display: inline-flex; align-items: center; justify-content: center;
-    }
-    .config-card-v2-icon svg {
-      width: 15px; height: 15px; stroke: currentColor; fill: none;
-      stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
-    }
-    .config-card-v2-value {
-      font-size: 18px; font-weight: 700; color: #303133; line-height: 1.25;
-    }
-    .config-card-v2-value.is-placeholder { color: #c0c4cc; }
-    .config-card-v2-hint {
-      margin-top: auto; font-size: 12px; color: #909399; line-height: 1.4;
-    }
     .config-ep-select {
       position: relative; display: block; width: 100%; margin-top: 2px;
     }
@@ -2108,15 +2076,9 @@
     @media (max-width: 1100px) {
       .config-switches-v2 { grid-template-columns: 1fr; gap: 16px; }
     }
-    @media (max-width: 1100px) {
-      .config-cards-v2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    }
     @media (max-width: 900px) {
       .config-layout-v2 { grid-template-columns: 1fr; }
       .config-nav-v2 { position: static; }
-    }
-    @media (max-width: 600px) {
-      .config-cards-v2 { grid-template-columns: 1fr; }
     }
 
     /* ---- 配置页概览 ---- */
@@ -2630,40 +2592,13 @@
       <p class="config-overview-v2-desc">仅开放运行时安全的开关与数值。协议级常量（client_id / sentinel 版本）不在此处，避免误改废号。修改后点保存即可热加载生效，无需重启。</p>
     </div>
 
-    <!-- 配置布局：左侧导航 + 右侧卡片/分区 -->
+    <!-- 配置布局：左侧导航 + 右侧配置分区 -->
     <div class="config-layout-v2" id="configLayoutV2">
       <aside class="config-nav-v2" aria-label="配置分组">
         <div class="config-nav-v2-title">配置分组</div>
         <div class="config-nav-v2-list" id="configNavV2"></div>
       </aside>
       <div class="config-main-v2">
-        <div class="config-cards-v2" id="configCardsV2" aria-label="配置概览卡片">
-          <div class="config-card-v2" id="configCardRegistrationV2">
-            <div class="config-card-v2-top">
-              <div class="config-card-v2-label">注册方式</div>
-              <span class="config-card-v2-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><path d="M4 6h7"/><path d="M4 12h7"/><path d="M4 18h7"/><path d="M15 6l5 6-5 6"/></svg>
-              </span>
-            </div>
-            <div class="config-card-v2-value" id="configCardRegistrationLabelV2">—</div>
-            <div class="config-card-v2-hint" id="configCardRegistrationHintV2">驱动标识: —</div>
-          </div>
-          <div class="config-card-v2">
-            <div class="config-card-v2-label">占位卡片 2</div>
-            <div class="config-card-v2-value is-placeholder">—</div>
-            <div class="config-card-v2-hint">内容稍后完善</div>
-          </div>
-          <div class="config-card-v2">
-            <div class="config-card-v2-label">占位卡片 3</div>
-            <div class="config-card-v2-value is-placeholder">—</div>
-            <div class="config-card-v2-hint">内容稍后完善</div>
-          </div>
-          <div class="config-card-v2">
-            <div class="config-card-v2-label">占位卡片 4</div>
-            <div class="config-card-v2-value is-placeholder">—</div>
-            <div class="config-card-v2-hint">内容稍后完善</div>
-          </div>
-        </div>
         <div class="config-sections-v2" id="configSectionsV2"></div>
       </div>
     </div>
@@ -6071,7 +6006,6 @@ function getConfigGroupNames() {
 function configSectionIntro(name) {
   if (name === '网站配置') return '配置网站登录授权码与 Session 签名密钥。';
   if (name === '功能开关') return '';
-  if (name === '注册方式') return '选择账号注册时使用的自动化方式。';
   if (name === 'RoxyBrowser') return 'RoxyBrowser API、环境与代理相关设置。';
   if (name === 'Codex') return 'Codex 授权驱动、CPA 与 sub2api 相关设置。';
   if (name === '邮箱 / OTP') return '邮箱来源、OTP 等待与各邮箱服务商参数。';
@@ -6119,35 +6053,6 @@ function renderConfigSectionHead(name, meta = '') {
     </div>
   `;
 }
-function registrationDriverChoices() {
-  return [
-    { value: 'protocol', label: '纯协议注册' },
-    { value: 'roxy', label: 'RoxyBrowser' },
-  ];
-}
-function getRegistrationDriverField() {
-  return (CONFIG || []).find(f => f.key === 'REGISTRATION_DRIVER') || null;
-}
-function getRegistrationDriverValue() {
-  const f = getRegistrationDriverField();
-  if (!f) return 'protocol';
-  const fv = Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, f.key) ? CONFIG_PENDING_UPDATES[f.key] : f.value;
-  return String(fv == null ? 'protocol' : fv).trim().toLowerCase() || 'protocol';
-}
-function getAutoPlanCheckField() {
-  return (CONFIG || []).find(f => f.key === 'AUTO_PLAN_CHECK_AFTER_REGISTER') || null;
-}
-function getAutoPlanCheckValue() {
-  const f = getAutoPlanCheckField();
-  if (!f) return false;
-  const fv = Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, f.key) ? CONFIG_PENDING_UPDATES[f.key] : f.value;
-  return !!fv;
-}
-function registrationDriverLabel(value) {
-  const cur = String(value || '').trim().toLowerCase();
-  const hit = registrationDriverChoices().find(c => String(c.value) === cur);
-  return hit ? String(hit.label || hit.value) : (cur || '—');
-}
 function closeConfigEpSelects(exceptId) {
   document.querySelectorAll('.config-ep-select.open').forEach(el => {
     if (exceptId && el.id === exceptId) return;
@@ -6161,60 +6066,6 @@ function toggleConfigEpSelect(wrapId, e) {
   const willOpen = !wrap.classList.contains('open');
   closeConfigEpSelects(wrapId);
   wrap.classList.toggle('open', willOpen);
-}
-function setRegistrationDriverValue(value) {
-  const cur = String(value || 'protocol').trim().toLowerCase() || 'protocol';
-  CONFIG_PENDING_UPDATES.REGISTRATION_DRIVER = cur;
-  closeConfigEpSelects();
-  renderRegistrationDriverCard();
-  const sectionMount = document.getElementById('configRegistrationSelectV2');
-  if (sectionMount) renderRegistrationEpSelect(sectionMount, 'configRegistrationSelectV2');
-  bindRoxyWorkspaceToolsV2();
-}
-function renderRegistrationEpSelect(mount, wrapId) {
-  if (!mount) return;
-  const cur = getRegistrationDriverValue();
-  const label = registrationDriverLabel(cur);
-  const items = registrationDriverChoices().map(c => `
-    <button type="button" class="config-ep-select-item${c.value === cur ? ' is-active' : ''}" role="option" data-driver-value="${attrEsc(c.value)}">${esc(c.label)}</button>
-  `).join('');
-  mount.className = 'config-ep-select';
-  mount.id = wrapId;
-  mount.innerHTML = `
-    <button type="button" class="config-ep-select-btn" data-ep-toggle="${attrEsc(wrapId)}">${esc(label)}</button>
-    <div class="config-ep-select-menu" role="listbox">${items}</div>
-    <input type="hidden" data-key="REGISTRATION_DRIVER" value="${attrEsc(cur)}">
-  `;
-}
-function renderRegistrationDriverCard() {
-  const cur = getRegistrationDriverValue();
-  const label = registrationDriverLabel(cur);
-  const labelEl = document.getElementById('configCardRegistrationLabelV2');
-  const hintEl = document.getElementById('configCardRegistrationHintV2');
-  if (labelEl) {
-    labelEl.textContent = label;
-    labelEl.classList.toggle('is-placeholder', !label || label === '—');
-  }
-  if (hintEl) hintEl.textContent = `驱动标识: ${cur} · 自动查套餐: ${getAutoPlanCheckValue() ? '开' : '关'}`;
-}
-function renderRegistrationDriverField(f) {
-  return `
-    <label class="fld config-select-v2-field">
-      注册方式
-      <span class="hint">选择注册所用的自动化方式</span>
-      <div class="config-ep-select" id="configRegistrationSelectV2"></div>
-    </label>
-  `;
-}
-function renderRegistrationSettingsSection(fields) {
-  const driver = fields.find(f => f.key === 'REGISTRATION_DRIVER') || fields[0];
-  const autoPlan = fields.find(f => f.key === 'AUTO_PLAN_CHECK_AFTER_REGISTER');
-  return `
-    <div class="config-section-v2-body config-section-v2-body--single">
-      ${driver ? renderRegistrationDriverField(driver) : '<div class="banner warn">未找到注册方式配置项</div>'}
-    </div>
-    ${autoPlan ? `<div class="config-switches-v2" style="margin-top:14px;">${renderFeatureSwitchField(autoPlan, { withIcon: false })}</div>` : ''}
-  `;
 }
 function renderFeatureSwitchField(f, opts = {}) {
   const fv = Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, f.key) ? CONFIG_PENDING_UPDATES[f.key] : f.value;
@@ -6711,7 +6562,7 @@ function renderConfigSectionV2(name, fields) {
     `;
   }
   if (name === '功能开关') {
-    const preferred = ['ENABLE_CODEX_AUTO', 'ENABLE_2FA', 'ENABLE_FLOW_TRIGGER'];
+    const preferred = ['ENABLE_CODEX_AUTO', 'ENABLE_2FA', 'ENABLE_FLOW_TRIGGER', 'AUTO_PLAN_CHECK_AFTER_REGISTER'];
     const ordered = preferred
       .map(k => fields.find(f => f.key === k))
       .filter(Boolean)
@@ -6722,17 +6573,6 @@ function renderConfigSectionV2(name, fields) {
         <div class="config-switches-v2">
           ${ordered.map(f => renderFeatureSwitchField(f, { withIcon: true })).join('')}
         </div>
-        <div class="config-section-v2-actions">
-          <button type="button" class="btn primary" data-save-config-v2>保存</button>
-        </div>
-      </section>
-    `;
-  }
-  if (name === '注册方式') {
-    return `
-      <section class="config-section-v2" id="${esc(slug)}" data-config-section="${esc(name)}">
-        ${renderConfigSectionHead(name, configSectionIntro(name))}
-        ${renderRegistrationSettingsSection(fields)}
         <div class="config-section-v2-actions">
           <button type="button" class="btn primary" data-save-config-v2>保存</button>
         </div>
@@ -6782,9 +6622,6 @@ function renderConfigLayoutV2() {
     </button>
   `).join('');
   sections.innerHTML = names.map(name => renderConfigSectionV2(name, groups[name] || [])).join('');
-  renderRegistrationDriverCard();
-  const sectionMount = document.getElementById('configRegistrationSelectV2');
-  if (sectionMount) renderRegistrationEpSelect(sectionMount, 'configRegistrationSelectV2');
   bindRoxyWorkspaceToolsV2();
   bindSmsbowerMetadataToolsV2();
   if (CONFIG_SMS_ACTIVE_SECTION_V2 === 'SMSBower' && !SMSBOWER_METADATA.loaded && !SMSBOWER_METADATA.loading) {
@@ -6867,13 +6704,6 @@ function bindConfigLayoutV2() {
       const toggle = e.target.closest('[data-ep-toggle]');
       if (toggle) {
         toggleConfigEpSelect(toggle.dataset.epToggle, e);
-        return;
-      }
-      const item = e.target.closest('[data-driver-value]');
-      if (item) {
-        e.preventDefault();
-        e.stopPropagation();
-        setRegistrationDriverValue(item.dataset.driverValue);
         return;
       }
       const oauthItem = e.target.closest('[data-codex-oauth-value]');
@@ -7002,7 +6832,6 @@ function trackConfigFieldChange(e) {
   const f = CONFIG.find(x => x.key === el.dataset.key);
   if (!f) return;
   CONFIG_PENDING_UPDATES[f.key] = readConfigElementValue(el, f);
-  if (f.key === 'AUTO_PLAN_CHECK_AFTER_REGISTER') renderRegistrationDriverCard();
 }
 $('#tab-config').addEventListener('input', trackConfigFieldChange);
 $('#tab-config').addEventListener('change', trackConfigFieldChange);
@@ -7010,7 +6839,7 @@ $('#tab-config').addEventListener('change', trackConfigFieldChange);
 async function saveConfigUpdates(triggerBtn) {
   const updates = {...CONFIG_PENDING_UPDATES};
   const seen = new Set();
-  $$('#configCardsV2 [data-key], #configSectionsV2 [data-key]').forEach(el => {
+  $$('#configSectionsV2 [data-key]').forEach(el => {
     const f = CONFIG.find(x => x.key === el.dataset.key);
     if (!f || seen.has(f.key)) return;
     seen.add(f.key);

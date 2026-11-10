@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import os
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from config import env_loader
@@ -69,6 +70,25 @@ class ConfigDefaultFallbackTests(unittest.TestCase):
         )
         self.assertTrue(config_editor._coerce_raw_value("", True, "bool"))
 
+
+    def test_auto_plan_check_remains_a_saved_feature_switch(self):
+        source_path = Path(__file__).resolve().parents[1] / "config" / "register.py"
+        source = source_path.read_text(encoding="utf-8")
+        self.assertFalse(config_editor._parse_value_from_source(
+            source, "AUTO_PLAN_CHECK_AFTER_REGISTER", "bool"
+        ))
+        field = next(item for item in config_editor.EDITABLE_FIELDS
+                     if item["key"] == "AUTO_PLAN_CHECK_AFTER_REGISTER")
+        self.assertEqual(field["group"], "功能开关")
+        self.assertEqual(field["type"], "bool")
+
+        with patch("config.env_loader.read_env_file", return_value={}), \
+                patch("config.env_loader.write_env_values", return_value=["AUTO_PLAN_CHECK_AFTER_REGISTER"]) as write_env, \
+                patch("config.env_loader.load_env"):
+            result = config_editor.update_config({"AUTO_PLAN_CHECK_AFTER_REGISTER": True})
+
+        self.assertEqual(result["updated"], ["AUTO_PLAN_CHECK_AFTER_REGISTER"])
+        write_env.assert_called_once_with({"AUTO_PLAN_CHECK_AFTER_REGISTER": "True"})
 
 if __name__ == "__main__":
     unittest.main()
