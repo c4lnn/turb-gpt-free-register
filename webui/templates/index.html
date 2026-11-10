@@ -153,33 +153,6 @@
     .status-partial_success { color: #9a6700; background: #fff7d6; }
     .status-running { color: var(--amber); background: #fff7e6; }
     .status-success { color: var(--green); background: #e9f7ef; }
-    .extract-link-cell {
-      display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-      margin-top: 4px; max-width: 100%;
-    }
-    .extract-link-cell .pill { min-width: auto; padding: 4px 10px; }
-    .extract-link-cell .extract-status-label {
-      width: auto; max-width: 100%; height: 26px; min-height: 26px;
-      min-width: 0; flex: 0 1 auto; box-sizing: border-box; justify-content: center;
-      overflow: visible; text-overflow: clip; white-space: nowrap;
-    }
-    .extract-link-btn {
-      min-height: 26px; border: 1px solid #cfe7dc; border-radius: 999px;
-      padding: 0 10px; font-size: 12px; font-weight: 800; line-height: 1;
-      display: inline-flex; align-items: center; justify-content: center; gap: 4px;
-      cursor: pointer; white-space: nowrap; transition: transform .12s ease, box-shadow .12s ease, background .12s ease;
-    }
-    .extract-link-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 10px rgba(22,128,60,.10); }
-    .extract-copy { color: #166534; background: linear-gradient(180deg, #f0fbf5, #e3f5ea); border-color: #b9dfc9; }
-    .extract-qr { color: #1d4ed8; background: linear-gradient(180deg, #f3f7ff, #e8f0ff); border-color: #bdd0ff; }
-    .extract-link-expire {
-      flex-basis: 100%; margin-top: 1px; color: #667085; font-size: 12px;
-      display: inline-flex; align-items: center; gap: 4px;
-    }
-    .extract-link-error {
-      flex-basis: 100%; color: var(--red); font-size: 12px; line-height: 1.35;
-      max-width: 260px; white-space: normal; overflow-wrap: anywhere;
-    }
     .actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
     .jobs-table td.actions-cell { text-align: center; vertical-align: middle; overflow: visible; }
     .job-actions { justify-content: center; flex-wrap: nowrap; width: 100%; }
@@ -200,20 +173,17 @@
       width: 100%; max-width: 100%; min-width: 0;
       max-height: 320px; overflow: auto; line-height: 1.5;
     }
-    #logPanel, #retryLogPanel, #liveLogPanel, #totpLogPanel, #qrPanel { min-width: 0; max-width: 100%; overflow-x: hidden; }
-    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #liveLogPanel:not(.hidden), #totpLogPanel:not(.hidden), #qrPanel:not(.hidden) {
+    #logPanel, #retryLogPanel, #liveLogPanel, #totpLogPanel { min-width: 0; max-width: 100%; overflow-x: hidden; }
+    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #liveLogPanel:not(.hidden), #totpLogPanel:not(.hidden) {
       position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
       z-index: 1000; display: block; width: min(1100px, calc(100vw - 48px));
       max-height: min(760px, calc(100vh - 48px)); overflow: hidden;
       padding: 16px; border: 1px solid var(--line); border-radius: 12px;
       background: var(--surface); box-shadow: 0 0 0 9999px rgba(15,23,42,.45), 0 24px 70px rgba(15,23,42,.34);
     }
-    #qrPanel:not(.hidden) { width: min(520px, calc(100vw - 48px)); text-align: center; }
-    #logPanel h3, #retryLogPanel h3, #liveLogPanel h3, #totpLogPanel h3, #qrPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
-    #logPanel h3 .btn, #retryLogPanel h3 .btn, #liveLogPanel h3 .btn, #totpLogPanel h3 .btn, #qrPanel h3 .btn { margin-left:auto; float:none !important; }
+    #logPanel h3, #retryLogPanel h3, #liveLogPanel h3, #totpLogPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+    #logPanel h3 .btn, #retryLogPanel h3 .btn, #liveLogPanel h3 .btn, #totpLogPanel h3 .btn { margin-left:auto; float:none !important; }
     #logPanel .log, #retryLogPanel .log, #liveLogPanel .log, #totpLogPanel .log { max-height: calc(min(760px, calc(100vh - 48px)) - 74px); margin-top:0; }
-    #qrPanel img { display:block; max-width:min(360px, calc(100vw - 96px)); max-height:420px; margin:12px auto; border:1px solid var(--line); border-radius:10px; background:#fff; }
-    #qrPanel .qr-link { display:block; word-break:break-all; white-space:normal; font-size:12px; color:var(--muted); margin-top:8px; }
     .hidden { display: none !important; }
     #toast {
       position: fixed; right: 18px; bottom: 18px; padding: 10px 14px; border-radius: 8px;
@@ -788,7 +758,6 @@
     .accounts-table-v2 .col-password { width: 120px; min-width: 120px; }
     .accounts-table-v2 .col-checkout { width: 190px; min-width: 190px; }
     .accounts-table-v2 .col-plan { width: 240px; min-width: 240px; }
-    .accounts-table-v2 .col-extract-link { width: 240px; min-width: 240px; }
     .accounts-table-v2 .col-note { width: 140px; }
     .accounts-table-v2 .col-small {
       width: 100px; min-width: 100px;
@@ -827,7 +796,6 @@
     .accounts-table-v2 .col-email,
     .accounts-table-v2 .col-checkout,
     .accounts-table-v2 .col-plan,
-    .accounts-table-v2 .col-extract-link,
     .accounts-table-v2 .col-note,
     .accounts-table-v2 .col-actions {
       white-space: normal; overflow: visible; text-overflow: clip; vertical-align: middle;
@@ -854,24 +822,10 @@
       display: flex; flex-direction: column; align-items: flex-start; min-width: 0;
     }
     .accounts-table-v2 .acc-v2-muted { color: #c0c4cc; }
-    .accounts-table-v2 .col-plan .extract-link-error { display: none; }
-    .accounts-table-v2 .extract-link-cell {
-      align-items: flex-start; flex-direction: column; gap: 4px; margin-top: 0;
-      width: 100%;
-    }
-    .accounts-table-v2 .extract-link-actions {
-      display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-    }
     /* Keep status labels at a stable width so long text cannot cover adjacent columns. */
     .accounts-table-v2 .col-plan .pill {
       width: 220px; min-width: 220px; max-width: 220px;
       height: 26px; min-height: 26px; flex: 0 0 auto; justify-content: center;
-      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-      box-sizing: border-box;
-    }
-    .accounts-table-v2 .extract-status-label {
-      width: 220px; min-width: 220px; max-width: 220px;
-      flex: 0 0 220px; justify-content: center;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       box-sizing: border-box;
     }
@@ -946,24 +900,6 @@
     .accounts-table-v2 .acc-v2-codex.is-fail { color: #f56c6c; }
     .accounts-table-v2 .acc-v2-codex.is-run { color: #e6a23c; }
     .accounts-table-v2 .acc-v2-codex.is-mute { color: #c0c4cc; }
-    .accounts-table-v2 .extract-link-cell button {
-      height: 26px; min-height: 26px; padding: 0 10px; border-radius: 4px;
-      border: 1px solid #67c23a; background: #fff; color: #67c23a;
-      display: inline-flex; align-items: center; justify-content: center;
-      box-sizing: border-box; font: inherit; font-size: 13px; font-weight: 500;
-      cursor: pointer; line-height: 1;
-      white-space: nowrap;
-    }
-    .accounts-table-v2 .extract-link-cell button:hover:not(:disabled) {
-      background: #f0f9eb; border-color: #67c23a;
-    }
-    .accounts-table-v2 .extract-link-cell button:disabled {
-      opacity: .55; cursor: not-allowed;
-    }
-    .accounts-table-v2 .extract-link-cell button.extract-success-copy {
-      height: 26px; min-height: 26px; padding: 0 10px; border-radius: 4px;
-      font-family: inherit; font-size: 13px; font-weight: 500;
-    }
     .accounts-table-v2 .acc-v2-actions {
       display: flex; flex-wrap: nowrap; gap: 6px; align-items: center;
     }
@@ -1846,155 +1782,6 @@
       opacity: .7; cursor: not-allowed;
     }
 
-    /* ---- Masi CDK 池 ---- */
-    #masiCdkModal:not(.hidden) {
-      position: fixed; inset: 0; z-index: 1250;
-      display: flex; align-items: center; justify-content: center;
-      padding: 24px; box-sizing: border-box; background: rgba(15,23,42,.45);
-    }
-    .masi-cdk-dialog {
-      width: min(1160px, 100%); max-height: calc(100vh - 48px);
-      display: flex; flex-direction: column; overflow: hidden;
-      background: #fff; border: 1px solid #ebeef5; border-radius: 8px;
-      box-shadow: 0 24px 70px rgba(15,23,42,.28);
-    }
-    .masi-cdk-head {
-      display: flex; align-items: flex-start; gap: 12px;
-      padding: 18px 20px 14px; border-bottom: 1px solid #ebeef5;
-    }
-    .masi-cdk-head-main { flex: 1; min-width: 0; }
-    .masi-cdk-head h3 { margin: 0; font-size: 18px; color: #303133; }
-    .masi-cdk-close {
-      width: 32px; height: 32px; border: none; border-radius: 6px;
-      background: transparent; color: #909399; font-size: 20px; cursor: pointer;
-    }
-    .masi-cdk-close:hover { background: #f5f7fa; color: #303133; }
-    .masi-cdk-tools {
-      display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
-      padding: 14px 20px; border-bottom: 1px solid #ebeef5;
-    }
-    .masi-cdk-bulk { display: inline-flex; align-items: center; gap: 6px; }
-    .masi-cdk-bulk select {
-      height: 32px; max-width: 164px; padding: 0 28px 0 10px;
-      border: 1px solid #dcdfe6; border-radius: 6px; background: #fff; color: #606266;
-    }
-    .masi-cdk-bulk select:disabled { color: #c0c4cc; background: #f5f7fa; cursor: not-allowed; }
-    .masi-cdk-summary { margin-left: auto; font-size: 12px; color: #606266; }
-    .masi-cdk-import {
-      padding: 14px 20px; border-bottom: 1px solid #ebeef5; background: #fafbfc;
-    }
-    .masi-cdk-import textarea {
-      width: 100%; min-height: 120px; padding: 10px 12px; box-sizing: border-box;
-      border: 1px solid #dcdfe6; border-radius: 6px; resize: vertical;
-      font: 13px/1.5 ui-monospace, Consolas, monospace;
-    }
-    .masi-cdk-import-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
-    .masi-cdk-tabs { display: flex; gap: 4px; padding: 12px 20px 0; }
-    .masi-cdk-tabs button {
-      min-height: 34px; padding: 7px 14px; border: none; border-bottom: 2px solid transparent;
-      background: transparent; color: #606266; cursor: pointer;
-    }
-    .masi-cdk-tabs button.active { color: #377DFF; border-bottom-color: #377DFF; font-weight: 600; }
-    .masi-cdk-table-wrap { overflow-x: auto; overflow-y: visible; padding: 10px 20px 0; }
-    .masi-cdk-table { width: 100%; min-width: 1052px; border-collapse: collapse; table-layout: fixed; }
-    .masi-cdk-table th, .masi-cdk-table td {
-      height: 42px; padding: 7px 8px; border-bottom: 1px solid #ebeef5; text-align: left;
-      font-size: 12px; color: #606266; overflow-wrap: anywhere;
-    }
-    .masi-cdk-table th { color: #909399; font-weight: 600; background: #fafbfc; }
-    .masi-cdk-table .queue { width: 48px; text-align: center; color: #303133; font-variant-numeric: tabular-nums; }
-    .masi-cdk-table .num { text-align: center; width: 60px; font-variant-numeric: tabular-nums; }
-    .masi-cdk-table .cdk { width: 154px; font-family: ui-monospace, Consolas, monospace; color: #303133; }
-    .masi-cdk-table .time { width: 132px; }
-    .masi-cdk-table .status { width: 120px; }
-    .masi-cdk-table .enabled { width: 62px; text-align: center; vertical-align: middle; }
-    .masi-cdk-enabled-toggle {
-      appearance: none; -webkit-appearance: none;
-      width: 36px !important; height: 20px !important;
-      min-width: 36px !important; max-width: 36px !important;
-      min-height: 20px !important; max-height: 20px !important;
-      margin: 0 !important; padding: 0 !important; border: 0 !important;
-      background: transparent !important; position: relative; vertical-align: middle;
-      box-sizing: border-box; cursor: pointer; flex-shrink: 0;
-    }
-    .masi-cdk-enabled-toggle::before {
-      content: ''; position: absolute; inset: 0; border-radius: 999px;
-      background: #dcdfe6; transition: background .15s ease;
-    }
-    .masi-cdk-enabled-toggle::after {
-      content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
-      border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.2);
-      transition: transform .15s ease;
-    }
-    .masi-cdk-enabled-toggle:checked::before { background: #377DFF; }
-    .masi-cdk-enabled-toggle:checked::after { transform: translateX(16px); }
-    .masi-cdk-enabled-toggle:focus-visible { outline: 2px solid #9ec1ff; outline-offset: 2px; }
-    .masi-cdk-enabled-toggle:disabled { opacity: .55; cursor: not-allowed; }
-    .masi-cdk-row.is-disabled td:not(.actions):not(.enabled) { color: #a8abb2; }
-    .masi-cdk-table td.actions { display: table-cell; width: 104px; white-space: nowrap; vertical-align: middle; }
-    .masi-cdk-table .actions button { display: inline-flex; min-height: 28px; padding: 4px 8px; }
-    .masi-cdk-table .error { color: #e64545; }
-    .masi-cdk-empty { padding: 38px 12px; text-align: center; color: #909399; }
-    .masi-cdk-pagination {
-      min-height: 54px; display: flex; align-items: center; justify-content: center; gap: 12px;
-      padding: 8px 20px 12px; box-sizing: border-box;
-    }
-    .masi-cdk-page-btn {
-      width: 32px; height: 32px; padding: 0; border: 1px solid #dcdfe6; border-radius: 6px;
-      background: #fff; color: #606266; font-size: 20px; line-height: 1; cursor: pointer;
-    }
-    .masi-cdk-page-btn:hover:not(:disabled) { color: #377DFF; border-color: #a8c7ff; background: #f5f9ff; }
-    .masi-cdk-page-btn:disabled { opacity: .4; cursor: not-allowed; }
-    .masi-cdk-page-state { min-width: 140px; text-align: center; color: #606266; font-size: 12px; }
-    @media(max-width: 700px) {
-      #masiCdkModal:not(.hidden) { padding: 10px; align-items: stretch; }
-      .masi-cdk-dialog { max-height: calc(100vh - 20px); }
-      .masi-cdk-summary { width: 100%; margin-left: 0; }
-      .masi-cdk-head { padding: 14px 14px 10px; }
-      .masi-cdk-tools { padding: 10px 14px; }
-      .masi-cdk-tabs { padding: 8px 14px 0; }
-      .masi-cdk-table-wrap { overflow: visible; padding: 8px 14px 0; }
-      .masi-cdk-table { min-width: 0; table-layout: auto; }
-      .masi-cdk-table thead { display: none; }
-      .masi-cdk-table tbody { display: block; }
-      .masi-cdk-table .masi-cdk-row {
-        display: grid; grid-template-columns: 42px repeat(3, minmax(0, 1fr));
-        grid-template-areas:
-          "queue cdk enabled actions"
-          "total remaining pending available"
-          "imported imported checked checked"
-          "status status status status";
-        gap: 8px 6px; padding: 10px 0; border-bottom: 1px solid #ebeef5;
-      }
-      .masi-cdk-table .masi-cdk-row td {
-        display: block; width: auto; height: auto; min-width: 0; padding: 0; border: none;
-      }
-      .masi-cdk-table .masi-cdk-row td::before {
-        content: attr(data-label); display: block; margin-bottom: 2px;
-        color: #a1a7b3; font-size: 10px; line-height: 1.2;
-      }
-      .masi-cdk-table .masi-cdk-row .queue { grid-area: queue; align-self: center; text-align: left; font-weight: 600; }
-      .masi-cdk-table .masi-cdk-row .queue::before,
-      .masi-cdk-table .masi-cdk-row .cdk::before,
-      .masi-cdk-table .masi-cdk-row .enabled::before,
-      .masi-cdk-table .masi-cdk-row .actions::before { display: none; }
-      .masi-cdk-table .masi-cdk-row .cdk { grid-area: cdk; align-self: center; }
-      .masi-cdk-table .masi-cdk-row .total { grid-area: total; }
-      .masi-cdk-table .masi-cdk-row .remaining { grid-area: remaining; }
-      .masi-cdk-table .masi-cdk-row .pending { grid-area: pending; }
-      .masi-cdk-table .masi-cdk-row .available { grid-area: available; }
-      .masi-cdk-table .masi-cdk-row .imported { grid-area: imported; }
-      .masi-cdk-table .masi-cdk-row .checked { grid-area: checked; }
-      .masi-cdk-table .masi-cdk-row .status { grid-area: status; }
-      .masi-cdk-table .masi-cdk-row .enabled { grid-area: enabled; align-self: center; }
-      .masi-cdk-table .masi-cdk-row td.actions {
-        grid-area: actions; display: flex; justify-content: flex-end; gap: 4px;
-      }
-      .masi-cdk-table .masi-cdk-row .actions button { min-height: 26px; padding: 3px 6px; }
-      .masi-cdk-pagination { min-height: 48px; padding: 6px 14px 10px; }
-    }
-
-
     /* ---- 新版配置布局（追加在概览下方） ---- */
     .config-layout-v2 {
       margin-top: 16px;
@@ -2628,10 +2415,8 @@
           <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCheckSelectedLiveV2" disabled onclick="checkSelectedLive(null, this)" title="重新登录选中账号；成功且未封号则标记正常，并刷新最新 AT/accessToken">查活</button>
         </div>
         <div class="acc-v2-btn-group">
-          <span class="acc-v2-btn-group-title">套餐/提链</span>
+          <span class="acc-v2-btn-group-title">套餐</span>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCheckSelectedPlansV2" disabled title="查询选中账号当前套餐；free 账号会检查 Plus 试用资格">查套餐</button>
-          <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnExtractSelectedLinksV2" disabled title="给选中的 free(可Plus试用) 账号批量提链，类型按配置 PIX/UPI/KAKAO_PAY/IDEAL">提链</button>
-          <button type="button" class="jobs-tb-btn" id="btnManageMasiCdksV2" title="导入、刷新和维护 Masi CDK 可选池与已用完池">CDK池</button>
         </div>
         <div class="acc-v2-btn-group">
           <span class="acc-v2-btn-group-title">Codex</span>
@@ -2664,7 +2449,7 @@
         <table class="accounts-table-v2">
           <colgroup>
             <col class="col-check"><col class="col-id"><col class="col-email"><col class="col-source">
-            <col class="col-token"><col class="col-password"><col class="col-plan"><col class="col-checkout"><col class="col-extract-link"><col class="col-small"><col class="col-status">
+            <col class="col-token"><col class="col-password"><col class="col-plan"><col class="col-checkout"><col class="col-small"><col class="col-status">
             <col class="col-note"><col class="col-time"><col class="col-actions">
           </colgroup>
           <thead>
@@ -2677,7 +2462,6 @@
               <th class="col-password">密码</th>
               <th class="col-plan">套餐</th>
               <th class="col-checkout">Checkout类型</th>
-              <th class="col-extract-link">提链</th>
               <th class="col-small">2FA</th>
               <th class="col-status">Codex</th>
               <th class="col-note">备注</th>
@@ -2948,70 +2732,9 @@
     </div>
   </div>
 </div>
-<div id="masiCdkModal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="masiCdkTitle">
-  <div class="masi-cdk-dialog" role="document">
-    <div class="masi-cdk-head">
-      <div class="masi-cdk-head-main">
-        <h3 id="masiCdkTitle">Masi CDK 池</h3>
-      </div>
-      <button type="button" class="masi-cdk-close" id="btnCloseMasiCdk" aria-label="关闭">×</button>
-    </div>
-    <div class="masi-cdk-tools">
-      <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnShowMasiCdkImport">导入CDK</button>
-      <button type="button" class="jobs-tb-btn" id="btnRefreshMasiCdkPool">刷新当前池</button>
-      <button type="button" class="jobs-tb-btn" id="btnRefreshAllMasiCdks">刷新全部</button>
-      <div class="masi-cdk-bulk">
-        <select id="masiCdkBulkAction" aria-label="批量启用状态">
-          <option value="">批量状态…</option>
-          <option value="page-enable">启用当前页</option>
-          <option value="page-disable">禁用当前页</option>
-          <option value="pool-enable">启用当前池全部</option>
-          <option value="pool-disable">禁用当前池全部</option>
-        </select>
-        <button type="button" class="jobs-tb-btn" id="btnApplyMasiCdkBulk">应用</button>
-      </div>
-      <span class="masi-cdk-summary" id="masiCdkSummary">尚未加载</span>
-    </div>
-    <div class="masi-cdk-import hidden" id="masiCdkImportPanel">
-      <textarea id="masiCdkImportText" placeholder="每行一个 CDK"></textarea>
-      <label class="outlook-import-check">
-        <input id="masiCdkRefreshAfterImport" type="checkbox">
-        <span>导入后立即查询额度</span>
-      </label>
-      <div class="masi-cdk-import-actions">
-        <button type="button" class="jobs-tb-btn" id="btnCancelMasiCdkImport">取消</button>
-        <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnSubmitMasiCdkImport">导入</button>
-      </div>
-    </div>
-    <div class="masi-cdk-tabs" role="tablist">
-      <button type="button" class="active" data-masi-cdk-pool="selectable" role="tab">可选池</button>
-      <button type="button" data-masi-cdk-pool="exhausted" role="tab">已用完池</button>
-    </div>
-    <div class="masi-cdk-table-wrap">
-      <table class="masi-cdk-table">
-        <thead><tr>
-          <th class="queue">编号</th><th class="cdk">CDK</th><th class="num">总次数</th><th class="num">剩余</th>
-          <th class="num">占用</th><th class="num">可用</th><th class="time imported">导入时间</th><th class="time checked">最近查询</th>
-          <th class="status">查询状态</th><th class="enabled">启用</th><th class="actions">操作</th>
-        </tr></thead>
-        <tbody id="masiCdkBody"><tr><td colspan="11" class="masi-cdk-empty">尚未加载</td></tr></tbody>
-      </table>
-    </div>
-    <div class="masi-cdk-pagination" id="masiCdkPagination">
-      <button type="button" class="masi-cdk-page-btn" id="btnMasiCdkPrev" title="上一页" aria-label="上一页">‹</button>
-      <span class="masi-cdk-page-state" id="masiCdkPageState">第 1 / 1 页</span>
-      <button type="button" class="masi-cdk-page-btn" id="btnMasiCdkNext" title="下一页" aria-label="下一页">›</button>
-    </div>
-  </div>
-</div>
 <div class="body hidden" id="logPanel">
   <h3>任务 #<span id="logJobId"></span> 日志 <button class="btn" id="btnCloseLog" style="float:right;min-height:28px;">关闭</button></h3>
   <div class="log" id="logContent">加载中…</div>
-</div>
-<div id="qrPanel" class="body hidden">
-  <h3>支付二维码 <button class="btn" onclick="closeQrModal()">关闭</button></h3>
-  <img id="qrImage" alt="支付二维码">
-  <a id="qrOpenLink" class="qr-link" href="#" target="_blank" rel="noopener noreferrer"></a>
 </div>
 
 <script>
@@ -3020,7 +2743,6 @@ const $$ = (s) => Array.from(document.querySelectorAll(s));
 let copySeq = 0;
 const copyStore = new Map();
 let ACCOUNTS = [], OUTLOOK = [], CONFIG = [];
-let EXTRACT_CAPABILITIES = {};
 let ACCOUNTS_TOTAL = 0;
 let OUTLOOK_TOTAL = 0;
 const ACCOUNT_FILTER_STATE = {
@@ -3522,9 +3244,7 @@ function updateModalScrollLock() {
   const opened = !$('#logPanel').classList.contains('hidden')
     || !$('#retryLogPanel').classList.contains('hidden')
     || !$('#liveLogPanel').classList.contains('hidden')
-    || !$('#qrPanel').classList.contains('hidden')
-    || !$('#outlookImportModal').classList.contains('hidden')
-    || !$('#masiCdkModal').classList.contains('hidden');
+    || !$('#outlookImportModal').classList.contains('hidden');
   const locked = document.body.classList.contains('modal-open');
   if (opened && !locked) {
     modalScrollY = window.scrollY || document.documentElement.scrollTop || 0;
@@ -3556,19 +3276,6 @@ function closeLiveLogModal() {
   $('#liveLogPanel').classList.add('hidden');
   updateModalScrollLock();
 }
-function openQrModal(url) {
-  $('#qrImage').src = url;
-  $('#qrOpenLink').href = url;
-  $('#qrOpenLink').textContent = url;
-  $('#qrPanel').classList.remove('hidden');
-  updateModalScrollLock();
-}
-function closeQrModal() {
-  $('#qrPanel').classList.add('hidden');
-  $('#qrImage').removeAttribute('src');
-  updateModalScrollLock();
-}
-
 $('#btnCloseLog').addEventListener('click', closeLogModal);
 
 async function submitManualOtpForJob(btn) {
@@ -3922,14 +3629,11 @@ async function pollAccountPlanStatuses() {
         const account = accountById.get(Number(item.id));
         const wasChecking = Boolean(account?.plan_capabilities?.is_checking);
         const isChecking = Boolean(item.plan_capabilities?.is_checking);
-        const wasExtracting = Boolean(account?.extract_link_capabilities?.is_running);
-        const isExtracting = Boolean(item.extract_link_capabilities?.is_running);
         const wasCheckouting = Boolean(account?.checkout_capabilities?.is_checking);
         const isCheckouting = Boolean(item.checkout_capabilities?.is_checking);
         const wasLiveChecking = ['queued', 'running'].includes(String(account?.live_check_status || '').toLowerCase());
         const isLiveChecking = ['queued', 'running'].includes(String(item.live_check_status || '').toLowerCase());
         if (wasChecking && !isChecking) needsFullReload = true;
-        if (wasExtracting && !isExtracting) needsFullReload = true;
         if (wasCheckouting && !isCheckouting) needsFullReload = true;
         if (wasLiveChecking && !isLiveChecking) needsFullReload = true;
         Object.assign(account, item);
@@ -3945,7 +3649,6 @@ const ACCOUNT_STATUS_LABELS = Object.freeze({
   codexAuth: Object.freeze({not_started: '未开始', success: '成功', failed: '失败', skipped: '已跳过', unknown: '未知'}),
   codexOperation: Object.freeze({idle: '未操作', queued: '补跑排队中', running: '补跑中', success: '补跑成功', failed: '补跑失败', canceled: '已停止', unknown: '未知'}),
   query: Object.freeze({pending: '待查询', queued: '查询排队中', running: '查询中', success: '查询成功', failed: '查询失败', unknown: '未知'}),
-  extract: Object.freeze({pending: '待提链', queued: '排队', running: '提炼中', success: '提炼成功', failed: '提炼失败', canceled: '已取消', unknown: '未知'}),
   planCategory: Object.freeze({free_trial_eligible: 'Free｜有套餐优惠', free_no_trial: 'Free｜无套餐优惠', paid: '付费套餐', unknown: '未知'}),
   emailSource: Object.freeze({outlook: 'Outlook 邮箱池', generic_api: '通用 API 邮箱', cloudflare_domain: 'Cloudflare 域名邮箱', icloud: 'iCloud 隐私邮箱', cloudflare: 'Cloudflare 临时邮箱', unknown: '未知'}),
   checkoutType: Object.freeze({oaics: 'OAICS', cs_live: 'Stripe Live', other_cs: '其它 Stripe', unknown: '未知'}),
@@ -4104,7 +3807,7 @@ function _planCell(r) {
     const lastPlan = hasLastSuccess ? `${plan}/${_statusLabel('planCategory', category)}` : '';
     const lastText = lastPlan ? `（上次: ${lastPlan}）` : '';
     const lastTitle = hasLastSuccess ? `上次成功: ${esc(r.plan_last_success_at)}` : '';
-    return wrap(`<span class="pill status-failed" title="${[esc(reason), lastTitle].filter(Boolean).join('；')}">查询失败${esc(lastText)}</span><div class="extract-link-error" title="${esc(reason)}">${esc(reason)}</div>`);
+    return wrap(`<span class="pill status-failed" title="${[esc(reason), lastTitle].filter(Boolean).join('；')}">查询失败${esc(lastText)}</span>`);
   }
   const cls = isFreeTrialEligible || category === 'paid' ? 'status-success' : 'status-used';
   const expireRaw = r.plan_expires_at || r.expires_at || r.plan_renews_at || r.renews_at || '';
@@ -4149,89 +3852,6 @@ function _planAction(r) {
     return `<button data-plan-check="${esc(r.id)}" disabled title="套餐查询状态未知或当前不可查询">${status === 'unknown' ? '状态未知' : '不可查询'}</button>`;
   }
   return `<button data-plan-check="${esc(r.id)}" title="查询当前套餐；free 账号会检查 Plus 试用资格">查套餐</button>`;
-}
-function _fmtExtractExpire(v) {
-  if (!v) return '';
-  const raw = String(v).trim();
-  let n = Number(raw);
-  if (!Number.isNaN(n) && n > 0) {
-    if (n > 1e12) n = Math.floor(n / 1000);
-    const d = new Date(n * 1000);
-    if (!Number.isNaN(d.getTime())) return _fmtPlanTime(d.toISOString(), false);
-  }
-  return _fmtPlanTime(raw, false) || raw;
-}
-function _extractLinkProgressLabel(message) {
-  const text = String(message || '');
-  const attempt = text.match(/Masi Job\s*第\s*(\d+)\s*\/\s*(\d+)\s*次/i);
-  if (!attempt) return '提炼中';
-  return `${/(失败|重试|重新提交)/.test(text) ? '重试' : '提炼'} ${attempt[1]}/${attempt[2]}`;
-}
-function _extractLinkStatusLabel(status) {
-  const value = String(status || '').trim().toLowerCase();
-  return _statusLabel('extract', value);
-}
-function _extractLinkHasRecord(r) {
-  return Boolean(
-    r.extract_link_status || r.extract_link_type || r.extract_link_provider ||
-    r.extract_link_update_mode || r.extract_link_job_id || r.extract_link_message ||
-    r.extract_link_error || r.extract_link_long_url || r.extract_link_copy_paste ||
-    r.extract_link_image_url_png || r.extract_link_image_url_svg || r.extract_link_resumable
-  );
-}
-function _extractLinkSummary(r, statusText) {
-  const type = String(r.extract_link_type || '-').trim();
-  const provider = String(r.extract_link_provider || '-').trim();
-  return `${type} · ${provider} · ${statusText || '-'}`;
-}
-function _extractLinkCell(r) {
-  const s = String(r.extract_link_status || '').toLowerCase();
-  const err = r.extract_link_error || '';
-  const msg = r.extract_link_message || '';
-  const title = esc(err || msg || r.extract_link_job_id || '');
-  if (!_extractLinkHasRecord(r)) return '';
-  const summary = (statusText) => _extractLinkSummary(r, statusText);
-  const wrap = (controls = '') => `<div class="extract-link-cell"><div class="extract-link-actions">${controls}</div></div>`;
-  if (s === 'queued') return wrap(`<span class="pill status-running extract-status-label" title="${title}">${esc(summary(_extractLinkStatusLabel(s)))}</span>`);
-  if (s === 'running') return wrap(`<span class="pill status-running extract-status-label" title="${title}">${esc(summary(_extractLinkProgressLabel(msg)))}</span>`);
-  if (s === 'success') {
-    const typ = (r.extract_link_type || '').toUpperCase();
-    const provider = (r.extract_link_provider || '-').toUpperCase();
-    const mode = (r.extract_link_update_mode || '-').toUpperCase();
-    const cdk = r.extract_link_cdk_fingerprint ? ` · CDK ${r.extract_link_cdk_fingerprint}` : '';
-    const link = r.extract_link_long_url || r.extract_link_copy_paste || '';
-    const qr = r.extract_link_image_url_png || r.extract_link_image_url_svg || '';
-    const expire = _fmtExtractExpire(r.extract_link_expires_at || '');
-    const successLabel = summary(_extractLinkStatusLabel(s));
-    const successTitle = [
-      successLabel,
-      `${provider} · ${mode}${cdk}`,
-      expire ? `支付到期：${expire}` : '',
-      link ? '点击复制提链' : '',
-    ].filter(Boolean).join('；');
-    const successCopyId = copyId(link);
-    const success = link
-      ? `<button type="button" class="pill status-success extract-success-copy extract-status-label" data-copy-id="${successCopyId}" title="${esc(successTitle)}">${esc(successLabel)}</button>`
-      : `<span class="pill status-success extract-status-label" title="${esc(successTitle || title)}">${esc(successLabel)}</span>`;
-    const qrBtn = qr ? `<button class="extract-link-btn extract-qr" data-qr-url="${esc(qr)}" title="打开支付二维码图片">查看二维码</button>` : '';
-    return wrap(`${success}${qrBtn}`);
-  }
-  if (s === 'failed' || s === 'canceled') {
-    const reason = err || msg || '未知原因';
-    return wrap(`<span class="pill status-failed extract-status-label" title="${esc(reason)}">${esc(summary(_extractLinkStatusLabel(s)))}</span>`);
-  }
-  return wrap(`<span class="pill status-used extract-status-label" title="${title}">${esc(summary(_extractLinkStatusLabel(s)))}</span>`);
-}
-function _extractLinkAction(r) {
-  const s = String(r.extract_link_status || 'pending').toLowerCase();
-  const capabilities = r.extract_link_capabilities || {};
-  if (capabilities.is_running === true) return `<button disabled title="${esc(r.extract_link_message || '提链任务执行中')}">提链中…</button>`;
-  if (capabilities.resumable === true && capabilities.can_retry === true) return `<button class="good" data-extract-link-resume="${esc(r.id)}" title="只轮询已保存的 Masi Job，不创建新 Job、不再次消耗 CDK">恢复轮询</button>`;
-  if (capabilities.can_start !== true) return '';
-  const eligible = Boolean(r.plan_capabilities?.is_eligible);
-  if (!eligible) return '';
-  const failedReason = s === 'failed' ? (r.extract_link_error || r.extract_link_message || '') : '';
-  return `<button class="good" data-extract-link="${esc(r.id)}" title="${esc(failedReason ? '重新提链；上次失败原因：' + failedReason : '为该 free(可Plus试用) 账号创建 PIX/UPI/KAKAO_PAY/IDEAL 提链任务')}">提链</button>`;
 }
 function _codexAction(r) {
   const capabilities = r.codex_capabilities || {};
@@ -4293,7 +3913,6 @@ function _accountsV2MoreMenu(r) {
     `<button type="button" data-account-live-log="${esc(r.email)}" title="查看该账号最近一次查活日志">查活日志</button>`,
     _planAction(r),
     _checkoutSessionAction(r),
-    _extractLinkAction(r),
     _codexAction(r),
     `<button type="button" data-codex-log="${esc(r.email)}" title="查看该账号最近一次 Codex 补跑日志">补跑日志</button>`,
     `<button type="button" data-account-totp-log="${esc(r.email)}" title="查看该账号最近一次 2FA 设置日志">2FA日志</button>`,
@@ -4339,7 +3958,6 @@ function renderAccounts() {
       <td class="col-password">${r.password ? `<span class="mono" title="${esc(r.password)}">${esc(short(r.password, 18))}</span>` : '<span class="acc-v2-muted">-</span>'}</td>
       <td class="col-plan">${_planCell(r)}</td>
       <td class="col-checkout">${_checkoutSessionCell(r)}</td>
-      <td class="col-extract-link" data-label="提链">${_extractLinkCell(r) || '<span class="acc-v2-muted">-</span>'}</td>
       <td class="col-small">${_twofaCell(r)}</td>
       <td class="col-status">${_codexCellV2(r)}</td>
       <td class="col-note" title="${esc(r.note || '')}">${r.note ? esc(short(r.note, 80)) : '<span class="acc-v2-muted">-</span>'}</td>
@@ -4373,7 +3991,7 @@ function updateAccountSelectionUi(pageRows = null) {
   const archiveTitle = archivedOnly ? '把选中的归档账号恢复到默认账号列表' : '归档选中的账号；默认账号列表将不再查询/显示这些账号';
   const v2Ids = [
     'btnCheckSelectedLiveV2',
-    'btnCheckSelectedPlansV2', 'btnCheckSelectedCheckoutV2', 'btnExtractSelectedLinksV2',
+    'btnCheckSelectedPlansV2', 'btnCheckSelectedCheckoutV2',
     'btnRetrySelectedCodexV2', 'btnDownloadSelectedCpaV2', 'btnStopSelectedCodexV2',
     'btnNoteSelectedAccountsV2', 'btnCopySelectedLinesV2', 'btnCopySelectedEmailsV2',
     'btnDownloadSelectedTxtV2', 'btnArchiveSelectedAccountsV2', 'btnDeleteSelectedAccountsV2',
@@ -4393,7 +4011,6 @@ function updateAccountSelectionUi(pageRows = null) {
     btnCheckSelectedLiveV2: selectedAccounts.some(row => row.live_check_capabilities?.can_start === true),
     btnCheckSelectedPlansV2: selectedAccounts.some(row => row.plan_capabilities?.can_start === true),
     btnCheckSelectedCheckoutV2: selectedAccounts.some(row => row.checkout_capabilities?.can_retry === true),
-    btnExtractSelectedLinksV2: selectedAccounts.some(row => row.plan_capabilities?.is_eligible === true && row.extract_link_capabilities?.can_start === true),
     btnRetrySelectedCodexV2: selectedAccounts.some(row => row.codex_capabilities?.can_retry === true),
     btnStopSelectedCodexV2: selectedAccounts.some(row => row.codex_capabilities?.can_stop === true),
   };
@@ -4672,26 +4289,6 @@ async function onAccountsBodyClick(e) {
   const noteBtn = e.target.closest('[data-account-note]');
   if (noteBtn) {
     await editAccountNote(Number(noteBtn.dataset.accountNote), noteBtn);
-    return;
-  }
-
-  const extractBtn = e.target.closest('[data-extract-link]');
-  if (extractBtn) {
-    await extractOneLink(Number(extractBtn.dataset.extractLink), extractBtn);
-    return;
-  }
-
-  const extractResumeBtn = e.target.closest('[data-extract-link-resume]');
-  if (extractResumeBtn) {
-    await resumeExtractLink(Number(extractResumeBtn.dataset.extractLinkResume), extractResumeBtn);
-    return;
-  }
-
-  const qrBtn = e.target.closest('[data-qr-url]');
-  if (qrBtn) {
-    const url = qrBtn.dataset.qrUrl || '';
-    if (!url) { showToast('二维码地址为空'); return; }
-    openQrModal(url);
     return;
   }
 
@@ -5235,66 +4832,6 @@ async function checkOneCheckoutSession(id, btn) {
   }
 }
 
-async function extractOneLink(id, btn) {
-  const acc = ACCOUNTS.find(a => Number(a.id) === Number(id));
-  if (!acc) { showToast('账号不存在'); return; }
-  if (acc.extract_link_capabilities?.can_start !== true) {
-    showToast('该账号当前提链状态不可执行');
-    return;
-  }
-  if (acc.plan_capabilities?.is_eligible !== true) {
-    showToast('仅支持 free(可Plus试用) 账号提链');
-    return;
-  }
-  if (!confirm(`确定为该账号提链吗？\n\n${acc.email || ('#' + id)}\n\n提链类型按配置使用 PIX/UPI/KAKAO_PAY/IDEAL，成功会消耗 1 次 CDK。`)) return;
-  const old = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = '提链中…';
-  try {
-    await api('/api/accounts/extract-link', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({account_id: id}),
-    });
-    showToast('提链任务已入队');
-    await pollAccountPlanStatuses();
-  } catch(err) {
-    showToast('提链失败: ' + err.message);
-    btn.disabled = false;
-    btn.textContent = old;
-  }
-}
-
-async function extractSelectedLinks() {
-  const ids = Array.from(ACCOUNT_SELECTED);
-  if (ids.length === 0) { showToast('请先选择账号'); return; }
-  const selected = ids.map(id => ACCOUNTS.find(a => Number(a.id) === Number(id))).filter(Boolean);
-  const eligible = selected.filter(a => Boolean(
-    a.plan_capabilities?.is_eligible === true && a.extract_link_capabilities?.can_start === true
-  ));
-  if (!eligible.length) { showToast('选中账号里没有 free(可Plus试用)'); return; }
-  if (!confirm(`确定批量提链 ${eligible.length} 个 free(可Plus试用) 账号吗？\n\n非可试用账号会自动跳过。成功会按账号消耗 CDK 次数。`)) return;
-  const btn = $('#btnExtractSelectedLinksV2');
-  const old = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = '提链中…';
-  try {
-    const r = await api('/api/accounts/extract-link-bulk', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({account_ids: ids}),
-    });
-    const skipped = (r.skipped_count || 0) + (r.busy_count || 0) + (r.failed_count || 0);
-    showToast(skipped ? `已入队 ${r.started_count || 0} 个，跳过/失败 ${skipped} 个` : `已入队 ${r.started_count || 0} 个`);
-    await pollAccountPlanStatuses();
-  } catch(err) {
-    showToast('批量提链失败: ' + err.message);
-    updateAccountSelectionUi();
-  } finally {
-    btn.textContent = old;
-  }
-}
-
 async function checkSelectedPlans() {
   const ids = Array.from(ACCOUNT_SELECTED);
   if (ids.length === 0) { showToast('请先选择账号'); return; }
@@ -5530,32 +5067,6 @@ async function noteSelectedAccounts() {
   }
 }
 
-async function resumeExtractLink(id, btn) {
-  const acc = ACCOUNTS.find(a => Number(a.id) === Number(id));
-  if (!acc) { showToast('账号不存在'); return; }
-  if (acc.extract_link_capabilities?.resumable !== true || acc.extract_link_capabilities?.can_retry !== true) {
-    showToast('该账号当前没有可恢复的提链任务');
-    return;
-  }
-  if (!confirm(`确定恢复原 Masi Job 的轮询吗？\n\n${acc.email || ('#' + id)}\n\n不会创建新 Job，也不会再次消耗 CDK。`)) return;
-  const old = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = '恢复中…';
-  try {
-    const r = await api('/api/accounts/extract-link-resume', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({account_id: id}),
-    });
-    showToast(r.message || '已恢复原 Job 轮询');
-    await pollAccountPlanStatuses();
-  } catch(err) {
-    showToast('恢复轮询失败: ' + err.message);
-    btn.disabled = false;
-    btn.textContent = old;
-  }
-}
-
 async function stopSelectedCodex() {
   const ids = Array.from(ACCOUNT_SELECTED);
   if (ids.length === 0) { showToast('请先选择账号'); return; }
@@ -5633,237 +5144,6 @@ async function copyCurrentPageTokens() {
   } catch(e) { showToast('复制失败: ' + e.message); }
 }
 
-// ---------- Masi CDK 池 ----------
-let MASI_CDK_ACTIVE_POOL = 'selectable';
-let MASI_CDK_PAGE = 1;
-let MASI_CDK_TOTAL_PAGES = 1;
-let MASI_CDK_TOTAL = 0;
-let MASI_CDK_PAGE_ITEMS = [];
-let MASI_CDK_BUSY = false;
-
-function masiCdkPageSize() {
-  return window.matchMedia('(max-width: 700px)').matches ? 5 : 10;
-}
-
-function quotaText(value) {
-  return value === null || value === undefined || value === '' ? '—' : String(value);
-}
-
-function renderMasiCdkRows(items) {
-  const body = $('#masiCdkBody');
-  if (!body) return;
-  if (!items.length) {
-    body.innerHTML = `<tr><td colspan="11" class="masi-cdk-empty">${MASI_CDK_ACTIVE_POOL === 'selectable' ? '可选池暂无 CDK' : '已用完池暂无 CDK'}</td></tr>`;
-    return;
-  }
-  body.innerHTML = items.map(item => {
-    const error = item.last_error || '';
-    const status = item.allocating ? '正在分配' : (error ? '查询失败' : (item.last_checked_at ? '正常' : '待查询'));
-    const enabled = item.enabled !== false;
-    return `<tr class="masi-cdk-row ${enabled ? '' : 'is-disabled'}">
-      <td class="queue" data-label="编号">${esc(quotaText(item.position))}</td>
-      <td class="cdk" data-label="CDK" title="指纹 ${esc(item.fingerprint || '')}">${esc(item.masked_cdk || '—')}</td>
-      <td class="num total" data-label="总次数">${esc(quotaText(item.total_uses))}</td>
-      <td class="num remaining" data-label="剩余">${esc(quotaText(item.remaining_uses))}</td>
-      <td class="num pending" data-label="占用">${esc(quotaText(item.pending_uses))}</td>
-      <td class="num available" data-label="可用">${esc(quotaText(item.available_uses))}</td>
-      <td class="time imported" data-label="导入时间">${esc(item.created_at || '—')}</td>
-      <td class="time checked" data-label="最近查询">${esc(item.last_checked_at || '—')}</td>
-      <td class="status ${error ? 'error' : ''}" data-label="查询状态" title="${esc(error)}">${esc(error || status)}</td>
-      <td class="enabled" data-label="启用">
-        <input type="checkbox" class="masi-cdk-enabled-toggle" data-masi-cdk-enabled="${esc(item.id)}"
-          aria-label="${enabled ? '禁用' : '启用'}该 CDK" ${enabled ? 'checked' : ''} ${MASI_CDK_BUSY ? 'disabled' : ''}>
-      </td>
-      <td class="actions" data-label="操作">
-        <button type="button" data-masi-cdk-refresh="${esc(item.id)}" title="重新查询该 CDK 额度">刷新</button>
-        <button type="button" class="danger" data-masi-cdk-delete="${esc(item.id)}" title="删除该 CDK">删除</button>
-      </td>
-    </tr>`;
-  }).join('');
-}
-
-function setMasiCdkBusy(busy) {
-  MASI_CDK_BUSY = Boolean(busy);
-  ['btnShowMasiCdkImport', 'btnRefreshMasiCdkPool', 'btnRefreshAllMasiCdks',
-   'masiCdkBulkAction', 'btnApplyMasiCdkBulk'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.disabled = MASI_CDK_BUSY;
-  });
-  $$('[data-masi-cdk-pool], [data-masi-cdk-refresh], [data-masi-cdk-delete], [data-masi-cdk-enabled]')
-    .forEach(el => { el.disabled = MASI_CDK_BUSY; });
-  renderMasiCdkPagination(MASI_CDK_TOTAL);
-}
-
-function renderMasiCdkPagination(total) {
-  const state = $('#masiCdkPageState');
-  if (state) state.textContent = `第 ${MASI_CDK_PAGE} / ${MASI_CDK_TOTAL_PAGES} 页 · 共 ${total || 0} 条`;
-  const prev = $('#btnMasiCdkPrev');
-  const next = $('#btnMasiCdkNext');
-  if (prev) prev.disabled = MASI_CDK_BUSY || MASI_CDK_PAGE <= 1;
-  if (next) next.disabled = MASI_CDK_BUSY || MASI_CDK_PAGE >= MASI_CDK_TOTAL_PAGES;
-}
-
-async function loadMasiCdkPool(page = MASI_CDK_PAGE) {
-  const body = $('#masiCdkBody');
-  if (body) body.innerHTML = '<tr><td colspan="10" class="masi-cdk-empty">加载中…</td></tr>';
-  setMasiCdkBusy(true);
-  try {
-    const pageSize = masiCdkPageSize();
-    const r = await api(`/api/extract-link/cdks?provider=masi&pool=${encodeURIComponent(MASI_CDK_ACTIVE_POOL)}&page=${Math.max(1, Number(page) || 1)}&page_size=${pageSize}`);
-    MASI_CDK_PAGE = Number(r.page) || 1;
-    MASI_CDK_TOTAL_PAGES = Number(r.total_pages) || 1;
-    MASI_CDK_TOTAL = Number(r.total) || 0;
-    MASI_CDK_PAGE_ITEMS = r.items || [];
-    renderMasiCdkRows(MASI_CDK_PAGE_ITEMS);
-    renderMasiCdkPagination(r.total || 0);
-    const s = r.summary || {};
-    const summary = $('#masiCdkSummary');
-    const enabledCount = MASI_CDK_ACTIVE_POOL === 'selectable' ? s.enabled_selectable_count : s.enabled_exhausted_count;
-    const disabledCount = MASI_CDK_ACTIVE_POOL === 'selectable' ? s.disabled_selectable_count : s.disabled_exhausted_count;
-    if (summary) summary.textContent = `当前池启用 ${enabledCount || 0} · 禁用 ${disabledCount || 0} · 可选池启用可用次数 ${s.enabled_available_uses || 0} · 占用 ${s.total_pending_uses || 0}`;
-  } catch(e) {
-    MASI_CDK_PAGE_ITEMS = [];
-    if (body) body.innerHTML = `<tr><td colspan="10" class="masi-cdk-empty error">加载失败：${esc(e.message)}</td></tr>`;
-  } finally { setMasiCdkBusy(false); }
-}
-
-function openMasiCdkModal() {
-  $('#masiCdkModal').classList.remove('hidden');
-  updateModalScrollLock();
-  MASI_CDK_PAGE = 1;
-  loadMasiCdkPool(1);
-}
-function closeMasiCdkModal() {
-  $('#masiCdkModal').classList.add('hidden');
-  $('#masiCdkImportPanel').classList.add('hidden');
-  $('#masiCdkRefreshAfterImport').checked = false;
-  updateModalScrollLock();
-}
-async function submitMasiCdkImport() {
-  const text = ($('#masiCdkImportText').value || '').trim();
-  const refreshQuota = Boolean($('#masiCdkRefreshAfterImport')?.checked);
-  if (!text) { showToast('请填写一行一个的 CDK'); return; }
-  const btn = $('#btnSubmitMasiCdkImport');
-  btn.disabled = true;
-  setMasiCdkBusy(true);
-  try {
-    const r = await api('/api/extract-link/cdks/import', {
-      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({text, refresh_quota:refreshQuota}),
-    });
-    const refresh = r.refresh || {};
-    showToast(refreshQuota
-      ? `新增 ${r.added_count || 0}，重复 ${r.duplicate_count || 0}，查询成功 ${refresh.success_count || 0}，失败 ${refresh.failed_count || 0}`
-      : `已导入：新增 ${r.added_count || 0}，重复 ${r.duplicate_count || 0}`);
-    $('#masiCdkImportText').value = '';
-    $('#masiCdkRefreshAfterImport').checked = false;
-    $('#masiCdkImportPanel').classList.add('hidden');
-    await loadMasiCdkPool();
-  } catch(e) { showToast('CDK 导入失败: ' + e.message); }
-  finally { btn.disabled = false; setMasiCdkBusy(false); }
-}
-async function refreshMasiCdks(pool = null) {
-  setMasiCdkBusy(true);
-  try {
-    const r = await api('/api/extract-link/cdks/refresh', {
-      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(pool ? {pool} : {}),
-    });
-    showToast(`刷新成功 ${r.success_count || 0}，失败 ${r.failed_count || 0}，移入已用完 ${r.moved_to_exhausted || 0}，恢复可选 ${r.moved_to_selectable || 0}`);
-  } catch(e) { showToast('刷新 CDK 失败: ' + e.message); }
-  finally { await loadMasiCdkPool(); }
-}
-async function refreshOneMasiCdk(id) {
-  setMasiCdkBusy(true);
-  try {
-    await api(`/api/extract-link/cdks/${encodeURIComponent(id)}/refresh`, {method:'POST'});
-  } catch(e) { showToast('刷新 CDK 失败: ' + e.message); }
-  finally { await loadMasiCdkPool(); }
-}
-async function deleteMasiCdk(id) {
-  if (!confirm('确定删除该 CDK 吗？活动 Job 使用的 CDK 不允许删除。')) return;
-  setMasiCdkBusy(true);
-  try {
-    await api(`/api/extract-link/cdks/${encodeURIComponent(id)}`, {method:'DELETE'});
-    showToast('CDK 已删除');
-  } catch(e) { showToast('删除 CDK 失败: ' + e.message); }
-  finally { await loadMasiCdkPool(); }
-}
-async function setMasiCdkEnablement(payload, label) {
-  setMasiCdkBusy(true);
-  try {
-    const r = await api('/api/extract-link/cdks/enablement', {
-      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload),
-    });
-    showToast(`${label}：已变更 ${r.changed_count || 0}，未变化 ${r.unchanged_count || 0}`);
-  } catch(e) {
-    showToast(`${label}失败: ${e.message}`);
-  } finally {
-    await loadMasiCdkPool();
-  }
-}
-async function applyMasiCdkBulkAction() {
-  const select = $('#masiCdkBulkAction');
-  const action = select?.value || '';
-  if (!action) { showToast('请选择批量状态操作'); return; }
-  const enabled = action.endsWith('enable');
-  const isPage = action.startsWith('page-');
-  const ids = MASI_CDK_PAGE_ITEMS.map(item => item.id).filter(Boolean);
-  if (isPage && !ids.length) { showToast('当前页没有 CDK'); return; }
-  if (action === 'pool-disable' && !confirm(`确定禁用${MASI_CDK_ACTIVE_POOL === 'selectable' ? '可选池' : '已用完池'}全部 CDK 吗？该操作只影响后续分配。`)) return;
-  const payload = isPage
-    ? {scope:'ids', ids, enabled}
-    : {scope:'pool', pool:MASI_CDK_ACTIVE_POOL, enabled};
-  select.value = '';
-  await setMasiCdkEnablement(payload, `${enabled ? '启用' : '禁用'}${isPage ? '当前页' : '当前池'}`);
-}
-(function bindMasiCdkUi() {
-  const bind = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener('click', fn); };
-  bind('btnManageMasiCdksV2', openMasiCdkModal);
-  bind('btnCloseMasiCdk', closeMasiCdkModal);
-  bind('btnShowMasiCdkImport', () => {
-    $('#masiCdkRefreshAfterImport').checked = false;
-    $('#masiCdkImportPanel').classList.remove('hidden');
-  });
-  bind('btnCancelMasiCdkImport', () => {
-    $('#masiCdkRefreshAfterImport').checked = false;
-    $('#masiCdkImportPanel').classList.add('hidden');
-  });
-  bind('btnSubmitMasiCdkImport', submitMasiCdkImport);
-  bind('btnRefreshMasiCdkPool', () => refreshMasiCdks(MASI_CDK_ACTIVE_POOL));
-  bind('btnRefreshAllMasiCdks', () => refreshMasiCdks(null));
-  bind('btnApplyMasiCdkBulk', applyMasiCdkBulkAction);
-  bind('btnMasiCdkPrev', () => loadMasiCdkPool(MASI_CDK_PAGE - 1));
-  bind('btnMasiCdkNext', () => loadMasiCdkPool(MASI_CDK_PAGE + 1));
-  const modal = $('#masiCdkModal');
-  modal.addEventListener('click', e => {
-    if (e.target === modal) closeMasiCdkModal();
-    const tab = e.target.closest('[data-masi-cdk-pool]');
-    if (tab) {
-      MASI_CDK_ACTIVE_POOL = tab.dataset.masiCdkPool;
-      MASI_CDK_PAGE = 1;
-      $$('[data-masi-cdk-pool]').forEach(x => x.classList.toggle('active', x === tab));
-      loadMasiCdkPool(1);
-    }
-    const refresh = e.target.closest('[data-masi-cdk-refresh]');
-    if (refresh) refreshOneMasiCdk(refresh.dataset.masiCdkRefresh);
-    const del = e.target.closest('[data-masi-cdk-delete]');
-    if (del) deleteMasiCdk(del.dataset.masiCdkDelete);
-    const toggle = e.target.closest('[data-masi-cdk-enabled]');
-    if (toggle) setMasiCdkEnablement(
-      {scope:'ids', ids:[toggle.dataset.masiCdkEnabled], enabled:Boolean(toggle.checked)},
-      toggle.checked ? '启用 CDK' : '禁用 CDK',
-    );
-  });
-  document.addEventListener('keydown', e => {
-    if (e.key === 'Escape' && !modal.classList.contains('hidden')) closeMasiCdkModal();
-  });
-  window.matchMedia('(max-width: 700px)').addEventListener('change', () => {
-    if (!modal.classList.contains('hidden')) {
-      MASI_CDK_PAGE = 1;
-      loadMasiCdkPool(1);
-    }
-  });
-})();
-
 async function copySelectedAccountTokens() {
   const ids = Array.from(ACCOUNT_SELECTED).map(Number);
   if (!ids.length) { showToast('请先选择账号'); return; }
@@ -5881,7 +5161,6 @@ async function copySelectedAccountTokens() {
   };
   bind('btnCheckSelectedPlansV2', checkSelectedPlans);
   bind('btnCheckSelectedCheckoutV2', checkSelectedCheckoutSessions);
-  bind('btnExtractSelectedLinksV2', extractSelectedLinks);
   bind('btnRetrySelectedCodexV2', retrySelectedCodex);
   bind('btnDownloadSelectedCpaV2', downloadSelectedCpa);
   bind('btnStopSelectedCodexV2', stopSelectedCodex);
@@ -6932,7 +6211,6 @@ function configNavIcon(name) {
   if (n.includes('代理') || n.includes('Proxy')) return '<circle cx="12" cy="12" r="3"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="M4.93 4.93l1.41 1.41"/><path d="M17.66 17.66l1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/>';
   if (n.includes('画像') || n.includes('指纹')) return '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>';
   if (n.includes('人工') || n.includes('节奏')) return '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>';
-  if (n.includes('提链')) return '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>';
   if (n.includes('Browser') || n.includes('Roxy') || n.includes('注册')) return '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/>';
   return '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>';
 }
@@ -6952,7 +6230,6 @@ function configSectionIntro(name) {
   if (name === '人工节奏') return '注册流程中的随机停顿节奏。';
   if (name === '浏览器画像') return '浏览器语言、时区与出口 IP 画像。';
   if (name === '代理池') return '代理列表与套餐网络模式。';
-  if (name === '提链') return '提链服务地址、CDK 与并发参数。';
   return '';
 }
 function configFeatureIcon(key) {
@@ -7307,11 +6584,6 @@ function renderConfigPlainFieldV2(f) {
     : field;
 }
 
-function currentExtractProvider() {
-  if (Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, 'EXTRACT_LINK_PROVIDER')) return String(CONFIG_PENDING_UPDATES.EXTRACT_LINK_PROVIDER || 'legacy');
-  const field = CONFIG.find(f => f.key === 'EXTRACT_LINK_PROVIDER');
-  return String(field?.value || 'legacy');
-}
 function smsbowerFieldChoices(key, currentValue) {
   const source = key === 'SMSBOWER_SERVICE' ? SMSBOWER_METADATA.services : SMSBOWER_METADATA.countries;
   const current = String(currentValue == null ? '' : currentValue).trim();
@@ -7345,12 +6617,6 @@ function configFieldChoices(key, currentValue) {
   if (key === 'SMSBOWER_SERVICE' || key === 'SMSBOWER_COUNTRY') {
     return smsbowerFieldChoices(key, currentValue);
   }
-  if (key === 'EXTRACT_LINK_PROVIDER') {
-    return Object.keys(EXTRACT_CAPABILITIES || {}).map(value => ({value, label: value === 'masi' ? 'Masi Kakao' : '旧 SSE 服务'}));
-  }
-  const caps = (EXTRACT_CAPABILITIES || {})[currentExtractProvider()] || {};
-  if (key === 'EXTRACT_LINK_TYPE') return (caps.link_types || []).map(value => ({value, label:value.toUpperCase()}));
-  if (key === 'EXTRACT_LINK_UPDATE_MODE') return (caps.update_modes || []).map(value => ({value, label:value === 'poll' ? '主动轮询' : 'SSE监听'}));
   return [];
 }
 function filterSmsbowerSelect(input) {
@@ -7797,9 +7063,7 @@ function bindConfigLayoutV2() {
 
 async function loadConfig() {
   try {
-    const [config, capabilities] = await Promise.all([api('/api/config'), api('/api/extract-link/capabilities')]);
-    CONFIG = config;
-    EXTRACT_CAPABILITIES = capabilities.providers || {};
+    CONFIG = await api('/api/config');
     renderConfigLayoutV2();
     bindConfigLayoutV2();
   } catch(e) {
@@ -7889,12 +7153,6 @@ function trackConfigFieldChange(e) {
   const f = CONFIG.find(x => x.key === el.dataset.key);
   if (!f) return;
   CONFIG_PENDING_UPDATES[f.key] = readConfigElementValue(el, f);
-  if (f.key === 'EXTRACT_LINK_PROVIDER') {
-    const caps = EXTRACT_CAPABILITIES[String(CONFIG_PENDING_UPDATES[f.key])] || {};
-    if (caps.link_types?.length) CONFIG_PENDING_UPDATES.EXTRACT_LINK_TYPE = caps.link_types[0];
-    if (caps.update_modes?.length) CONFIG_PENDING_UPDATES.EXTRACT_LINK_UPDATE_MODE = caps.update_modes[0];
-    renderConfigLayoutV2();
-  }
   if (f.key === 'AUTO_PLAN_CHECK_AFTER_REGISTER') renderRegistrationDriverCard();
 }
 $('#tab-config').addEventListener('input', trackConfigFieldChange);

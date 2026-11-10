@@ -32,9 +32,6 @@ runtime.db-shm
 runtime*.db
 runtime_backups/
 
-# 提链 CDK 池（含完整 CDK）
-提链CDK池.json
-
 # Cloudflare 域名邮箱池（运行时数据）
 用于注册的域名邮箱.json
 

@@ -25,9 +25,7 @@ from core.openai.codex import codex_retry_service
 from core.infra import db
 from core.openai.commerce import plan_check_service
 from core.openai.commerce import checkout_session_service
-from core.link import extract_link_service
 from core.openai.account import live_check_service
-from core.link import masi_cdk_pool
 from webui.auth import init_auth, register_auth_routes
 from core.openai.register import registration_service as svc
 from core.infra.contracts.email_pool import EMAIL_POOL_STATUSES, validate_status, EmailPoolStatusError
@@ -182,7 +180,7 @@ def _compact_account_for_list(row: dict) -> dict:
 
     原则：
     - 不返回完整 Token / Token 预览 / TOTP Secret 等敏感凭证。
-    - 时间戳、错误原因、提链详情等只在前端确实要展示时返回；空值不返回。
+    - 时间戳、错误原因等只在前端确实要展示时返回；空值不返回。
     - 复制/下载敏感内容时再通过 /secret 接口按需读取。
     """
     out = {
@@ -232,12 +230,6 @@ def _compact_account_for_list(row: dict) -> dict:
         # 查活状态。
         "live_check_status", "live_check_error", "live_checked_at",
         "live_check_device_id", "live_check_proxy_used", "live_check_fingerprint_text",
-        # 提链成功/失败时才需要。
-        "extract_link_status", "extract_link_type", "extract_link_message", "extract_link_error",
-        "extract_link_job_id",
-        "extract_link_provider", "extract_link_update_mode", "extract_link_cdk_fingerprint",
-        "extract_link_long_url", "extract_link_copy_paste", "extract_link_image_url_png",
-        "extract_link_image_url_svg", "extract_link_expires_at",
         # Codex 状态提示。
         "codex_error",
         # 2FA/TOTP 补跑状态（仅在进行中/失败/有结果时返回）。
@@ -248,12 +240,7 @@ def _compact_account_for_list(row: dict) -> dict:
         value = row.get(key)
         if value is not None and value != "":
             out[key] = value
-    contract_row = dict(row)
-    contract_row["extract_link_resumable"] = db.account_extract_resumable(row)
-    # 兼容现有 WebUI；规范能力同时通过 extract_link_capabilities 返回。
-    out["extract_link_resumable"] = contract_row["extract_link_resumable"]
-    out.update(build_account_status_contract(contract_row))
-    out["extract_link_capabilities"] = db.account_extract_capabilities(row)
+    out.update(build_account_status_contract(row))
     plan = str(row.get("current_plan_type") or row.get("plan_type") or "").lower()
     if any(x in plan for x in ("plus", "pro", "team", "go")):
         expire = row.get("expires_at")
@@ -491,9 +478,6 @@ def create_app(auth_code: str | None = None) -> Flask:
     recovered_checkout_sessions = db.recover_interrupted_checkout_sessions()
     if recovered_checkout_sessions:
         logger.warning("已恢复 %s 个因 WebUI 重启中断的 Checkout 检测状态", recovered_checkout_sessions)
-    recovered_extract_links = db.recover_interrupted_extract_links()
-    if recovered_extract_links:
-        logger.warning("已恢复 %s 个因 WebUI 重启中断的提链状态", recovered_extract_links)
     recovered_live_checks = db.recover_interrupted_live_checks()
     if recovered_live_checks:
         logger.warning("已恢复 %s 个因 WebUI 重启中断的查活状态", recovered_live_checks)
@@ -1292,276 +1276,6 @@ def create_app(auth_code: str | None = None) -> Flask:
             "skipped": skipped,
             "skipped_count": len(skipped),
         }), 202
-
-    @app.get("/api/extract-link/cdk")
-    def api_extract_link_cdk():
-        """查询当前配置或传入 CDK 的剩余次数。"""
-        code = (request.args.get("code") or "").strip() or None
-        provider = (request.args.get("provider") or "").strip() or None
-        try:
-            return jsonify({"ok": True, **extract_link_service.query_cdk(cdk=code, provider=provider)})
-        except Exception as exc:
-            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 400
-
-    @app.get("/api/extract-link/capabilities")
-    def api_extract_link_capabilities():
-        return jsonify({"ok": True, "providers": extract_link_service.provider_capabilities()})
-
-    @app.get("/api/extract-link/cdks")
-    def api_extract_link_cdks():
-        provider = (request.args.get("provider") or "masi").strip().lower()
-        pool = (request.args.get("pool") or "").strip().lower() or None
-        try:
-            page = int(request.args.get("page") or 1)
-            page_size = int(request.args.get("page_size") or 10)
-            if page < 1:
-                raise ValueError("page 必须大于等于 1")
-            if page_size < 1 or page_size > 100:
-                raise ValueError("page_size 必须在 1 到 100 之间")
-            items = masi_cdk_pool.list_cdks(provider=provider, pool=pool)
-            total = len(items)
-            total_pages = max(1, (total + page_size - 1) // page_size)
-            page = min(page, total_pages)
-            start = (page - 1) * page_size
-            return jsonify({
-                "ok": True,
-                "items": items[start:start + page_size],
-                "page": page,
-                "page_size": page_size,
-                "total": total,
-                "total_pages": total_pages,
-                "summary": masi_cdk_pool.pool_summary(provider=provider),
-            })
-        except Exception as exc:
-            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 400
-
-    @app.post("/api/extract-link/cdks/import")
-    def api_extract_link_cdks_import():
-        data = request.get_json(silent=True) or {}
-        text = str(data.get("text") or data.get("cdks") or "")
-        refresh_quota = data.get("refresh_quota", False)
-        if not text.strip():
-            return jsonify({"ok": False, "error": "请提供一行一个的 CDK"}), 400
-        if not isinstance(refresh_quota, bool):
-            return jsonify({"ok": False, "error": "refresh_quota 必须是布尔值"}), 400
-        try:
-            result = extract_link_service.import_masi_cdks(text, refresh_quota=refresh_quota)
-            return jsonify({"ok": True, **result}), 200
-        except Exception as exc:
-            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 400
-
-    @app.post("/api/extract-link/cdks/<cdk_id>/refresh")
-    def api_extract_link_cdk_refresh(cdk_id: str):
-        try:
-            result = extract_link_service.refresh_masi_cdk(cdk_id)
-            return jsonify(result), 200 if result.get("ok") else 502
-        except KeyError:
-            return jsonify({"ok": False, "error": "CDK 不存在"}), 404
-        except masi_cdk_pool.CdkLeaseBusy as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 409
-        except Exception as exc:
-            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 400
-
-    @app.post("/api/extract-link/cdks/refresh")
-    def api_extract_link_cdks_refresh():
-        data = request.get_json(silent=True) or {}
-        ids = data.get("ids")
-        pool = str(data.get("pool") or "").strip().lower() or None
-        if ids is not None and not isinstance(ids, list):
-            return jsonify({"ok": False, "error": "ids 必须是数组"}), 400
-        try:
-            result = extract_link_service.refresh_masi_cdks(ids=ids, pool=pool)
-            return jsonify({"ok": True, **result})
-        except Exception as exc:
-            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 400
-
-    @app.post("/api/extract-link/cdks/enablement")
-    def api_extract_link_cdks_enablement():
-        data = request.get_json(silent=True) or {}
-        enabled = data.get("enabled")
-        scope = str(data.get("scope") or "").strip().lower()
-        if not isinstance(enabled, bool):
-            return jsonify({"ok": False, "error": "enabled 必须是布尔值"}), 400
-        if scope not in {"ids", "pool"}:
-            return jsonify({"ok": False, "error": "scope 仅支持 ids / pool"}), 400
-        ids = data.get("ids")
-        pool = str(data.get("pool") or "").strip().lower() or None
-        if scope == "ids":
-            if not isinstance(ids, list) or not ids:
-                return jsonify({"ok": False, "error": "scope=ids 时 ids 必须是非空数组"}), 400
-            if len(ids) > 100:
-                return jsonify({"ok": False, "error": "单次最多修改 100 条 CDK"}), 400
-            if any(not isinstance(value, str) or not value.strip() for value in ids):
-                return jsonify({"ok": False, "error": "ids 中的每一项必须是非空字符串"}), 400
-            if pool is not None:
-                return jsonify({"ok": False, "error": "scope=ids 时不得提供 pool"}), 400
-        else:
-            if ids is not None:
-                return jsonify({"ok": False, "error": "scope=pool 时不得提供 ids"}), 400
-            if pool not in masi_cdk_pool.VALID_POOLS:
-                return jsonify({"ok": False, "error": "scope=pool 时 pool 仅支持 selectable / exhausted"}), 400
-        try:
-            result = masi_cdk_pool.set_enablement(
-                enabled=enabled,
-                ids=ids if scope == "ids" else None,
-                pool=pool if scope == "pool" else None,
-            )
-            return jsonify({"ok": True, **result})
-        except Exception as exc:
-            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 400
-
-    @app.delete("/api/extract-link/cdks/<cdk_id>")
-    def api_extract_link_cdk_delete(cdk_id: str):
-        try:
-            deleted = masi_cdk_pool.delete_cdk(cdk_id, active_ids=db.active_extract_cdk_ids())
-            if not deleted:
-                return jsonify({"ok": False, "error": "CDK 不存在"}), 404
-            return jsonify({"ok": True, "deleted": True, "id": cdk_id})
-        except masi_cdk_pool.CdkLeaseBusy as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 409
-        except Exception as exc:
-            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 400
-
-    def _is_extract_eligible(acc: dict) -> bool:
-        return bool(build_account_status_contract(acc)["plan_capabilities"]["is_eligible"])
-
-    @app.post("/api/accounts/extract-link")
-    def api_account_extract_link():
-        """单账号提链。Body {account_id|id, link_type?, provider?, update_mode?, cdk?}。"""
-        data = request.get_json(silent=True) or {}
-        acc_id = data.get("account_id") or data.get("id")
-        try:
-            acc = db.get_account(int(acc_id))
-        except Exception:
-            acc = None
-        if not acc:
-            return jsonify({"ok": False, "error": "账号不存在"}), 404
-        if not _is_extract_eligible(acc):
-            return jsonify({"ok": False, "error": "仅支持 free(可Plus试用) 账号提链；请先查询套餐确认资格"}), 400
-        token = (acc.get("access_token") or "").strip()
-        if not token:
-            return jsonify({"ok": False, "error": "该账号没有 access_token"}), 400
-        try:
-            queued = extract_link_service.enqueue_account_extract(
-                account_id=int(acc.get("id")),
-                email=acc.get("email") or "",
-                access_token=token,
-                trigger="manual",
-                link_type=data.get("link_type"),
-                cdk=data.get("cdk"),
-                provider=data.get("provider"),
-                update_mode=data.get("update_mode"),
-            )
-        except Exception as exc:
-            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 400
-        if queued.get("busy"):
-            return jsonify({"ok": False, **queued}), 409
-        if not queued.get("accepted"):
-            return jsonify({"ok": False, **queued}), 503
-        return jsonify({"ok": True, "started": True, **{k: v for k, v in queued.items() if k != "future"}}), 202
-
-    @app.post("/api/accounts/extract-link-bulk")
-    def api_accounts_extract_link_bulk():
-        """批量提链。Body {account_ids:[...], link_type?, provider?, update_mode?, cdk?}。"""
-        data = request.get_json(silent=True) or {}
-        ids = data.get("account_ids") or data.get("ids") or []
-        if not isinstance(ids, list) or not ids:
-            return jsonify({"ok": False, "error": "account_ids 必须是非空数组"}), 400
-        if len(ids) > 500:
-            return jsonify({"ok": False, "error": "单次最多提链 500 个账号"}), 400
-
-        try:
-            extract_link_service.resolve_route(
-                link_type=data.get("link_type"),
-                provider=data.get("provider"),
-                update_mode=data.get("update_mode"),
-                cdk=data.get("cdk"),
-            )
-        except Exception as exc:
-            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 400
-
-        started = []
-        busy = []
-        failed = []
-        skipped = []
-        seen = set()
-        for raw in ids:
-            try:
-                acc_id = int(raw)
-            except Exception:
-                skipped.append({"id": raw, "reason": "ID 非法"})
-                continue
-            if acc_id in seen:
-                continue
-            seen.add(acc_id)
-            acc = db.get_account(acc_id)
-            if not acc:
-                skipped.append({"id": acc_id, "reason": "账号不存在"})
-                continue
-            email = acc.get("email")
-            if not _is_extract_eligible(acc):
-                skipped.append({"id": acc_id, "email": email, "reason": "不是 free(可Plus试用)"})
-                continue
-            token = (acc.get("access_token") or "").strip()
-            if not token:
-                skipped.append({"id": acc_id, "email": email, "reason": "缺少 access_token"})
-                continue
-            try:
-                queued = extract_link_service.enqueue_account_extract(
-                    account_id=acc_id,
-                    email=email or "",
-                    access_token=token,
-                    trigger="manual_bulk",
-                    link_type=data.get("link_type"),
-                    cdk=data.get("cdk"),
-                    provider=data.get("provider"),
-                    update_mode=data.get("update_mode"),
-                )
-            except Exception as exc:
-                failed.append({"id": acc_id, "email": email, "error": f"{type(exc).__name__}: {exc}"})
-                continue
-            item = {"id": acc_id, "email": email, **{k: v for k, v in queued.items() if k != "future"}}
-            if queued.get("accepted"):
-                started.append(item)
-            elif queued.get("busy"):
-                busy.append(item)
-            else:
-                failed.append(item)
-        return jsonify({
-            "ok": True,
-            "started": started,
-            "started_count": len(started),
-            "busy": busy,
-            "busy_count": len(busy),
-            "failed": failed,
-            "failed_count": len(failed),
-            "skipped": skipped,
-            "skipped_count": len(skipped),
-        }), 202
-
-    @app.post("/api/accounts/extract-link-resume")
-    def api_account_extract_link_resume():
-        """恢复轮询账号已保存的 Masi Job；不会创建新 Job。"""
-        data = request.get_json(silent=True) or {}
-        acc_id = data.get("account_id") or data.get("id")
-        try:
-            acc = db.get_account(int(acc_id))
-        except Exception:
-            acc = None
-        if not acc:
-            return jsonify({"ok": False, "error": "账号不存在"}), 404
-        try:
-            queued = extract_link_service.enqueue_existing_masi_job_poll(
-                account_id=int(acc["id"]),
-                email=acc.get("email") or "",
-            )
-        except Exception as exc:
-            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 400
-        if queued.get("busy"):
-            return jsonify({"ok": False, **queued}), 409
-        if not queued.get("accepted"):
-            return jsonify({"ok": False, **queued}), 503
-        return jsonify({"ok": True, "started": True, "message": "已恢复原 Masi Job 轮询"}), 202
 
     @app.post("/api/accounts/download-cpa-bulk")
     def api_accounts_download_cpa_bulk():
@@ -3026,21 +2740,6 @@ def create_app(auth_code: str | None = None) -> Flask:
                     "error": f"ValueError: PLAN_CHECK_PROXY_MODE={mode!r} 无效，可选 {choices}",
                 }), 400
             updates["PLAN_CHECK_PROXY_MODE"] = mode
-        if any(key in updates for key in ("EXTRACT_LINK_PROVIDER", "EXTRACT_LINK_TYPE", "EXTRACT_LINK_UPDATE_MODE")):
-            from config import extract_link as _extract_cfg
-            try:
-                extract_link_service.validate_route_combination(
-                    provider=str(updates.get("EXTRACT_LINK_PROVIDER", _extract_cfg.EXTRACT_LINK_PROVIDER)),
-                    link_type=str(updates.get("EXTRACT_LINK_TYPE", _extract_cfg.EXTRACT_LINK_TYPE)),
-                    update_mode=str(updates.get("EXTRACT_LINK_UPDATE_MODE", _extract_cfg.EXTRACT_LINK_UPDATE_MODE)),
-                )
-            except ValueError as exc:
-                return jsonify({"ok": False, "error": f"ValueError: {exc}"}), 400
-        if "EXTRACT_LINK_PROXY" in updates:
-            try:
-                extract_link_service.validate_extract_proxy(updates.get("EXTRACT_LINK_PROXY"))
-            except ValueError as exc:
-                return jsonify({"ok": False, "error": f"ValueError: {exc}"}), 400
         smsbower_keys = {
             "SMSBOWER_API_BASE", "SMSBOWER_API_KEY", "SMSBOWER_SERVICE", "SMSBOWER_COUNTRY",
             "SMSBOWER_MIN_PRICE", "SMSBOWER_MAX_PRICE",

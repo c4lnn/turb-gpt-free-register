@@ -22,9 +22,6 @@ PLAN_CATEGORY_CODES = (
 PLAN_QUERY_STATUSES = (
     "pending", "queued", "running", "success", "failed", "unknown",
 )
-EXTRACT_LINK_STATUSES = (
-    "pending", "queued", "running", "success", "failed", "canceled", "unknown",
-)
 CHECKOUT_SESSION_TYPES = ("oaics", "cs_live", "other_cs", "unknown")
 CHECKOUT_QUERY_STATUSES = ("pending", "queued", "running", "success", "failed", "unknown")
 LIVE_CHECK_STATUSES = (
@@ -34,7 +31,6 @@ LIVE_CHECK_STATUSES = (
 _CODEX_AUTH_SET = frozenset(CODEX_AUTH_STATUSES)
 _CODEX_OPERATION_SET = frozenset(CODEX_OPERATION_STATUSES)
 _PLAN_QUERY_SET = frozenset(PLAN_QUERY_STATUSES)
-_EXTRACT_SET = frozenset(EXTRACT_LINK_STATUSES)
 _LIVE_SET = frozenset(LIVE_CHECK_STATUSES)
 _CHECKOUT_QUERY_SET = frozenset(CHECKOUT_QUERY_STATUSES)
 
@@ -177,31 +173,6 @@ def checkout_capabilities(status: Any, *, has_access_token: bool = True) -> dict
     }
 
 
-def normalize_extract_link_status(raw: Any) -> str:
-    value = _text(raw)
-    aliases = {"cancelled": "canceled", "stopped": "canceled", "": "pending"}
-    return aliases.get(value, value if value in _EXTRACT_SET else "unknown")
-
-
-def extract_link_capabilities(
-    status: Any,
-    *,
-    resumable: bool = False,
-    has_access_token: bool = True,
-) -> dict[str, bool]:
-    value = normalize_extract_link_status(status)
-    running = value in {"queued", "running"}
-    return {
-        "is_running": running,
-        "is_terminal": value in {"success", "failed", "canceled"},
-        "can_retry": value in {"failed", "canceled"} and (resumable or value == "canceled"),
-        "can_start": bool(has_access_token) and value in {"pending", "failed", "canceled"} and not running,
-        "can_stop": running,
-        "resumable": bool(resumable),
-        "has_access_token": bool(has_access_token),
-    }
-
-
 def normalize_live_check_status(raw: Any) -> str:
     value = _text(raw)
     # 查活是可选操作；空值表示尚未主动查活，不伪装成待处理任务。
@@ -247,7 +218,6 @@ def build_account_status_contract(row: Mapping[str, Any] | None) -> dict[str, An
     operation = codex_operation_status(row)
     plan = classify_plan_category(row)
     plan_query = normalize_plan_query_status(row.get("plan_check_status"))
-    extract = normalize_extract_link_status(row.get("extract_link_status"))
     live = normalize_live_check_status(row.get("live_check_status"))
     return {
         "codex_auth_status": auth,
@@ -265,12 +235,6 @@ def build_account_status_contract(row: Mapping[str, Any] | None) -> dict[str, An
             row.get("checkout_check_status"),
             has_access_token=bool(str(row.get("access_token") or "").strip()),
         ),
-        "extract_link_status": extract,
-        "extract_link_capabilities": extract_link_capabilities(
-            extract,
-            resumable=bool(row.get("extract_link_resumable")),
-            has_access_token=bool(str(row.get("access_token") or "").strip()),
-        ),
         "live_check_status": live,
         "live_check_capabilities": live_check_capabilities(live),
         "checkout_session_type": classify_checkout_session_type(row.get("checkout_session_id"))
@@ -283,11 +247,11 @@ def build_account_status_contract(row: Mapping[str, Any] | None) -> dict[str, An
 
 __all__ = [
     "CHECKOUT_QUERY_STATUSES", "CHECKOUT_SESSION_TYPES", "CODEX_AUTH_STATUSES", "CODEX_OPERATION_STATUSES",
-    "EXTRACT_LINK_STATUSES", "LIVE_CHECK_STATUSES", "PLAN_CATEGORY_CODES",
+    "LIVE_CHECK_STATUSES", "PLAN_CATEGORY_CODES",
     "PLAN_QUERY_STATUSES", "build_account_status_contract", "classify_checkout_session_type",
     "classify_plan_category", "codex_auth_status", "codex_capabilities",
-    "codex_operation_status", "extract_link_capabilities", "normalize_codex_auth_status",
-    "normalize_codex_operation_status", "normalize_extract_link_status",
+    "codex_operation_status", "normalize_codex_auth_status",
+    "normalize_codex_operation_status",
     "normalize_live_check_status", "normalize_plan_query_status", "plan_capabilities",
     "live_check_capabilities", "checkout_capabilities", "normalize_checkout_query_status",
 ]

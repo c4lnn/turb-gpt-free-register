@@ -331,65 +331,6 @@ EDITABLE_FIELDS = [
         "key": "CHECKOUT_SESSION_JITTER", "file": "checkout_session.py", "type": "float", "group": "Checkout Session",
         "label": "Checkout请求随机抖动(秒)", "help": "在最小间隔上增加随机等待，范围 0-30 秒",
     },
-    # ---- 提链 ----
-    {
-        "key": "EXTRACT_LINK_API_BASE", "file": "extract_link.py", "type": "str", "group": "提链",
-        "label": "提链服务地址", "help": "填写提链服务 API 地址",
-    },
-    {
-        "key": "EXTRACT_LINK_CDK", "file": "extract_link.py", "type": "str", "group": "提链",
-        "label": "提链 CDK", "help": "创建提链任务和监听任务事件使用；成功提链扣 1 次",
-        "storage": "env", "secret": True,
-    },
-    {
-        "key": "EXTRACT_LINK_TYPE", "file": "extract_link.py", "type": "str", "group": "提链",
-        "label": "提链类型", "help": "支持 pix / upi / kakao_pay / ideal",
-    },
-    {
-        "key": "EXTRACT_LINK_PROVIDER", "file": "extract_link.py", "type": "str", "group": "提链",
-        "label": "提链服务提供方", "help": "legacy=现有 SSE 服务；masi=Masi Kakao Job API",
-    },
-    {
-        "key": "EXTRACT_LINK_UPDATE_MODE", "file": "extract_link.py", "type": "str", "group": "提链",
-        "label": "结果更新方式", "help": "sse=监听服务端事件；poll=由后端主动轮询远端 Job",
-    },
-    {
-        "key": "EXTRACT_LINK_PROXY", "file": "extract_link.py", "type": "str", "group": "提链",
-        "label": "提链代理", "help": "legacy/Masi 共用；例如 http://127.0.0.1:7816，留空不显式指定代理",
-        "storage": "env", "secret": True,
-    },
-    {
-        "key": "MASI_KAKAO_API_BASE", "file": "extract_link.py", "type": "str", "group": "提链",
-        "label": "Masi API 地址", "help": "Masi Kakao Job API Base URL，默认 https://masi.cc.cd",
-    },
-    {
-        "key": "EXTRACT_LINK_WORKERS", "file": "extract_link.py", "type": "int", "group": "提链",
-        "label": "提链并发数", "help": "批量提链后台线程数，建议 1-4；修改后需重启 WebUI 才会重建线程池",
-    },
-    {
-        "key": "EXTRACT_LINK_POLL_INTERVAL", "file": "extract_link.py", "type": "float", "group": "提链",
-        "label": "Job轮询间隔(秒)", "help": "poll 模式下后端查询远端 Job 的间隔，建议 2-5 秒",
-    },
-    {
-        "key": "EXTRACT_LINK_POLL_MAX_ERRORS", "file": "extract_link.py", "type": "int", "group": "提链",
-        "label": "Job连续错误上限", "help": "poll 模式下网络错误、429、5xx 的连续容忍次数",
-    },
-    {
-        "key": "MASI_CDK_QUERY_MAX_ATTEMPTS", "file": "extract_link.py", "type": "int", "group": "提链",
-        "label": "CDK查询尝试次数", "help": "Masi CDK 额度查询失败时的最大尝试次数",
-    },
-    {
-        "key": "MASI_CDK_QUERY_RETRY_DELAY", "file": "extract_link.py", "type": "float", "group": "提链",
-        "label": "CDK查询重试间隔(秒)", "help": "Masi CDK 额度查询失败后的重试间隔",
-    },
-    {
-        "key": "MASI_CDK_SELECTION_TIMEOUT", "file": "extract_link.py", "type": "int", "group": "提链",
-        "label": "CDK选择超时(秒)", "help": "全部 CDK 被占用时等待出现可用次数的最长时间",
-    },
-    {
-        "key": "MASI_CDK_REFRESH_WORKERS", "file": "extract_link.py", "type": "int", "group": "提链",
-        "label": "CDK刷新并发数", "help": "批量刷新 Masi CDK 额度时的并发数，建议 2-6",
-    },
     # ---- Codex 配置 ----
     {
         "key": "SUB2API_API_BASE", "file": "sub2api.py", "type": "str", "group": "Codex",
@@ -728,7 +669,7 @@ def get_config() -> list[dict]:
         item["storage"] = "env"
         if key == "EMAIL_SOURCE":
             item["options"] = email_source_options()
-        if field.get("secret") or key == "EXTRACT_LINK_PROXY":
+        if field.get("secret"):
             item["configured"] = bool(value)
             item["value"] = ""
         else:

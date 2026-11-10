@@ -131,14 +131,12 @@ class AccountFilterToolbarTemplateTests(unittest.TestCase):
         self.assertIn("/api/accounts/check-checkout-session-bulk", checkout)
         self.assertNotIn("workers", checkout)
 
-    def test_capability_driven_batch_buttons_cover_live_and_extract_status(self):
+    def test_capability_driven_batch_buttons_cover_live_and_plan_status(self):
         start = self.template.index("function updateAccountSelectionUi")
         end = self.template.index("// ---------- 补跑日志面板 ----------", start)
         selection = self.template[start:end]
         self.assertIn("btnCheckSelectedLiveV2", selection)
         self.assertIn("row.live_check_capabilities?.can_start === true", selection)
-        self.assertIn("row.plan_capabilities?.is_eligible === true", selection)
-        self.assertIn("row.extract_link_capabilities?.can_start === true", selection)
         self.assertIn("row.plan_capabilities?.can_start === true", selection)
         self.assertIn("row.checkout_capabilities?.can_retry === true", selection)
         self.assertIn("row.codex_capabilities?.can_retry === true", selection)
@@ -146,7 +144,7 @@ class AccountFilterToolbarTemplateTests(unittest.TestCase):
 
     def test_row_actions_use_capabilities_and_normalized_codes(self):
         plan_start = self.template.index("function _planAction")
-        plan_end = self.template.index("function _fmtExtractExpire", plan_start)
+        plan_end = self.template.index("function _codexAction", plan_start)
         plan = self.template[plan_start:plan_end]
         self.assertIn("capabilities.is_checking === true", plan)
         self.assertIn("capabilities.can_start !== true", plan)
@@ -162,13 +160,6 @@ class AccountFilterToolbarTemplateTests(unittest.TestCase):
         self.assertIn("capabilities.can_retry !== true", checkout)
         self.assertNotIn("r.has_access_token", checkout)
 
-        extract_start = self.template.index("function _extractLinkAction")
-        extract_end = self.template.index("function _codexAction", extract_start)
-        extract = self.template[extract_start:extract_end]
-        self.assertIn("capabilities.is_running === true", extract)
-        self.assertIn("capabilities.resumable === true", extract)
-        self.assertIn("capabilities.can_start !== true", extract)
-
         codex_start = self.template.index("function _codexAction")
         codex_end = self.template.index("function _tokenCellV2", codex_start)
         codex = self.template[codex_start:codex_end]
@@ -181,14 +172,8 @@ class AccountFilterToolbarTemplateTests(unittest.TestCase):
         self.assertIn("account?.plan_capabilities?.can_start !== true", self.template[plan_start:plan_end])
 
         checkout_start = self.template.index("async function checkOneCheckoutSession")
-        checkout_end = self.template.index("async function extractOneLink", checkout_start)
+        checkout_end = self.template.index("async function checkSelectedPlans", checkout_start)
         self.assertIn("account?.checkout_capabilities?.can_retry !== true", self.template[checkout_start:checkout_end])
-
-        resume_start = self.template.index("async function resumeExtractLink")
-        resume_end = self.template.index("async function stopSelectedCodex", resume_start)
-        resume = self.template[resume_start:resume_end]
-        self.assertIn("acc.extract_link_capabilities?.resumable !== true", resume)
-        self.assertIn("acc.extract_link_capabilities?.can_retry !== true", resume)
 
         stop_start = self.template.index("async function stopSelectedCodex")
         retry_start = self.template.index("async function retrySelectedCodex", stop_start)

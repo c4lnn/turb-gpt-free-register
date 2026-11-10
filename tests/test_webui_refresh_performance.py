@@ -15,7 +15,6 @@ class WebUiRefreshPerformanceTests(unittest.TestCase):
         self.recovery_patches = ExitStack()
         for name in (
             "recover_interrupted_plan_checks",
-            "recover_interrupted_extract_links",
         ):
             self.recovery_patches.enter_context(
                 patch.object(web_app.db, name, return_value=0)

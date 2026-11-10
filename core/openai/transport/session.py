@@ -451,7 +451,7 @@ class BrowserSession:
         return "; ".join(pairs)
 
     def chatgpt_cookie_header_with_device(self) -> str:
-        """兼容提链项目的显式 API，供需要手工 Cookie 头的调用点使用。"""
+        """显式返回带设备标识的 Cookie 头，供需要手工构造请求头的调用点使用。"""
         return self._cookie_header_with_device("chatgpt.com")
 
     def _detect_exit_geo(self) -> dict:

@@ -14,10 +14,8 @@ from core.infra.contracts.account_status import (
     classify_checkout_session_type,
     classify_plan_category,
     codex_capabilities,
-    extract_link_capabilities,
     live_check_capabilities,
     normalize_codex_auth_status,
-    normalize_extract_link_status,
     normalize_live_check_status,
     normalize_plan_query_status,
     plan_capabilities,
@@ -69,7 +67,6 @@ class AccountStatusContractTests(unittest.TestCase):
         self.assertFalse(codex_capabilities("unknown", "idle")["can_start"])
         self.assertFalse(plan_capabilities("unknown", "future_state")["can_start"])
         self.assertFalse(checkout_capabilities("future_state")["can_start"])
-        self.assertFalse(extract_link_capabilities("future_state")["can_start"])
         self.assertFalse(live_check_capabilities("future_state")["can_start"])
 
     def test_initial_liveness_is_unset_and_can_be_checked(self):
@@ -85,19 +82,10 @@ class AccountStatusContractTests(unittest.TestCase):
         self.assertFalse(capabilities["can_retry"])
         self.assertFalse(capabilities["has_access_token"])
 
-    def test_plan_and_extract_capabilities_require_an_access_token_to_start(self):
+    def test_plan_capabilities_require_an_access_token_to_start(self):
         plan = plan_capabilities("free_no_trial", "success", has_access_token=False)
         self.assertFalse(plan["can_start"])
         self.assertFalse(plan["has_access_token"])
-
-        extract = extract_link_capabilities("pending", has_access_token=False)
-        self.assertFalse(extract["can_start"])
-        self.assertFalse(extract["has_access_token"])
-        resumable = extract_link_capabilities(
-            "failed", resumable=True, has_access_token=False
-        )
-        self.assertTrue(resumable["can_retry"])
-        self.assertFalse(resumable["can_start"])
 
     def test_capability_matrix_keeps_processing_and_terminal_states_distinct(self):
         self.assertTrue(codex_capabilities("failed", "queued")["is_running"])
@@ -107,11 +95,6 @@ class AccountStatusContractTests(unittest.TestCase):
         self.assertTrue(checkout_capabilities("running")["is_checking"])
         self.assertFalse(checkout_capabilities("running")["can_retry"])
         self.assertTrue(checkout_capabilities("failed")["can_retry"])
-
-        self.assertTrue(extract_link_capabilities("running")["is_running"])
-        self.assertFalse(extract_link_capabilities("running")["can_start"])
-        self.assertTrue(extract_link_capabilities("failed")["can_start"])
-        self.assertFalse(extract_link_capabilities("unknown")["can_start"])
 
         self.assertTrue(live_check_capabilities("queued")["is_running"])
         self.assertFalse(live_check_capabilities("queued")["can_start"])
@@ -129,9 +112,6 @@ class AccountStatusContractTests(unittest.TestCase):
             checkout = checkout_capabilities(status)
             self.assertTrue(checkout["is_checking"])
             self.assertFalse(checkout["can_retry"])
-            extract = extract_link_capabilities(status)
-            self.assertTrue(extract["is_running"])
-            self.assertFalse(extract["can_start"])
             live = live_check_capabilities(status)
             self.assertTrue(live["is_running"])
             self.assertFalse(live["can_start"])
@@ -149,15 +129,11 @@ class AccountStatusContractTests(unittest.TestCase):
         self.assertTrue(plan_capabilities("free_no_trial", "pending")["can_start"])
         self.assertTrue(checkout_capabilities("success")["can_retry"])
         self.assertTrue(checkout_capabilities("failed")["can_retry"])
-        self.assertFalse(extract_link_capabilities("success")["can_start"])
-        self.assertTrue(extract_link_capabilities("failed")["can_start"])
-        self.assertTrue(extract_link_capabilities("canceled")["can_start"])
 
         for factory, args in (
             (codex_capabilities, ("unknown", "idle")),
             (plan_capabilities, ("unknown", "unknown")),
             (checkout_capabilities, ("unknown",)),
-            (extract_link_capabilities, ("unknown",)),
             (live_check_capabilities, ("unknown",)),
         ):
             capabilities = factory(*args)
@@ -217,15 +193,6 @@ class AccountStatusContractTests(unittest.TestCase):
         contract = build_account_status_contract({"codex_status": "retrying"})
         self.assertEqual(contract["codex_auth_status"], "unknown")
         self.assertEqual(contract["codex_operation_status"], "running")
-
-    def test_extract_legacy_cancel_aliases_and_unknown_are_safe(self):
-        self.assertEqual(normalize_extract_link_status("cancelled"), "canceled")
-        self.assertEqual(normalize_extract_link_status("stopped"), "canceled")
-        self.assertEqual(normalize_extract_link_status("future_state"), "unknown")
-        self.assertFalse(extract_link_capabilities("future_state")["can_retry"])
-
-    def test_extract_contract_normalizes_cancelled_write_result(self):
-        self.assertEqual(normalize_extract_link_status("cancelled"), "canceled")
 
     def test_checkout_session_types_use_one_classifier(self):
         self.assertEqual(classify_checkout_session_type("oaics_123"), "oaics")

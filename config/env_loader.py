@@ -31,8 +31,6 @@ SECRET_ENV_KEYS: dict[str, str] = {
     "CLOUDFLARE_CUSTOM_AUTH": "Cloudflare Worker 全局密码 x-custom-auth",
     "REMAIL_API_KEY": "Remail 开放 API Key",
     "CPA_MANAGEMENT_KEY": "CPA 管理接口密钥",
-    "EXTRACT_LINK_CDK": "提链服务 CDK",
-    "EXTRACT_LINK_PROXY": "提链请求代理（可能包含认证信息）",
     "SUB2API_API_KEY": "sub2api 管理接口 API Key",
     "SUB2API_API_TOKEN": "sub2api 管理接口鉴权 Token（旧配置名，兼容）",
     "SMS_API_KEY": "接码平台 API Key（如 GrizzlySMS）",

@@ -43,8 +43,6 @@ from core.infra.contracts.account_status import (
     codex_operation_status,
     normalize_codex_auth_status,
     normalize_codex_operation_status,
-    normalize_extract_link_status,
-    extract_link_capabilities as contract_extract_link_capabilities,
 )
 from core.infra.contracts.email_source import VALID_EMAIL_SOURCES
 
@@ -1557,7 +1555,6 @@ def _decorate_account(row: dict, *, include_checkout_session_id: bool = True) ->
             out["checkout_check_error"] = out["checkout_check_error_message"]
             out["checkout_check_ok"] = False
             out["checkout_check_stale"] = True
-    out["extract_link_resumable"] = account_extract_resumable(out)
     out.update(build_account_status_contract(out))
     out["copy_line"] = _account_line(out)
     return out
@@ -2385,205 +2382,6 @@ update_account_checkout_check = update_account_checkout_session
 recover_interrupted_checkout_checks = recover_interrupted_checkout_sessions
 
 
-def claim_account_extract(
-    acc_id: int,
-    trigger: str = "manual",
-    link_type: str = "pix",
-    provider: str = "legacy",
-    update_mode: str = "sse",
-) -> bool:
-    """原子占用账号提链任务；已有未超时任务时返回 False。"""
-    with _LOCK:
-        accounts = _load_accounts()
-        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
-        if row is None:
-            return False
-        current_status = row.get("extract_link_status")
-        if current_status in {"queued", "running"}:
-            try:
-                stamp_key = "extract_link_queued_at" if current_status == "queued" else "extract_link_started_at"
-                stale_after = _PLAN_CHECK_QUEUE_STALE_SECONDS if current_status == "queued" else _PLAN_CHECK_STALE_SECONDS
-                started_at = datetime.fromisoformat(str(row.get(stamp_key) or ""))
-                if (datetime.now() - started_at).total_seconds() < stale_after:
-                    return False
-            except (TypeError, ValueError):
-                pass
-        now = _now()
-        row["extract_link_status"] = "queued"
-        row["extract_link_ok"] = False
-        row["extract_link_trigger"] = str(trigger or "manual")
-        row["extract_link_type"] = str(link_type or "pix").lower()
-        row["extract_link_provider"] = str(provider or "legacy").lower()
-        row["extract_link_update_mode"] = str(update_mode or "sse").lower()
-        row["extract_link_queued_at"] = now
-        row["extract_link_started_at"] = None
-        row["extract_link_completed_at"] = None
-        row["extract_link_error"] = None
-        row["extract_link_message"] = "已入队"
-        for key in (
-            "extract_link_job_id", "extract_link_cdk_id", "extract_link_cdk_fingerprint",
-            "extract_link_long_url", "extract_link_copy_paste", "extract_link_image_url_png",
-            "extract_link_image_url_svg", "extract_link_payment_method",
-            "extract_link_payment_link_type", "extract_link_expires_at",
-            "extract_link_result_json", "extract_link_cdk_remaining",
-        ):
-            row[key] = None
-        row["updated_at"] = now
-        _save_accounts(accounts)
-        return True
-
-
-_EXTRACT_RESUME_ERROR_MARKERS = (
-    "Masi Job 等待超时",
-    "Masi Job 连续查询失败",
-    "WebUI 重启导致提链任务中断",
-)
-
-
-def _account_extract_resumable_legacy(row: dict | None) -> bool:
-    row = row or {}
-    error = str(row.get("extract_link_error") or "")
-    return bool(
-        normalize_extract_link_status(row.get("extract_link_status")) == "failed"
-        and str(row.get("extract_link_provider") or "").lower() == "masi"
-        and str(row.get("extract_link_job_id") or "").strip()
-        and str(row.get("extract_link_cdk_id") or "").strip()
-        and any(marker in error for marker in _EXTRACT_RESUME_ERROR_MARKERS)
-    )
-
-
-def account_extract_capabilities(row: dict | None) -> dict[str, bool]:
-    row = row or {}
-    return contract_extract_link_capabilities(
-        row.get("extract_link_status"),
-        resumable=_account_extract_resumable_legacy(row),
-        has_access_token=bool(str(row.get("access_token") or "").strip()),
-    )
-
-
-def account_extract_resumable(row: dict | None) -> bool:
-    return account_extract_capabilities(row)["resumable"]
-
-
-def claim_account_extract_resume(acc_id: int, trigger: str = "manual_resume") -> bool:
-    """原子占用已有 Masi Job 的恢复轮询；保留原 job/CDK 绑定。"""
-    with _LOCK:
-        accounts = _load_accounts()
-        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
-        if not account_extract_resumable(row):
-            return False
-        now = _now()
-        row["extract_link_status"] = "queued"
-        row["extract_link_ok"] = False
-        row["extract_link_trigger"] = str(trigger or "manual_resume")
-        row["extract_link_queued_at"] = now
-        row["extract_link_started_at"] = None
-        row["extract_link_completed_at"] = None
-        row["extract_link_error"] = None
-        row["extract_link_message"] = "已入队恢复原 Masi Job 轮询"
-        row["updated_at"] = now
-        _save_accounts(accounts)
-        return True
-
-
-def mark_account_extract_running(acc_id: int) -> bool:
-    """把提链任务标记为运行中。"""
-    with _LOCK:
-        accounts = _load_accounts()
-        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
-        if row is None or row.get("extract_link_status") not in {"queued", "running"}:
-            return False
-        row["extract_link_status"] = "running"
-        row["extract_link_started_at"] = _now()
-        row["extract_link_error"] = None
-        row["extract_link_message"] = "任务运行中"
-        row["updated_at"] = _now()
-        _save_accounts(accounts)
-        return True
-
-
-def update_account_extract(acc_id: int, result: dict | None = None) -> bool:
-    """更新账号提链任务结果/进度。"""
-    result = result or {}
-    with _LOCK:
-        accounts = _load_accounts()
-        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
-        if row is None:
-            return False
-        status = normalize_extract_link_status(
-            result.get("status") or ("success" if result.get("ok") else "failed")
-        )
-        ok = bool(result.get("ok")) and status == "success"
-        row["extract_link_status"] = status
-        row["extract_link_ok"] = ok
-        row["extract_link_checked_at"] = result.get("checked_at") or _now()
-        if status in {"success", "failed", "canceled"}:
-            row["extract_link_completed_at"] = _now()
-        row["extract_link_error"] = None if ok or status == "running" else result.get("error")
-        if result.get("message") is not None:
-            row["extract_link_message"] = result.get("message")
-        if result.get("job_id") is not None:
-            row["extract_link_job_id"] = result.get("job_id")
-        if result.get("link_type") is not None:
-            row["extract_link_type"] = result.get("link_type")
-        if result.get("provider") is not None:
-            row["extract_link_provider"] = result.get("provider")
-        if result.get("update_mode") is not None:
-            row["extract_link_update_mode"] = result.get("update_mode")
-        if result.get("cdk_id") is not None:
-            row["extract_link_cdk_id"] = result.get("cdk_id")
-        if result.get("cdk_fingerprint") is not None:
-            row["extract_link_cdk_fingerprint"] = result.get("cdk_fingerprint")
-        if result.get("cdk_remaining") is not None:
-            row["extract_link_cdk_remaining"] = result.get("cdk_remaining")
-        payload = result.get("result") if isinstance(result.get("result"), dict) else {}
-        if payload:
-            row["extract_link_long_url"] = payload.get("long_url")
-            row["extract_link_copy_paste"] = payload.get("copy_paste")
-            row["extract_link_image_url_png"] = payload.get("image_url_png")
-            row["extract_link_image_url_svg"] = payload.get("image_url_svg")
-            row["extract_link_payment_method"] = payload.get("payment_method")
-            row["extract_link_payment_link_type"] = payload.get("payment_link_type")
-            row["extract_link_expires_at"] = payload.get("expires_at")
-            if payload.get("cdk_remaining") is not None:
-                row["extract_link_cdk_remaining"] = payload.get("cdk_remaining")
-            row["extract_link_result_json"] = json.dumps(payload, ensure_ascii=False)
-        row["updated_at"] = _now()
-        _save_accounts(accounts)
-        return True
-
-
-def recover_interrupted_extract_links() -> int:
-    """服务启动时恢复上次进程中断的提链状态。"""
-    with _LOCK:
-        accounts = _load_accounts()
-        recovered = 0
-        now = _now()
-        for row in accounts:
-            if row.get("extract_link_status") not in {"queued", "running"}:
-                continue
-            row["extract_link_status"] = "failed"
-            row["extract_link_ok"] = False
-            row["extract_link_error"] = "WebUI 重启导致提链任务中断，请重新提链"
-            row["extract_link_completed_at"] = now
-            row["updated_at"] = now
-            recovered += 1
-        if recovered:
-            _save_accounts(accounts)
-        return recovered
-
-
-def active_extract_cdk_ids() -> set[str]:
-    """返回仍被排队/运行中 Masi Job 绑定的 CDK 内部 ID。"""
-    with _LOCK:
-        return {
-            str(row.get("extract_link_cdk_id"))
-            for row in _load_accounts()
-            if row.get("extract_link_status") in {"queued", "running"}
-            and str(row.get("extract_link_cdk_id") or "").strip()
-        }
-
-
 def _account_matches_query(row: dict, q: str | None) -> bool:
     q = str(q or "").strip().lower()
     if not q:
@@ -2711,16 +2509,10 @@ def list_account_plan_check_statuses(
         "billing_period", "billing_currency", "discount_amount", "discount_type",
         "discount_expires_at", "discount_promo_campaign_id",
         "token_expired", "token_expires_at", "needs_live_check",
-        "extract_link_status", "extract_link_ok", "extract_link_type",
-        "extract_link_provider", "extract_link_update_mode", "extract_link_cdk_fingerprint",
-        "extract_link_message", "extract_link_error",
-        "extract_link_long_url", "extract_link_copy_paste",
-        "extract_link_image_url_png", "extract_link_image_url_svg",
-        "extract_link_expires_at",
         "codex_status", "codex_error",
         "codex_auth_status", "codex_operation_status", "codex_capabilities",
         "plan_category_code", "plan_query_status", "plan_capabilities",
-        "extract_link_capabilities", "live_check_status", "live_check_ok", "live_check_error", "live_checked_at",
+        "live_check_status", "live_check_ok", "live_check_error", "live_checked_at",
         "live_check_capabilities", "checkout_query_status", "checkout_capabilities",
     )
     with _LOCK:
@@ -2790,7 +2582,6 @@ def list_account_plan_check_statuses(
                     "live_check_ok": row.get("live_check_ok"),
                     "live_check_error": row.get("live_check_error"),
                     "live_checked_at": row.get("live_checked_at"),
-                    "extract_link_status": row.get("extract_link_status"),
                     "codex_status": row.get("codex_status"),
                 }
                 for row in all_rows

@@ -55,7 +55,6 @@ class RemovedAgentContractTests(unittest.TestCase):
         for name in (
             "recover_interrupted_plan_checks",
             "recover_interrupted_checkout_sessions",
-            "recover_interrupted_extract_links",
             "recover_interrupted_live_checks",
         ):
             self.stack.enter_context(patch.object(db, name, return_value=0))
