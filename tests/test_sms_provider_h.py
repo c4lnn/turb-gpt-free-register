@@ -2,7 +2,7 @@
 import unittest
 from unittest.mock import patch
 
-from core import sms_provider
+from core.sms import sms_provider
 from config import codex as codex_config
 from config import env_loader
 from webui import config_editor

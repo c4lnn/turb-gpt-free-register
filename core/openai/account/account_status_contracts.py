@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from core.chatgpt_checkout import classify_checkout_session_id
+from core.openai.commerce.chatgpt_checkout import classify_checkout_session_id
 
 
 CODEX_AUTH_STATUSES = (

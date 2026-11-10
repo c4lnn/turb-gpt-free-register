@@ -4,7 +4,7 @@ from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import patch
 
-from core import email_provider
+from core.mail import email_provider
 from webui import app as web_app
 from webui import config_editor
 

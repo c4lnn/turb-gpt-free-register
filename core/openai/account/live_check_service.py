@@ -8,10 +8,10 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
-from core import db
-from core.account_liveness import check_account_liveness, log_path
-from core.chatgpt_plan import resolve_plan_check_route
-from core.chatgpt_plan import check_account_plan
+from core.infra import db
+from core.openai.account.account_liveness import check_account_liveness, log_path
+from core.openai.commerce.chatgpt_plan import resolve_plan_check_route
+from core.openai.commerce.chatgpt_plan import check_account_plan
 
 logger = logging.getLogger(__name__)
 

@@ -2,7 +2,7 @@
 import unittest
 from unittest.mock import patch
 
-from core import live_check_service
+from core.openai.account import live_check_service
 
 
 class FakeTransport:

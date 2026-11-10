@@ -2,7 +2,7 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from core.wreq_session import WreqSession
+from core.openai.transport.wreq_session import WreqSession
 
 
 class WreqCookieOriginTests(unittest.TestCase):

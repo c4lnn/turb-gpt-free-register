@@ -9,8 +9,9 @@ from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from core import db, plan_check_service
-from core.sqlite_store import SQLiteRuntimeStore
+from core.infra import db
+from core.openai.commerce import plan_check_service
+from core.infra.sqlite_store import SQLiteRuntimeStore
 from webui.app import _compact_account_for_list
 from webui import app as web_app
 

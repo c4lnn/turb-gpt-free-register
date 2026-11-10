@@ -22,8 +22,8 @@ from pathlib import Path
 from typing import Any
 
 from config import email as _email_cfg
-from core.sqlite_store import SQLiteRuntimeStore
-from core.email_pool_status import (
+from core.infra.sqlite_store import SQLiteRuntimeStore
+from core.mail.email_pool_status import (
     EMAIL_POOL_STATUSES,
     EMAIL_POOL_STATUS_SET,
     TERMINAL_EMAIL_POOL_STATUSES,
@@ -37,7 +37,7 @@ from core.email_pool_status import (
     validate_status,
     LEGACY_EMAIL_POOL_STATUS_MAP,
 )
-from core.account_status_contracts import (
+from core.openai.account.account_status_contracts import (
     build_account_status_contract,
     codex_auth_status,
     codex_operation_status,
@@ -46,9 +46,9 @@ from core.account_status_contracts import (
     normalize_extract_link_status,
     extract_link_capabilities as contract_extract_link_capabilities,
 )
-from core.email_provider import VALID_EMAIL_SOURCES
+from core.mail.email_provider import VALID_EMAIL_SOURCES
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _DATA_DIR = _PROJECT_ROOT
 _LEGACY_DATA_DIR = _PROJECT_ROOT / "data"
 _LOG_DIR = _PROJECT_ROOT / "注册日志"
@@ -241,7 +241,7 @@ def _now() -> str:
 def _current_registration_job_id() -> int | None:
     """读取当前注册线程的任务 ID，避免模块导入阶段产生循环依赖。"""
     try:
-        from core import registration_service
+        from core.openai.register import registration_service
 
         value = getattr(registration_service._THREAD_CTX, "job_id", None)
         if value in (None, ""):
@@ -3238,7 +3238,7 @@ def import_outlook_accounts(records: list[dict], *, reactivate_existing: bool = 
 
 def normalize_registered_icloud_import_record(raw: dict) -> tuple[dict | None, str | None]:
     """校验 iCloud 已注册账号导入行；仅解析 JWT，不验证远端有效性。"""
-    from core.chatgpt_plan import normalize_token, token_claims
+    from core.openai.commerce.chatgpt_plan import normalize_token, token_claims
 
     email = str((raw or {}).get("email") or "").strip()
     access_token = normalize_token(str((raw or {}).get("access_token") or (raw or {}).get("token") or ""))

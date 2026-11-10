@@ -21,7 +21,7 @@ from config import (
     REQUEST_TIMEOUT, pick_proxy, pick_browser_profile, validate_browser_profile,
     BROWSER_PROFILE_POOL, build_browser_environment,
 )
-from core.registration_geo import (
+from core.openai.register.registration_geo import (
     RegistrationGeoError,
     build_registration_locale,
     is_known_country,
@@ -132,7 +132,7 @@ class BrowserSession:
                 self.proxy = pick_proxy()
                 self.proxy_target = self.proxy
                 if self.proxy:
-                    from core.proxy_chain import open_proxy_pool_proxy
+                    from core.infra.proxy_chain import open_proxy_pool_proxy
                     transport_proxy, self._proxy_pool_relay = open_proxy_pool_proxy(self.proxy)
                 else:
                     transport_proxy = ""
@@ -211,10 +211,10 @@ class BrowserSession:
 
             # 传输后端固定为 wreq；Web 配置热更新只影响后续新会话的指纹版本。
             from config import browser as browser_cfg
-            from core.protocol_profiles import validate_protocol_profile, align_browser_profile
+            from core.openai.transport.protocol_profiles import validate_protocol_profile, align_browser_profile
             self.impersonate = "chrome152" if self.server_device_id else browser_cfg.WREQ_EMULATION
             self.impersonate = validate_protocol_profile("wreq", str(self.impersonate).strip())
-            from core.wreq_session import WreqSession
+            from core.openai.transport.wreq_session import WreqSession
             self.session = WreqSession(impersonate=self.impersonate)
             logger.info("[协议会话] 后端=wreq 指纹=%s 实际实现=%s.%s",
                         self.impersonate,
@@ -950,7 +950,7 @@ class BrowserSession:
 
     def _open_raw_session(self):
         """按当前 impersonate 新建原始传输会话，保持冻结指纹。"""
-        from core.wreq_session import WreqSession
+        from core.openai.transport.wreq_session import WreqSession
         return WreqSession(impersonate=self.impersonate)
 
     def reset_preflight_transport(self) -> None:
@@ -970,7 +970,7 @@ class BrowserSession:
         new_session = None
         try:
             if self._proxy_pool_selected and next_proxy:
-                from core.proxy_chain import open_proxy_pool_proxy
+                from core.infra.proxy_chain import open_proxy_pool_proxy
                 transport_proxy, new_relay = open_proxy_pool_proxy(next_proxy)
             else:
                 transport_proxy = next_proxy

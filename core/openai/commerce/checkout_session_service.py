@@ -10,8 +10,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any
 
-from core import db
-from core.chatgpt_checkout import (
+from core.infra import db
+from core.openai.commerce.chatgpt_checkout import (
     CheckoutSettings,
     check_checkout_session,
     checkout_settings_from_config,

@@ -7,8 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from core import db as runtime_db
-from core.sqlite_store import SQLiteRuntimeStore, StorageError, migrate_legacy_snapshots
+from core.infra import db as runtime_db
+from core.infra.sqlite_store import SQLiteRuntimeStore, StorageError, migrate_legacy_snapshots
 from tools.runtime_storage_admin import _restore
 
 

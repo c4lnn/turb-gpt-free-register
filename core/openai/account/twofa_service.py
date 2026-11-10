@@ -10,10 +10,10 @@ from pathlib import Path
 
 from config import email as _email_cfg
 from config import twofa as _twofa_cfg
-from core import db
-from core.account_export import setup_2fa
-from core.session import BrowserSession, close_browser_session
-from core.proxy_utils import mask_proxy_url
+from core.infra import db
+from core.openai.account.account_export import setup_2fa
+from core.openai.transport.session import BrowserSession, close_browser_session
+from core.infra.proxy_utils import mask_proxy_url
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ _EXECUTOR = ThreadPoolExecutor(max_workers=_MAX_WORKERS, thread_name_prefix="two
 _RUNNING: set[int] = set()
 _OUTSTANDING = 0
 _LOCK = threading.Condition()
-_LOG_DIR = Path(__file__).resolve().parent.parent / "注册日志"
+_LOG_DIR = Path(__file__).resolve().parents[3] / "注册日志"
 
 
 def apply_settings() -> dict:
@@ -87,7 +87,7 @@ def _resolve_twofa_proxy(proxy: str | None):
     if mode not in {"saved", "pool"}:
         raise ValueError(f"TWOFA_PROXY_MODE={mode!r} 无效，可选 saved / pool")
     if mode == "pool":
-        from core.proxy_chain import open_proxy_pool_proxy
+        from core.infra.proxy_chain import open_proxy_pool_proxy
         transport, relay = open_proxy_pool_proxy(None)
         return transport or None, relay, "pool"
     target = _normalize_proxy(proxy)
@@ -95,7 +95,7 @@ def _resolve_twofa_proxy(proxy: str | None):
         # 没有可复用的目标代理时交给 BrowserSession 从代理池选择；
         # BrowserSession 会自行管理代理池链式中继生命周期。
         return None, None, "pool"
-    from core.proxy_chain import open_proxy_pool_proxy
+    from core.infra.proxy_chain import open_proxy_pool_proxy
 
     transport, relay = open_proxy_pool_proxy(target)
     return transport, relay, "saved"

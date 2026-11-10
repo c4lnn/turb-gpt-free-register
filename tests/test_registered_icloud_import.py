@@ -7,7 +7,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from config import email as email_config
-from core import db, email_provider
+from core.infra import db
+from core.mail import email_provider
 from webui.app import create_app
 
 
@@ -192,14 +193,14 @@ class RegisteredICloudOtpRoutingTests(unittest.TestCase):
 
     def test_icloud_pool_is_used_when_account_source_is_missing(self):
         with patch.object(db, "get_account_by_email", return_value=None), \
-             patch("core.cf_temp_mail_client.get_account_context", return_value=None), \
+             patch("core.mail.cf_temp_mail_client.get_account_context", return_value=None), \
              patch.object(db, "get_generic_api_email_by_email", return_value=None), \
              patch.object(db, "get_icloud_email_by_email", return_value={"email": "pool@icloud.com"}), \
              patch.object(email_provider, "parse_email_sources", return_value=["outlook"]):
             self.assertEqual(email_provider.resolve_email_source("pool@icloud.com"), "icloud")
 
-    @patch("core.icloud_client.fetch_latest_otp", return_value="123456")
-    @patch("core.email_provider.resolve_email_source", return_value="icloud")
+    @patch("core.mail.icloud_client.fetch_latest_otp", return_value="123456")
+    @patch("core.mail.email_provider.resolve_email_source", return_value="icloud")
     def test_automatic_otp_uses_icloud_qq_imap_path(self, resolve_source, fetch_otp):
         with patch.object(email_config, "USE_EMAIL_SERVICE", True):
             result = email_provider.wait_for_otp("auto@icloud.com", after_ts=100.0)
@@ -208,8 +209,8 @@ class RegisteredICloudOtpRoutingTests(unittest.TestCase):
         resolve_source.assert_called_once_with("auto@icloud.com")
         fetch_otp.assert_called_once_with("auto@icloud.com", after_ts=100.0)
 
-    @patch("core.icloud_client.fetch_latest_otp")
-    @patch("core.manual_otp.wait_for_manual_otp", return_value="654321")
+    @patch("core.mail.icloud_client.fetch_latest_otp")
+    @patch("core.mail.manual_otp.wait_for_manual_otp", return_value="654321")
     def test_manual_otp_mode_does_not_connect_icloud_imap(self, wait_manual, fetch_otp):
         with patch.object(email_config, "USE_EMAIL_SERVICE", False), patch.object(
             email_config, "OTP_MAX_WAIT", 90

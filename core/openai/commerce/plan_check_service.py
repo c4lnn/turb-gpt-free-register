@@ -10,8 +10,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 from config import proxy as proxy_cfg
-from core import db
-from core.chatgpt_plan import check_account_plan
+from core.infra import db
+from core.openai.commerce.chatgpt_plan import check_account_plan
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +96,7 @@ def _maybe_enqueue_checkout_session(
 
         if not bool(getattr(checkout_cfg, "CHECKOUT_SESSION_AUTO_CHECK", False)):
             return
-        from core.checkout_session_service import enqueue_checkout_session_check
+        from core.openai.commerce.checkout_session_service import enqueue_checkout_session_check
 
         queued = enqueue_checkout_session_check(
             account_id=account_id,

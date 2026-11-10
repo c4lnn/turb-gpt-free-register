@@ -16,8 +16,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from core import codex_retry_service, db
-from core.account_status_contracts import codex_auth_status
+from core.openai.codex import codex_retry_service
+from core.infra import db
+from core.openai.account.account_status_contracts import codex_auth_status
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +106,7 @@ def _append_job_log(job_id: int, message: str) -> None:
 
 def _random_display_name() -> str:
     """生成符合 OpenAI 限制的英文字母显示名。"""
-    from core.name_samples import random_display_name
+    from core.openai.register.name_samples import random_display_name
 
     return random_display_name()
 
@@ -114,7 +115,7 @@ def _prepare_registration_args() -> tuple[str | None, str, str]:
     """复用 CLI 的默认规则，为旧 Web 任务入口补齐注册参数。"""
     # 用模块属性读，支持 WebUI 热加载
     from config import register as _r, email as _e
-    from core.profile_utils import generate_random_birthday
+    from core.openai.register.profile_utils import generate_random_birthday
 
     email = str(getattr(_r, "REGISTER_EMAIL", "") or "").strip()
     name = str(getattr(_r, "REGISTER_NAME", "") or "").strip()
@@ -149,7 +150,7 @@ def _release_unconsumed_job_email(email: str | None, reason: str, *, job_id: int
     try:
         # 统一走 provider 兼容入口：持久化池写入 failed，临时邮箱清理
         # 进程上下文；已有账号时入口会保持 used。
-        from core.email_provider import release_email_if_unconsumed
+        from core.mail.email_provider import release_email_if_unconsumed
 
         release_email_if_unconsumed(
             email,
@@ -201,7 +202,7 @@ def _disable_job_email(email: str | None, reason: str) -> bool:
         changed = db.disable_registration_email(email, reason=f"自动停用: {reason[:180]}")
         if not changed:
             # 临时 provider 没有持久化池记录，但仍需清理本次地址上下文。
-            from core.email_provider import release_email
+            from core.mail.email_provider import release_email
 
             release_email(email, status="disabled", note=f"自动停用: {reason[:180]}")
         logger.warning("[Service] 已自动停用邮箱: email=%s changed=%s reason=%s", email, changed, reason[:220])

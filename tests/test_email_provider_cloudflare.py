@@ -2,7 +2,8 @@
 import unittest
 from unittest.mock import patch
 
-from core import cf_temp_mail_client, email_provider
+from core.mail import cf_temp_mail_client
+from core.mail import email_provider
 
 
 class EmailProviderCloudflareTests(unittest.TestCase):
@@ -27,7 +28,7 @@ class EmailProviderCloudflareTests(unittest.TestCase):
             with patch.object(email_cfg, "EMAIL_DOMAIN", "custom.com"):
                 self.assertEqual(email_provider.resolve_email_source("x@custom.com"), "cloudflare")
 
-    @patch("core.cf_temp_mail_client.pick_account")
+    @patch("core.mail.cf_temp_mail_client.pick_account")
     def test_pick_from_source_cloudflare(self, pick_account):
         pick_account.return_value = cf_temp_mail_client.CFTempMailAccount(
             email="n@mail.test", jwt="j"
@@ -35,7 +36,7 @@ class EmailProviderCloudflareTests(unittest.TestCase):
         self.assertEqual(email_provider._pick_from_source("cloudflare"), "n@mail.test")
         pick_account.assert_called_once()
 
-    @patch("core.cf_temp_mail_client.release_account")
+    @patch("core.mail.cf_temp_mail_client.release_account")
     def test_release_routes_to_cloudflare(self, release_account):
         cf_temp_mail_client._CONTEXT_CACHE["n@mail.test"] = cf_temp_mail_client.CFTempMailAccount(
             email="n@mail.test", jwt="j"

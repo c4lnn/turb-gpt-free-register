@@ -3,9 +3,9 @@
 Flask 本地控制台。
 
 复用现有后端：
-    core.db                     —— 账号 / 邮箱池 / 任务的文件持久化与查询
-    core.registration_service   —— 线程池批量注册 + 任务日志
-    webui.config_editor         —— 安全读写 config/*.py
+    core.infra.db                              —— 账号 / 邮箱池 / 任务的文件持久化与查询
+    core.openai.register.registration_service  —— 线程池批量注册 + 任务日志
+    webui.config_editor                        —— 安全读写 config/*.py
 
 所有接口返回 JSON；前端是单文件 templates/index.html（原生 JS + fetch）。
 默认绑定 127.0.0.1，仅本地访问。
@@ -21,15 +21,21 @@ import uuid
 from flask import Flask, Response, jsonify, render_template, request
 import pyotp
 
-from core import codex_retry_service, db, plan_check_service, checkout_session_service, extract_link_service, live_check_service, masi_cdk_pool
+from core.openai.codex import codex_retry_service
+from core.infra import db
+from core.openai.commerce import plan_check_service
+from core.openai.commerce import checkout_session_service
+from core.link import extract_link_service
+from core.openai.account import live_check_service
+from core.link import masi_cdk_pool
 from webui.auth import init_auth, register_auth_routes
-from core import registration_service as svc
-from core.email_pool_status import EMAIL_POOL_STATUSES, validate_status, EmailPoolStatusError
-from core.account_status_contracts import build_account_status_contract
-from core.account_status_contracts import (
+from core.openai.register import registration_service as svc
+from core.mail.email_pool_status import EMAIL_POOL_STATUSES, validate_status, EmailPoolStatusError
+from core.openai.account.account_status_contracts import build_account_status_contract
+from core.openai.account.account_status_contracts import (
     CODEX_AUTH_STATUSES, CODEX_OPERATION_STATUSES, LIVE_CHECK_STATUSES,
 )
-from core.email_provider import VALID_EMAIL_SOURCES
+from core.mail.email_provider import VALID_EMAIL_SOURCES
 from webui import config_editor
 
 logger = logging.getLogger(__name__)
@@ -337,11 +343,11 @@ def _account_secret_value(row: dict, field: str) -> str:
     if field == "copy_line":
         return str(row.get("copy_line") or "")
     if field == "password":
-        from core.db import _extract_registration_password
+        from core.infra.db import _extract_registration_password
 
         return _extract_registration_password(row) or "未设置"
     if field == "login_credentials":
-        from core.db import _extract_registration_password
+        from core.infra.db import _extract_registration_password
 
         password = _extract_registration_password(row)
         return "---".join((
@@ -507,7 +513,7 @@ def create_app(auth_code: str | None = None) -> Flask:
     @app.get("/api/summary")
     def api_summary():
         from config import email as _email_cfg
-        from core.email_provider import parse_email_sources
+        from core.mail.email_provider import parse_email_sources
         pool = {"total": 0, **{status: 0 for status in EMAIL_POOL_STATUSES}}
         for src in parse_email_sources(_email_cfg.EMAIL_SOURCE):
             # Cloudflare 临时邮箱地址按需生成，不属于本地邮箱池。
@@ -851,7 +857,7 @@ def create_app(auth_code: str | None = None) -> Flask:
             return jsonify({"ok": False, "error": "该账号已经开启 2FA"}), 400
 
         try:
-            from core import twofa_service
+            from core.openai.account import twofa_service
         except Exception as exc:
             return jsonify({"ok": False, "error": f"2FA 服务加载失败：{type(exc).__name__}: {exc}"}), 503
 
@@ -918,7 +924,7 @@ def create_app(auth_code: str | None = None) -> Flask:
             accounts.append(acc)
 
         try:
-            from core import twofa_service
+            from core.openai.account import twofa_service
         except Exception as exc:
             return jsonify({"ok": False, "error": f"2FA 服务加载失败：{type(exc).__name__}: {exc}"}), 503
 
@@ -974,7 +980,7 @@ def create_app(auth_code: str | None = None) -> Flask:
         email = (request.args.get("email") or "").strip()
         if not email:
             return jsonify({"ok": False, "error": "email 为空"}), 400
-        from core import twofa_service
+        from core.openai.account import twofa_service
         p = twofa_service.log_path(email)
         if not p.exists():
             return jsonify({"ok": True, "log": "", "running": False})
@@ -1567,7 +1573,7 @@ def create_app(auth_code: str | None = None) -> Flask:
         import json as _json
         import zipfile
         from datetime import datetime as _dt
-        from core.codex_oauth import download_cpa_codex_auth_text, list_cpa_codex_auth_files
+        from core.openai.codex.codex_oauth import download_cpa_codex_auth_text, list_cpa_codex_auth_files
 
         data = request.get_json(silent=True) or {}
         if not data and request.form:
@@ -2183,7 +2189,7 @@ def create_app(auth_code: str | None = None) -> Flask:
             except Exception:
                 local = {}
             email = str(local.get("email") or "").strip()
-            from core.codex_oauth import download_cpa_codex_auth_text
+            from core.openai.codex.codex_oauth import download_cpa_codex_auth_text
             cpa_text, cpa_name, _meta = download_cpa_codex_auth_text(email=email, local_filename=fname)
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 404
@@ -2206,7 +2212,7 @@ def create_app(auth_code: str | None = None) -> Flask:
         import json as _json
         import zipfile
         from datetime import datetime as _dt
-        from core.codex_oauth import download_cpa_codex_auth_text
+        from core.openai.codex.codex_oauth import download_cpa_codex_auth_text
 
         data = request.get_json(silent=True) or {}
         filenames = data.get("filenames") or []
@@ -2632,7 +2638,7 @@ def create_app(auth_code: str | None = None) -> Flask:
     @app.get("/api/accounts/live-check-log")
     def api_account_live_check_log():
         """读取某邮箱最近一次查活日志。?email=xxx"""
-        from core import account_liveness
+        from core.openai.account import account_liveness
         email = (request.args.get("email") or "").strip()
         if not email:
             return jsonify({"ok": False, "error": "email 为空"}), 400
@@ -2696,7 +2702,7 @@ def create_app(auth_code: str | None = None) -> Flask:
         # 提交前先确认池里有足够可用邮箱，给前端一个温和提示（不阻断）
         from config import email as _email_cfg
         from config import register as _register_cfg
-        from core.email_provider import parse_email_sources
+        from core.mail.email_provider import parse_email_sources
         if not bool(getattr(_email_cfg, "USE_EMAIL_SERVICE", True)):
             reg_email = str(getattr(_register_cfg, "REGISTER_EMAIL", "") or "").strip()
             if not reg_email:
@@ -2735,7 +2741,7 @@ def create_app(auth_code: str | None = None) -> Flask:
                     "error": "Cloudflare admin/鉴权模式需要填写 Cloudflare API Key（配置 → 邮箱 / OTP）。",
                 }), 400
             try:
-                from core.cf_temp_mail_client import CFTempMailError, validate_random_subdomain_config
+                from core.mail.cf_temp_mail_client import CFTempMailError, validate_random_subdomain_config
                 validate_random_subdomain_config()
             except CFTempMailError as exc:
                 return jsonify({"ok": False, "error": str(exc)}), 400
@@ -2813,13 +2819,13 @@ def create_app(auth_code: str | None = None) -> Flask:
     @app.get("/api/manual-otp/waiting")
     def api_manual_otp_waiting():
         """列出当前正在等待手动验证码的邮箱。"""
-        from core.manual_otp import list_waiting
+        from core.mail.manual_otp import list_waiting
         return jsonify({"ok": True, "waiting": list_waiting()})
 
     @app.post("/api/manual-otp")
     def api_manual_otp_submit():
         """提交手动邮箱验证码。Body: {email, code} 或 {job_id, code}。"""
-        from core.manual_otp import submit_manual_otp
+        from core.mail.manual_otp import submit_manual_otp
         data = request.get_json(silent=True) or {}
         code = (data.get("code") or data.get("otp") or "").strip()
         email = (data.get("email") or "").strip()
@@ -2983,7 +2989,7 @@ def create_app(auth_code: str | None = None) -> Flask:
             from types import SimpleNamespace
 
             from config import codex as _codex_cfg
-            from core.smsbower_provider import SmsBowerProvider
+            from core.sms.smsbower_provider import SmsBowerProvider
 
             api_base = str(data.get("api_base") or getattr(_codex_cfg, "SMSBOWER_API_BASE", "") or "").strip()
             api_key = str(data.get("api_key") or getattr(_codex_cfg, "SMSBOWER_API_KEY", "") or "").strip()
@@ -3041,8 +3047,8 @@ def create_app(auth_code: str | None = None) -> Flask:
         }
         if smsbower_keys.intersection(updates) or str(updates.get("SMS_PROVIDER") or "").strip().lower() == "smsbower":
             from config import codex as _codex_cfg
-            from core.sms_provider import SmsProviderError
-            from core.smsbower_provider import validate_config_values
+            from core.sms.sms_provider import SmsProviderError
+            from core.sms.smsbower_provider import validate_config_values
 
             merged = {key: getattr(_codex_cfg, key, "") for key in smsbower_keys}
             for key in smsbower_keys.intersection(updates):
@@ -3063,7 +3069,7 @@ def create_app(auth_code: str | None = None) -> Flask:
             "CHECKOUT_SESSION_MIN_INTERVAL", "CHECKOUT_SESSION_JITTER",
         }
         if checkout_keys.intersection(updates):
-            from core.chatgpt_checkout import checkout_settings_from_config, validate_checkout_config_values
+            from core.openai.commerce.chatgpt_checkout import checkout_settings_from_config, validate_checkout_config_values
 
             current_checkout = checkout_settings_from_config()
             merged_checkout = {
@@ -3101,7 +3107,7 @@ def create_app(auth_code: str | None = None) -> Flask:
             import config as _config_pkg
             _config_pkg.reload_all()
             try:
-                from core import twofa_service
+                from core.openai.account import twofa_service
                 twofa_service.apply_settings()
             except Exception:
                 logger.exception("2FA 队列配置热加载失败")

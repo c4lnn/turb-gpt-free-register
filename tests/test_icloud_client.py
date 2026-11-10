@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from core import icloud_client
+from core.mail import icloud_client
 
 
 class ICloudPollAddressTests(unittest.TestCase):
@@ -27,7 +27,7 @@ class ICloudPollAddressTests(unittest.TestCase):
         address = "xxx+aaa@privaterelay.appleid.com"
         self.assertEqual(icloud_client._normalize_poll_address(address), address)
 
-    @patch("core.qqmail_client.fetch_latest_otp", return_value="123456")
+    @patch("core.mail.qqmail_client.fetch_latest_otp", return_value="123456")
     def test_delegates_normalized_address_and_preserves_poll_arguments(self, fetch_otp):
         result = icloud_client.fetch_latest_otp(
             "xxx+aaa@icloud.com",

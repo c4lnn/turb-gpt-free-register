@@ -20,13 +20,13 @@ from urllib.parse import urlencode, urlparse
 
 import pyotp
 
-from core.session import BrowserSession
-from core.humanize import delay as human_delay
+from core.openai.transport.session import BrowserSession
+from core.infra.humanize import delay as human_delay
 
 logger = logging.getLogger(__name__)
 
 # 输出目录（与项目根 .claude/ 工作区分离，单独放在 accounts/）
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _ACCOUNTS_DIR = _PROJECT_ROOT / "accounts"
 _BATCH_ARCHIVE_LOCK = threading.RLock()
 
@@ -151,7 +151,7 @@ def _append_batch_archive(
     batch_dir: Path | None,
 ) -> Path:
     """把注册成功账号追加到本次批次目录的 TXT/JSON 文件中。"""
-    from core import db
+    from core.infra import db
 
     folder = batch_dir or create_batch_archive_dir(count=1)
     row = db.get_account(row_id) or {}
@@ -446,7 +446,7 @@ def _follow_reauth(session: BrowserSession, auth_url: str) -> str:
     步骤3: 跟随 authorize URL 触发邮箱 OTP 发送。
     auth.openai.com 会重定向到 /email-verification 页面，期间发送 OTP 邮件。
     """
-    from core.openai_auth import _rotate_document_navigation_id
+    from core.openai.auth.openai_auth import _rotate_document_navigation_id
 
     headers = session.get_auth_navigate_headers(referer="https://chatgpt.com/")
     logger.info("[2FA] 跟随 authorize URL，触发 OTP 发送...")
@@ -628,7 +628,7 @@ def _activate_totp(
 
 def _verify_mfa_after_activation(session: BrowserSession, access_token: str) -> None:
     """HTTP 200 即接受 activation；复核失败只记诊断，不降级绑定结果。"""
-    from core.openai_auth import get_mfa_enabled
+    from core.openai.auth.openai_auth import get_mfa_enabled
     try:
         if get_mfa_enabled(session, access_token):
             logger.info("[2FA] activation 后 mfa_info 确认已启用")
@@ -696,14 +696,14 @@ def setup_2fa(
     """
     # 用模块属性读，支持 WebUI 热加载
     from config import email as _email_cfg
-    from core.chatgpt_bootstrap import authenticated_bootstrap
+    from core.openai.auth.chatgpt_bootstrap import authenticated_bootstrap
 
     logger.info("=" * 60)
     logger.info("开始设置 2FA")
     logger.info("=" * 60)
 
     # 独立补设先用账号现有 AT；注册回退不启用该分支，避免改变注册快路径边界。
-    from core.openai_auth import (
+    from core.openai.auth.openai_auth import (
         get_auth_step,
         get_auth_continue_url,
         get_mfa_enabled,
@@ -784,7 +784,7 @@ def setup_2fa(
                 continue_url = get_auth_continue_url(state)
             if otp_code is None:
                 if _email_cfg.USE_EMAIL_SERVICE:
-                    from core.email_provider import wait_for_otp
+                    from core.mail.email_provider import wait_for_otp
                     logger.info("[2FA] 等待当前重认证 challenge 的邮箱 OTP")
                     try:
                         otp_code = wait_for_otp(email, after_ts=reauth_otp_after_ts, direct=True)
@@ -811,7 +811,7 @@ def setup_2fa(
                 status_code = getattr(getattr(first_exc, "response", None), "status_code", None)
                 if status_code != 401 or not bool(getattr(_email_cfg, "USE_EMAIL_SERVICE", False)):
                     raise
-                from core.email_provider import wait_for_otp
+                from core.mail.email_provider import wait_for_otp
                 fresh_otp = wait_for_otp(
                     email, after_ts=reauth_otp_after_ts,
                     settle_seconds=max(8, int(getattr(_email_cfg, "OTP_SETTLE_SECONDS", 5) or 5)),
@@ -871,7 +871,7 @@ def save_account_data(
     将账号信息保存到本地 JSON/TXT 文件存储。
     返回新插入/更新的 row id。
     """
-    from core.db import insert_account
+    from core.infra.db import insert_account
     extra = extra or {}
     normalized = normalize_chatgpt_session(
         {
@@ -931,7 +931,7 @@ def save_account_data(
     # session 中的 account.planType 不能说明 Plus 试用资格。账号落库后只负责
     # 入队，由专用线程池异步查询并回写，避免占用注册工作线程。
     try:
-        from core.plan_check_service import enqueue_account_plan_check
+        from core.openai.commerce.plan_check_service import enqueue_account_plan_check
 
         queued = enqueue_account_plan_check(
             account_id=row_id,

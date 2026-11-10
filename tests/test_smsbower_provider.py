@@ -8,9 +8,9 @@ from unittest.mock import patch
 
 from config import codex as codex_config
 from config import env_loader
-from core import db
-from core import sms_provider
-from core.smsbower_provider import SmsBowerProvider, validate_price_range
+from core.infra import db
+from core.sms import sms_provider
+from core.sms.smsbower_provider import SmsBowerProvider, validate_price_range
 from webui import config_editor
 from webui.app import create_app
 
@@ -218,7 +218,7 @@ class SmsBowerConfigTests(unittest.TestCase):
             ), patch.object(db, "_ACCOUNTS_TXT", root / "accounts.txt"), patch.object(
                 db, "_TOKENS_TXT", root / "tokens.txt"
             ), patch.object(db, "_VIEWER_HTML", root / "viewer.html"), patch(
-                "core.smsbower_provider.SmsBowerProvider.get_metadata", return_value=metadata
+                "core.sms.smsbower_provider.SmsBowerProvider.get_metadata", return_value=metadata
             ) as get_metadata:
                 client = create_app(auth_code="test-auth").test_client()
                 response = client.post(
@@ -281,7 +281,7 @@ class SmsBowerProviderTests(unittest.TestCase):
             SMSBOWER_MIN_PRICE="0.05",
             SMSBOWER_MAX_PRICE="0.15",
         ))
-        with self.assertLogs("core.smsbower_provider", level="INFO") as logs:
+        with self.assertLogs("core.sms.smsbower_provider", level="INFO") as logs:
             with self.assertRaises(sms_provider.SmsNoNumbersError):
                 provider.acquire_number(http=_Http([_Resp("NO_NUMBERS")]))
 
@@ -294,7 +294,7 @@ class SmsBowerProviderTests(unittest.TestCase):
 
     def test_acquire_number_logs_unlimited_for_empty_price_bounds(self):
         provider = SmsBowerProvider(config=_cfg(SMSBOWER_MIN_PRICE="", SMSBOWER_MAX_PRICE=""))
-        with self.assertLogs("core.smsbower_provider", level="INFO") as logs:
+        with self.assertLogs("core.sms.smsbower_provider", level="INFO") as logs:
             provider.acquire_number(http=_Http([_Resp("ACCESS_NUMBER:act-1:+12025550123")]))
 
         output = "\n".join(logs.output)
@@ -394,7 +394,7 @@ class SmsBowerProviderTests(unittest.TestCase):
         phone = "12025550123"
         provider = SmsBowerProvider(config=_cfg(SMSBOWER_API_KEY=key))
         provider.acquired_at["act-1"] = 1
-        with self.assertLogs("core.smsbower_provider", level="WARNING") as logs:
+        with self.assertLogs("core.sms.smsbower_provider", level="WARNING") as logs:
             provider.complete("act-1", http=_Http([_Resp(f"UNKNOWN:{key}:{phone}:123456")]))
         output = "\n".join(logs.output)
         self.assertNotIn(key, output)
@@ -404,7 +404,7 @@ class SmsBowerProviderTests(unittest.TestCase):
 
     def test_polling_honors_stop_request(self):
         provider = SmsBowerProvider(config=_cfg(), sleep=lambda _: None)
-        with patch("core.registration_service.check_stop_requested", side_effect=RuntimeError("stop-now")):
+        with patch("core.openai.register.registration_service.check_stop_requested", side_effect=RuntimeError("stop-now")):
             with self.assertRaisesRegex(RuntimeError, "stop-now"):
                 provider.wait_for_sms_code("act-1", http=_Http([]), max_wait=1, poll_interval=0)
 
@@ -435,7 +435,7 @@ class SmsBowerProviderTests(unittest.TestCase):
         http = _Http([_Resp("BAD_ACTION"), _Resp("BAD_ACTION")])
         provider = SmsBowerProvider(config=_cfg(), sleep=lambda _: None)
         provider.acquired_at["act-1"] = 0
-        with self.assertLogs("core.smsbower_provider", level="WARNING") as logs:
+        with self.assertLogs("core.sms.smsbower_provider", level="WARNING") as logs:
             provider.cancel("act-1", http=http, background=False)
         self.assertEqual(len(http.calls), 2)
         self.assertIn("取消最终失败", "\n".join(logs.output))
@@ -450,7 +450,7 @@ class SmsBowerProviderTests(unittest.TestCase):
             cancel=lambda activation_id, **kwargs: None,
         )
         with patch.object(codex_config, "SMS_PROVIDER", "smsbower"), patch(
-            "core.smsbower_provider.get_provider", return_value=fake
+            "core.sms.smsbower_provider.get_provider", return_value=fake
         ):
             self.assertEqual(sms_provider.acquire_number(http=_Http([]))[0], "act-x")
             self.assertEqual(sms_provider.wait_for_sms_code("act-x", http=_Http([])), "123456")
@@ -465,7 +465,7 @@ class SmsBowerProviderTests(unittest.TestCase):
         ), patch.object(codex_config, "SMS_API_BASE", "https://legacy.invalid/handler"), patch.object(
             codex_config, "SMS_SERVICE", "dr"
         ), patch.object(codex_config, "SMS_COUNTRY", "187"), patch(
-            "core.smsbower_provider.get_provider"
+            "core.sms.smsbower_provider.get_provider"
         ) as get_provider:
             activation_id, _phone = sms_provider.acquire_number(http=http)
         self.assertEqual(activation_id, "legacy-1")

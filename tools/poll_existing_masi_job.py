@@ -14,9 +14,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from core import db, masi_cdk_pool
-from core.extract_link_providers import ProviderError, extract_error_message
-from core.extract_link_service import _masi_provider, _normalize_success_result, resolve_route
+from core.infra import db
+from core.link import masi_cdk_pool
+from core.link.extract_link_providers import ProviderError, extract_error_message
+from core.link.extract_link_service import _masi_provider, _normalize_success_result, resolve_route
 
 
 def _timestamp() -> str:

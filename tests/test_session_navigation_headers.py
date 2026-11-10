@@ -7,7 +7,7 @@ from http.cookiejar import Cookie
 from unittest.mock import patch
 
 from config.browser import build_browser_environment
-from core.session import BrowserSession
+from core.openai.transport.session import BrowserSession
 
 
 class SessionNavigationHeaderTests(unittest.TestCase):
@@ -467,7 +467,7 @@ class SessionNavigationHeaderTests(unittest.TestCase):
             session.proxy = session.proxy_target = "socks5://127.0.0.1:10001"
             relay = Relay()
             with patch.object(session, "_next_pool_proxy", return_value="socks5://127.0.0.1:10002"), patch(
-                "core.proxy_chain.open_proxy_pool_proxy", return_value=("http://127.0.0.1:20000", relay)
+                "core.infra.proxy_chain.open_proxy_pool_proxy", return_value=("http://127.0.0.1:20000", relay)
             ), patch.object(session, "_open_raw_session", side_effect=RuntimeError("factory failed")):
                 with self.assertRaises(RuntimeError):
                     session.reset_preflight_transport()

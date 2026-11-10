@@ -8,8 +8,8 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from core import sentinel_runner
-from core.registration_geo import build_registration_locale, timezone_offset_for
+from core.openai.auth import sentinel_runner
+from core.openai.register.registration_geo import build_registration_locale, timezone_offset_for
 
 
 class StopNow(Exception):

@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from core import masi_cdk_pool as pool
+from core.link import masi_cdk_pool as pool
 
 
 class MasiCdkPoolTests(unittest.TestCase):

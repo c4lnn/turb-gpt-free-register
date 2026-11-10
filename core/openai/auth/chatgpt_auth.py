@@ -7,7 +7,7 @@ import json
 import logging
 from urllib.parse import urlencode, urlparse, parse_qs
 
-from core.session import BrowserSession
+from core.openai.transport.session import BrowserSession
 from config import (
     OPENAI_CLIENT_ID, OPENAI_SCOPE, OPENAI_AUDIENCE, OPENAI_REDIRECT_URI
 )

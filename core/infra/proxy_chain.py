@@ -10,7 +10,7 @@ import threading
 from typing import Any
 from urllib.parse import urlsplit
 
-from core.proxy_utils import mask_proxy_url, parse_proxy_url
+from core.infra.proxy_utils import mask_proxy_url, parse_proxy_url
 
 try:
     import socks

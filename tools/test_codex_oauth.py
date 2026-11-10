@@ -29,7 +29,7 @@ from pathlib import Path
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
-from core.codex_oauth import run_codex_oauth
+from core.openai.codex.codex_oauth import run_codex_oauth
 
 logger = logging.getLogger("codex_test")
 

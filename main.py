@@ -16,10 +16,10 @@ from config import REGISTER_EMAIL, REGISTER_NAME  # 这两个一般不在 WebUI 
 from config import twofa as _twofa_cfg
 from config import email as _email_cfg
 from config import openai_protocol as _protocol_cfg
-from core.session import BrowserSession, close_browser_session
-from core import db
-from core.chatgpt_auth import get_csrf_token, signin_openai
-from core.openai_auth import (
+from core.openai.transport.session import BrowserSession, close_browser_session
+from core.infra import db
+from core.openai.auth.chatgpt_auth import get_csrf_token, signin_openai
+from core.openai.auth.openai_auth import (
     follow_authorize,
     navigate_create_account_password,
     generate_registration_password,
@@ -45,8 +45,8 @@ from core.openai_auth import (
     create_account,
     send_email_otp,
 )
-from core.sentinel_runner import SentinelSDKError
-from core.account_export import (
+from core.openai.auth.sentinel_runner import SentinelSDKError
+from core.openai.account.account_export import (
     follow_oauth_callback,
     fetch_session,
     setup_2fa,
@@ -54,11 +54,11 @@ from core.account_export import (
     save_account_data,
     create_batch_archive_dir,
 )
-from core.email_provider import acquire_email, wait_for_otp, release_email_if_unconsumed
-from core.email_pool_status import canonical_status
-from core.humanize import delay as human_delay
-from core.name_samples import random_display_name
-from core.profile_utils import generate_random_birthday
+from core.mail.email_provider import acquire_email, wait_for_otp, release_email_if_unconsumed
+from core.mail.email_pool_status import canonical_status
+from core.infra.humanize import delay as human_delay
+from core.openai.register.name_samples import random_display_name
+from core.openai.register.profile_utils import generate_random_birthday
 
 # 配置日志
 logging.basicConfig(
@@ -324,7 +324,7 @@ def run_registration(
         "credential_persistence": "not_attempted", "authenticated": False,
         "account_saved": False, "twofa_status": "not_attempted",
     }
-    from core.registration_service import StopRequested, record_registration_progress
+    from core.openai.register.registration_service import StopRequested, record_registration_progress
     record_registration_progress(progress)
 
     # 纯协议驱动没有“邮箱输入框”可等待，因此在创建 BrowserSession 前领取。
@@ -580,7 +580,7 @@ def run_registration(
 
 
         # ==================== 阶段8: 持久化账号 ====================
-        from core.email_provider import resolve_email_source
+        from core.mail.email_provider import resolve_email_source
         progress["auth_step"] = "account_persistence"
         account_id = save_account_data(
             email=email,
@@ -617,7 +617,7 @@ def run_registration(
         flow_result = {"status": "skipped", "ok": False, "message": "未触发"}
         progress["auth_step"] = "flow"
         try:
-            from core.flow_trigger import trigger_flow
+            from core.link.flow_trigger import trigger_flow
             flow_result = trigger_flow(access_token)
         except StopRequested:
             raise
@@ -720,7 +720,7 @@ def main():
         args.workers = args.count
 
     # CLI 入口与 WebUI 注册服务使用同一份幂等迁移，先收敛历史状态再领取邮箱。
-    from core import db as runtime_db
+    from core.infra import db as runtime_db
     migration = runtime_db.migrate_email_pool_statuses()
     if migration.get("rows_normalized"):
         logger.warning("已迁移邮箱池历史状态: %s", migration)

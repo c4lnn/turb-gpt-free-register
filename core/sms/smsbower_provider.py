@@ -11,7 +11,7 @@ from curl_cffi.requests import Session as CurlSession
 
 from config import IMPERSONATE
 from config import codex as _cfg
-from core.sms_provider import SmsCodeTimeout, SmsNoBalanceError, SmsNoNumbersError, SmsProviderError
+from core.sms.sms_provider import SmsCodeTimeout, SmsNoBalanceError, SmsNoNumbersError, SmsProviderError
 
 logger = logging.getLogger(__name__)
 
@@ -267,7 +267,7 @@ class SmsBowerProvider:
         deadline = self._time() + total_wait
         while self._time() < deadline:
             try:
-                from core.registration_service import check_stop_requested
+                from core.openai.register.registration_service import check_stop_requested
                 check_stop_requested()
             except ImportError:
                 pass

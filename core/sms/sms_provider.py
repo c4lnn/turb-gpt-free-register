@@ -346,7 +346,7 @@ def acquire_number(
     http = http or _http()
     try:
         if _provider() == "smsbower":
-            from core.smsbower_provider import get_provider
+            from core.sms.smsbower_provider import get_provider
             return get_provider().acquire_number(http=http, service=service, country=country)
         if _provider() == "l":
             payload = {
@@ -460,7 +460,7 @@ def wait_for_sms_code(
     try:
         provider = _provider()
         if provider == "smsbower":
-            from core.smsbower_provider import get_provider
+            from core.sms.smsbower_provider import get_provider
             return get_provider().wait_for_sms_code(
                 activation_id, http=http, max_wait=max_wait, poll_interval=poll_interval,
             )
@@ -469,7 +469,7 @@ def wait_for_sms_code(
         round_no = 0
         while time.time() < deadline:
             try:
-                from core.registration_service import check_stop_requested
+                from core.openai.register.registration_service import check_stop_requested
                 check_stop_requested()
             except ImportError:
                 pass
@@ -547,7 +547,7 @@ def set_status(activation_id: str, status: int, http: CurlSession | None = None)
     http = http or _http()
     try:
         if _provider() == "smsbower":
-            from core.smsbower_provider import get_provider
+            from core.sms.smsbower_provider import get_provider
             return get_provider().set_status(activation_id, status, http=http)
         if _provider() == "l":
             logger.debug(f"[SMS:L] 忽略状态设置 id={activation_id}, status={status}")
@@ -561,7 +561,7 @@ def set_status(activation_id: str, status: int, http: CurlSession | None = None)
 def complete(activation_id: str, http: CurlSession | None = None) -> None:
     """标记激活完成（status=6）。失败只告警不抛，避免影响主流程。"""
     if _provider() == "smsbower":
-        from core.smsbower_provider import get_provider
+        from core.sms.smsbower_provider import get_provider
         get_provider().complete(activation_id, http=http)
         return
     if _provider() == "l":
@@ -631,7 +631,7 @@ def cancel(activation_id: str, http: CurlSession | None = None, background: bool
     失败只告警不抛，不影响主流程。
     """
     if _provider() == "smsbower":
-        from core.smsbower_provider import get_provider
+        from core.sms.smsbower_provider import get_provider
         get_provider().cancel(activation_id, http=http, background=background)
         return
     if _provider() == "l":

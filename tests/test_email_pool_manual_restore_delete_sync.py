@@ -6,8 +6,8 @@ from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import patch
 
-from core import db
-from core.sqlite_store import SQLiteRuntimeStore
+from core.infra import db
+from core.infra.sqlite_store import SQLiteRuntimeStore
 
 
 class EmailPoolManualLifecycleTests(unittest.TestCase):

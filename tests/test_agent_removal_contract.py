@@ -8,7 +8,9 @@ from unittest.mock import patch
 
 from config import proxy as proxy_cfg
 from config import sub2api as sub2api_cfg
-from core import chatgpt_plan, codex_oauth, db
+from core.openai.commerce import chatgpt_plan
+from core.openai.codex import codex_oauth
+from core.infra import db
 from webui import app as web_app
 from webui import config_editor
 

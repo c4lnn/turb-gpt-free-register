@@ -6,7 +6,7 @@ from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import patch
 
-from core import db
+from core.infra import db
 from webui import app as web_app
 
 

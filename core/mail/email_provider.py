@@ -58,27 +58,27 @@ def parse_email_sources(value=None) -> list[str]:
 
 def _pick_from_source(source: str) -> str:
     if source == "cloudflare":
-        from core.cf_temp_mail_client import pick_account
+        from core.mail.cf_temp_mail_client import pick_account
         return pick_account().email
     if source == "cloudflare_domain":
-        from core.qqmail_client import pick_domain_email
+        from core.mail.qqmail_client import pick_domain_email
         return pick_domain_email()
     if source == "icloud":
-        from core.icloud_client import pick_account
+        from core.mail.icloud_client import pick_account
         return pick_account()["email"]
     if source == "generic_api":
-        from core.generic_api_mail_client import pick_account
+        from core.mail.generic_api_mail_client import pick_account
         return pick_account().email
     if source == "remail":
-        from core.remail_client import pick_account
+        from core.mail.remail_client import pick_account
         return pick_account().email
-    from core.outlook_client import pick_account
+    from core.mail.outlook_client import pick_account
     return pick_account().email
 
 
 def acquire_email(*, direct: bool = False) -> str:
     """根据 EMAIL_SOURCE 领取邮箱；注册流程可选择忽略环境 HTTP(S) 代理。"""
-    from core.email_transport import direct_email_requests
+    from core.mail.email_transport import direct_email_requests
 
     with direct_email_requests(direct):
         sources = parse_email_sources()
@@ -117,17 +117,17 @@ def acquire_email_after_input(email: str | None = None) -> str:
 
 def resolve_email_source(email: str) -> str:
     """根据邮箱在各池中的归属判断实际来源。"""
-    from core import db
+    from core.infra import db
 
     account = db.get_account_by_email(email)
     account_source = str((account or {}).get("email_source") or "").strip()
     if account_source in _VALID_SOURCES:
         return account_source
 
-    from core.cf_temp_mail_client import get_account_context as get_cf_context
+    from core.mail.cf_temp_mail_client import get_account_context as get_cf_context
     if get_cf_context(email):
         return "cloudflare"
-    from core.remail_client import get_account_context as get_remail_context
+    from core.mail.remail_client import get_account_context as get_remail_context
     if get_remail_context(email):
         return "remail"
 
@@ -172,7 +172,7 @@ def _normalize_explicit_email_source(value: str | None) -> str | None:
 def _registered_email_source(email: str) -> str | None:
     """读取已注册账号落库的邮箱来源。"""
     try:
-        from core import db
+        from core.infra import db
 
         account = db.get_account_by_email(email)
     except Exception:
@@ -201,12 +201,12 @@ def wait_for_otp(
         use_service = True
 
     if not use_service:
-        from core.manual_otp import wait_for_manual_otp
+        from core.mail.manual_otp import wait_for_manual_otp
         from config import email as _email_cfg
         timeout = int(max_wait if max_wait is not None else (getattr(_email_cfg, "OTP_MAX_WAIT", 180) or 180))
         job_id = None
         try:
-            from core import registration_service as svc
+            from core.openai.register import registration_service as svc
             job_id = getattr(svc._THREAD_CTX, "job_id", None)
         except Exception:
             job_id = None
@@ -227,20 +227,20 @@ def wait_for_otp(
         or _registered_email_source(email)
         or resolve_email_source(email)
     )
-    from core.email_transport import direct_email_requests
+    from core.mail.email_transport import direct_email_requests
     with direct_email_requests(direct):
         if source == "cloudflare":
-            from core.cf_temp_mail_client import fetch_latest_otp
+            from core.mail.cf_temp_mail_client import fetch_latest_otp
         elif source == "cloudflare_domain":
-            from core.qqmail_client import fetch_latest_otp
+            from core.mail.qqmail_client import fetch_latest_otp
         elif source == "icloud":
-            from core.icloud_client import fetch_latest_otp
+            from core.mail.icloud_client import fetch_latest_otp
         elif source == "generic_api":
-            from core.generic_api_mail_client import fetch_latest_otp
+            from core.mail.generic_api_mail_client import fetch_latest_otp
         elif source == "remail":
-            from core.remail_client import fetch_latest_otp
+            from core.mail.remail_client import fetch_latest_otp
         else:
-            from core.outlook_client import fetch_latest_otp
+            from core.mail.outlook_client import fetch_latest_otp
         return fetch_latest_otp(email, after_ts=after_ts, **extra_kwargs)
 
 
@@ -248,22 +248,22 @@ def release_email(email: str, status: str = "failed", note: str | None = None) -
     """按邮箱实际来源回收状态，返回来源名。"""
     source = resolve_email_source(email)
     if source == "cloudflare":
-        from core.cf_temp_mail_client import release_account
+        from core.mail.cf_temp_mail_client import release_account
         release_account(email, status=status, note=note)
     elif source == "cloudflare_domain":
-        from core.qqmail_client import release_domain_email
+        from core.mail.qqmail_client import release_domain_email
         release_domain_email(email, status=status, note=note)
     elif source == "icloud":
-        from core.icloud_client import release_account
+        from core.mail.icloud_client import release_account
         release_account(email, status=status, note=note)
     elif source == "generic_api":
-        from core.generic_api_mail_client import release_account
+        from core.mail.generic_api_mail_client import release_account
         release_account(email, status=status, note=note)
     elif source == "remail":
-        from core.remail_client import release_account
+        from core.mail.remail_client import release_account
         release_account(email, status=status, note=note)
     else:
-        from core.outlook_client import release_account
+        from core.mail.outlook_client import release_account
         release_account(email, status=status, note=note)
     return source
 
@@ -274,7 +274,7 @@ def release_email_if_unconsumed(email: str, note: str | None = None) -> bool:
         return False
 
     source = resolve_email_source(email)
-    from core import db
+    from core.infra import db
 
     if source == "outlook":
         changed = db.release_unconsumed_outlook(email, note=note)

@@ -4,9 +4,9 @@ import unittest
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from unittest.mock import patch
-from core import registration_geo
+from core.openai.register import registration_geo
 
-from core.registration_geo import (
+from core.openai.register.registration_geo import (
     RegistrationGeoError,
     CATEGORY_GEO_INCOMPLETE,
     CATEGORY_GEO_MISMATCH,

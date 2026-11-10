@@ -7,7 +7,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from config import checkout_session as checkout_cfg
-from core import db, plan_check_service
+from core.infra import db
+from core.openai.commerce import plan_check_service
 from webui import app as web_app
 
 
@@ -184,7 +185,7 @@ class CheckoutAutoTriggerTests(unittest.TestCase):
             "plus_trial_discount_percentage": 100,
         }
         with patch.object(checkout_cfg, "CHECKOUT_SESSION_AUTO_CHECK", True), patch(
-            "core.checkout_session_service.enqueue_checkout_session_check",
+            "core.openai.commerce.checkout_session_service.enqueue_checkout_session_check",
             return_value={"accepted": True},
         ) as enqueue:
             plan_check_service._maybe_enqueue_checkout_session(
@@ -205,7 +206,7 @@ class CheckoutAutoTriggerTests(unittest.TestCase):
             "plus_trial_campaign_id": "plus-1-month-free",
         }
         with patch.object(checkout_cfg, "CHECKOUT_SESSION_AUTO_CHECK", True), patch(
-            "core.checkout_session_service.enqueue_checkout_session_check"
+            "core.openai.commerce.checkout_session_service.enqueue_checkout_session_check"
         ) as enqueue:
             for trigger, result in (("manual", incomplete), ("registration_auto", incomplete), ("manual_bulk", {
                 **incomplete,
@@ -245,7 +246,7 @@ class CheckoutAutoTriggerTests(unittest.TestCase):
             },
         )
         with patch.object(checkout_cfg, "CHECKOUT_SESSION_AUTO_CHECK", True), patch(
-            "core.checkout_session_service.enqueue_checkout_session_check"
+            "core.openai.commerce.checkout_session_service.enqueue_checkout_session_check"
         ) as enqueue:
             for result in results:
                 plan_check_service._maybe_enqueue_checkout_session(
@@ -266,9 +267,9 @@ class CheckoutAutoTriggerTests(unittest.TestCase):
             "plus_trial_discount_percentage": 100,
         }
         with patch.object(checkout_cfg, "CHECKOUT_SESSION_AUTO_CHECK", True), patch(
-            "core.checkout_session_service.enqueue_checkout_session_check",
+            "core.openai.commerce.checkout_session_service.enqueue_checkout_session_check",
             side_effect=RuntimeError("at-secret oaics_full_sensitive_id http://proxy-user:proxy-pass@example.invalid"),
-        ), self.assertLogs("core.plan_check_service", level="WARNING") as captured:
+        ), self.assertLogs("core.openai.commerce.plan_check_service", level="WARNING") as captured:
             plan_check_service._maybe_enqueue_checkout_session(
                 account_id=1,
                 email="auto@example.invalid",

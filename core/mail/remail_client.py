@@ -24,9 +24,9 @@ from urllib.parse import quote, urlsplit, urlunsplit
 
 import requests
 
-from core.email_transport import requests_request
+from core.mail.email_transport import requests_request
 from config import email as _email_cfg
-from core.otp_utils import extract_otp
+from core.mail.otp_extract import extract_otp
 
 logger = logging.getLogger(__name__)
 
@@ -303,7 +303,7 @@ def _order_list_items(payload) -> list[dict]:
 def _saved_context_metadata(email: str) -> dict:
     """读取账号保存的 Remail 订单凭证，不把解析失败传播到查活主流程。"""
     try:
-        from core import db
+        from core.infra import db
 
         row = db.get_account_by_email(email)
     except Exception as exc:

@@ -6,11 +6,12 @@ import threading
 import time
 from pathlib import Path
 
-from core import db, otp_operation_lock
+from core.infra import db
+from core.infra import operation_lock as otp_operation_lock
 
 logger = logging.getLogger(__name__)
 
-_LOG_DIR = Path(__file__).resolve().parent.parent / "注册日志"
+_LOG_DIR = Path(__file__).resolve().parents[3] / "注册日志"
 _RETRYING: set[str] = set()
 _RETRYING_LOCK = threading.Lock()
 _STOP_REQUESTED: set[str] = set()
@@ -211,7 +212,7 @@ def run_worker(
             _RESERVED_AT[key] = time.time()
         check_stop_requested(email)
 
-        from core.codex_oauth import run_codex_oauth
+        from core.openai.codex.codex_oauth import run_codex_oauth
 
         path = Path(target_log_path) if target_log_path else log_path(email)
         path.parent.mkdir(parents=True, exist_ok=True)

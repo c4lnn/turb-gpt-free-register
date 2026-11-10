@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from core import db
+from core.infra import db
 
 
 class AccountNoteTests(unittest.TestCase):

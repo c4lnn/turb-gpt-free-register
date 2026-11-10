@@ -144,7 +144,7 @@ def wait_for_manual_otp(email: str, *, timeout: int = 180, job_id: int | None = 
                 ev.wait(timeout=1.0)
 
             # 支持任务被手动停止
-            from core.registration_service import check_stop_requested
+            from core.openai.register.registration_service import check_stop_requested
             check_stop_requested()
         raise TimeoutError(f"等待手动验证码超时（{timeout}s）：{email}")
     finally:

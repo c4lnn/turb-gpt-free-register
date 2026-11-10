@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """导入型 iCloud 隐私邮箱客户端：地址来自本地池，邮件转发到 QQ IMAP。"""
-from core import db
+from core.infra import db
 
 class ICloudMailError(RuntimeError):
     pass
@@ -22,7 +22,7 @@ def pick_account() -> dict:
     return row
 
 def fetch_latest_otp(email: str, after_ts: float | None = None, **kwargs) -> str:
-    from core.qqmail_client import fetch_latest_otp as fetch_qq_otp
+    from core.mail.qqmail_client import fetch_latest_otp as fetch_qq_otp
     return fetch_qq_otp(_normalize_poll_address(email), after_ts=after_ts, **kwargs)
 
 def get_account_context(email: str):

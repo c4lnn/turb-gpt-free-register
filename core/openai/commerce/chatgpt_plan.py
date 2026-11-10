@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 from urllib.parse import quote, urlparse
 
-from core.session import BrowserSession, close_browser_session
+from core.openai.transport.session import BrowserSession, close_browser_session
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +91,7 @@ def open_plan_check_proxy(route: dict, selected_proxy: str, *, timeout: float):
     selected_proxy = str(selected_proxy or "").strip()
     upstream = str(route.get("upstream_proxy") or "").strip()
     if selected_proxy and upstream:
-        from core.proxy_chain import ProxyChainRelay
+        from core.infra.proxy_chain import ProxyChainRelay
 
         relay = ProxyChainRelay(selected_proxy, upstream, timeout=timeout).start()
         return relay.proxy_url, relay

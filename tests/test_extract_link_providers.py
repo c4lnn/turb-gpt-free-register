@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import unittest
 
-from core.extract_link_providers import LegacyExtractProvider, MasiKakaoProvider, ProviderError
+from core.link.extract_link_providers import LegacyExtractProvider, MasiKakaoProvider, ProviderError
 
 
 class FakeResponse:

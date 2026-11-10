@@ -19,11 +19,11 @@ from email.header import decode_header
 from pathlib import Path
 
 from config import email as _email_cfg
-from core.otp_utils import looks_like_openai_email, extract_otp
+from core.mail.otp_extract import looks_like_openai_email, extract_otp
 
 logger = logging.getLogger(__name__)
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class QQMailClientError(RuntimeError):
@@ -220,7 +220,7 @@ def pick_domain_email() -> str:
     生成一个随机的域名邮箱地址并记录到 DB。
     格式：{8位随机数字母}@{EMAIL_DOMAIN}
     """
-    from core.db import claim_next_domain_email
+    from core.infra.db import claim_next_domain_email
 
     domain = _email_cfg.EMAIL_DOMAIN
     if not domain:
@@ -240,7 +240,7 @@ def pick_domain_email() -> str:
 
 def release_domain_email(email: str, status: str = "failed", note: str | None = None) -> None:
     """更新域名邮箱状态。"""
-    from core.db import release_domain_email as _release
+    from core.infra.db import release_domain_email as _release
     _release(email, status=status, note=note)
 
 
@@ -257,7 +257,7 @@ def fetch_latest_otp(
     每个轮询周期：
         1. 连接 QQ 邮箱 IMAP，搜索 after_ts 时间点之后的邮件
         2. 筛选 TO 收件地址匹配 email 的邮件
-        3. 用 otp_utils 识别 OpenAI 验证码邮件并提取 6 位 OTP
+        3. 用 otp_extract 识别 OpenAI 验证码邮件并提取 6 位 OTP
         4. settle 机制：抓到首封后再等 OTP_SETTLE_SECONDS 秒，
            确认没有更晚的邮件才返回，避免取到途中旧 OTP
 

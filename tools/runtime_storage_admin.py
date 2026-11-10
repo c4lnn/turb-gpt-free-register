@@ -11,8 +11,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from core import db
-from core.sqlite_store import SQLiteRuntimeStore
+from core.infra import db
+from core.infra.sqlite_store import SQLiteRuntimeStore
 
 
 def _restore(source: Path, destination: Path) -> dict:

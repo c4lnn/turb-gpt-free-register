@@ -22,15 +22,15 @@ from urllib.parse import quote, unquote, urlparse, urlunparse
 import requests
 
 from config import email as _email_cfg
-from core.email_transport import requests_session
-from core.otp_utils import extract_otp
+from core.mail.email_transport import requests_session
+from core.mail.otp_extract import extract_otp
 
 logger = logging.getLogger(__name__)
 
 _CODE_REGEX = re.compile(r"\b(\d{6})\b")
 _CONTEXT_WORDS = ("code", "verify", "verification", "验证码", "代码", "确认码", "認証", "コード")
 _CONTEXT_CACHE: dict[str, "GenericApiEmailAccount"] = {}
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _ACCOUNTS_FILE = _PROJECT_ROOT / "用于注册的API邮箱.txt"
 _YANGYANG_MESSAGES_RE = re.compile(r"/messages/([^/]+)/([^/?#]+)", re.IGNORECASE)
 _YANGYANG_OPENAI_SUBJECT_HINTS = (
@@ -482,7 +482,7 @@ def _fetch_inline_messages_page_otp(
 
 def pick_account() -> GenericApiEmailAccount:
     """领取一个可用通用 API 邮箱。"""
-    from core.db import claim_next_generic_api_email, generic_api_email_pool_summary
+    from core.infra.db import claim_next_generic_api_email, generic_api_email_pool_summary
 
     inserted, skipped = import_from_file()
     if inserted:
@@ -502,7 +502,7 @@ def pick_account() -> GenericApiEmailAccount:
 
 def import_from_file(path: str | Path | None = None, *, reactivate_existing: bool = False) -> tuple[int, int]:
     """从文本文件导入通用 API 邮箱，每行：email----code_url 或 email====code_url。"""
-    from core.db import import_generic_api_emails
+    from core.infra.db import import_generic_api_emails
     p = Path(path) if path else _ACCOUNTS_FILE
     if not p.is_absolute():
         p = _PROJECT_ROOT / p
@@ -524,7 +524,7 @@ def import_from_file(path: str | Path | None = None, *, reactivate_existing: boo
 def get_account_context(email: str) -> GenericApiEmailAccount | None:
     if email in _CONTEXT_CACHE:
         return _CONTEXT_CACHE[email]
-    from core.db import get_generic_api_email_by_email
+    from core.infra.db import get_generic_api_email_by_email
     row = get_generic_api_email_by_email(email)
     if row is None:
         return None
@@ -534,7 +534,7 @@ def get_account_context(email: str) -> GenericApiEmailAccount | None:
 
 
 def release_account(email: str, status: str = "failed", note: str | None = None) -> None:
-    from core.db import release_generic_api_email
+    from core.infra.db import release_generic_api_email
     release_generic_api_email(email, status=status, note=note)
     _CONTEXT_CACHE.pop(email, None)
 

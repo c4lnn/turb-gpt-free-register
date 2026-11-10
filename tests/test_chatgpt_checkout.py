@@ -2,7 +2,7 @@
 import unittest
 from unittest.mock import Mock
 
-from core.chatgpt_checkout import (
+from core.openai.commerce.chatgpt_checkout import (
     CHECKOUT_SESSION_PATH,
     CHECKOUT_SESSION_URL,
     CheckoutSettings,

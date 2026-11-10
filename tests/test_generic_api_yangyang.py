@@ -2,7 +2,7 @@
 import base64
 import unittest
 
-from core.generic_api_mail_client import _decode_data_uri, _fetch_yangyang_otp, _parse_yangyang_code_url
+from core.mail.generic_api_mail_client import _decode_data_uri, _fetch_yangyang_otp, _parse_yangyang_code_url
 
 
 class FakeResponse:

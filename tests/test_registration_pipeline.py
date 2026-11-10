@@ -10,7 +10,11 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import main as registration
-from core import codex_oauth, db, email_provider, flow_trigger, registration_service
+from core.openai.codex import codex_oauth
+from core.infra import db
+from core.mail import email_provider
+from core.link import flow_trigger
+from core.openai.register import registration_service
 from config import register as register_config
 
 
@@ -138,7 +142,7 @@ class RegistrationPipelineTests(unittest.TestCase):
         self.assertTrue(session.closed)
 
     def test_sdk_failure_preserves_its_stage_and_prevents_password_submission(self):
-        from core.sentinel_runner import SentinelSDKError
+        from core.openai.auth.sentinel_runner import SentinelSDKError
         with self._pipeline({}) as (session, observed), patch.object(
             registration, "request_sentinel_token",
             side_effect=SentinelSDKError("SDK collection failed", "sdk_exec_failed", "requirements"),
@@ -169,7 +173,7 @@ class RegistrationPipelineTests(unittest.TestCase):
         self.assertEqual(result["error_stage"], "validate")
 
     def test_unknown_landing_sentinel_probe_failure_fails_without_guessing_account_type(self):
-        from core.openai_auth import SentinelRequestError
+        from core.openai.auth.openai_auth import SentinelRequestError
 
         error = SentinelRequestError("Sentinel challenge 请求失败（Timeout，HTTP=None）", "sentinel_network_failed")
         with self._pipeline({
@@ -192,7 +196,7 @@ class RegistrationPipelineTests(unittest.TestCase):
         self.assertTrue(session.closed)
 
     def test_email_otp_sentinel_failure_stops_before_validation(self):
-        from core.openai_auth import SentinelRequestError
+        from core.openai.auth.openai_auth import SentinelRequestError
 
         error = SentinelRequestError("Sentinel challenge 请求失败（Timeout，HTTP=None）", "sentinel_network_failed")
         with self._pipeline({
@@ -227,7 +231,7 @@ class RegistrationPipelineTests(unittest.TestCase):
         self.assertTrue(session.closed)
 
     def test_profile_sentinel_failure_stops_before_create_account(self):
-        from core.openai_auth import SentinelRequestError
+        from core.openai.auth.openai_auth import SentinelRequestError
 
         error = SentinelRequestError("Sentinel challenge 响应缺少有效 token", "sentinel_challenge_failed")
         otp_result = {
@@ -263,7 +267,7 @@ class RegistrationPipelineTests(unittest.TestCase):
         self.assertTrue(session.closed)
 
     def test_sentinel_failure_task_log_has_safe_reason_stage_and_category(self):
-        from core.openai_auth import SentinelRequestError
+        from core.openai.auth.openai_auth import SentinelRequestError
 
         secrets = (
             "sentinel-token-fixture", "sentinel-so-fixture", "challenge-fixture",
@@ -781,8 +785,8 @@ class RegistrationPipelineTests(unittest.TestCase):
                             "continue_url": "https://auth.openai.com/email-verification"}), \
                         patch.object(session, "get_auth_headers", create=True, return_value={}), \
                         patch.object(session, "post", create=True, side_effect=post), \
-                        patch("core.openai_auth.request_sentinel_token", side_effect=sentinel_response), \
-                        patch("core.openai_auth._totp_code", return_value="678901"):
+                        patch("core.openai.auth.openai_auth.request_sentinel_token", side_effect=sentinel_response), \
+                        patch("core.openai.auth.openai_auth._totp_code", return_value="678901"):
                     result = self._run()
                 self.assertEqual(result["success"], has_secret)
                 self.assertEqual(result["registration"]["authenticated"], has_secret)

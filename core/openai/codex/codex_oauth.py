@@ -4,7 +4,7 @@
 
 旧方案"复用注册的已登录 session"会撞 /choose-an-account 卡死（React SPA 解析不出
 可提交字段）。新方案改为用**全新干净 session**从头登录，走 OpenAI 标准风控路径，
-手机号验证靠接码平台自动收码，当前通过 core.sms_provider 支持 GrizzlySMS 和 L_API.md
+手机号验证靠接码平台自动收码，当前通过 core.sms.sms_provider 支持 GrizzlySMS 和 L_API.md
 定义的本地 L 取号服务。
 
 完整接口链（2026-06-15 浏览器抓包确认，均 POST auth.openai.com，json）：
@@ -36,9 +36,9 @@ from urllib.parse import urlencode, urlparse, parse_qs, quote
 # 协议级常量（CLIENT_ID/URL/SCOPE/OUTPUT_DIRNAME）虽然不会改，统一从 _cfg 读，
 # 这样 reload 后立即生效，不用再分两套导入。
 from config import codex as _cfg
-from core.session import BrowserSession
-from core.humanize import delay as human_delay
-from core.openai_auth import (
+from core.openai.transport.session import BrowserSession
+from core.infra.humanize import delay as human_delay
+from core.openai.auth.openai_auth import (
     _is_transient_network_error,
     _extract_error_code,
     detect_account_unusable_response_body,
@@ -47,13 +47,13 @@ from core.openai_auth import (
     build_sentinel_header,
     network_preflight,
 )
-from core import db
-from core import sms_provider
+from core.infra import db
+from core.sms import sms_provider
 from curl_cffi import requests as curl_requests
 
 logger = logging.getLogger(__name__)
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 # 跟重定向链时的最大跳数，防死循环
 _MAX_REDIRECTS = 15
@@ -897,7 +897,7 @@ def _do_phone_verification(session: BrowserSession) -> None:
     用接码平台拿号 → add-phone/send 发短信 → 收码 → phone-otp/validate。
     一个号收不到码或被 OpenAI 拒就取消换号，最多 SMS_MAX_RETRIES 次（热加载）。
 
-    实际平台适配在 core.sms_provider：
+    实际平台适配在 core.sms.sms_provider：
         - SMS_PROVIDER="grizzly"：GrizzlySMS handler_api.php
         - SMS_PROVIDER="smsbower"：独立 SMSBower V1 handler API
         - SMS_PROVIDER="l"：L_API.md 的 /take-phone 和 /fetch-code JSON 接口
@@ -1358,7 +1358,7 @@ def run_codex_oauth(
         return _codex_result(status="skipped", message="email 为空")
 
     if otp_provider is None:
-        from core.email_provider import wait_for_otp as otp_provider
+        from core.mail.email_provider import wait_for_otp as otp_provider
 
     session = BrowserSession(proxy=proxy)
     try:

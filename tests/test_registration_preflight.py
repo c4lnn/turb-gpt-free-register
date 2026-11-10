@@ -11,10 +11,10 @@ from unittest.mock import Mock, patch
 
 from curl_cffi.requests import Cookies
 from config import browser as browser_cfg
-from core import openai_auth
-from core.registration_geo import RegistrationGeoError
-from core.registration_service import StopRequested
-from core.session import BrowserSession
+from core.openai.auth import openai_auth
+from core.openai.register.registration_geo import RegistrationGeoError
+from core.openai.register.registration_service import StopRequested
+from core.openai.transport.session import BrowserSession
 
 
 _TRACE_JP = "loc=JP\nip=1.2.3.4\n"
@@ -158,8 +158,8 @@ class RegistrationPreflightTests(unittest.TestCase):
                 self.assertEqual(session.device_id, "")
 
     def test_missing_registration_backend_aborts_before_opening_transport(self):
-        with patch("core.protocol_profiles.validate_protocol_profile", side_effect=ValueError("backend unavailable")), patch(
-            "core.wreq_session.WreqSession", side_effect=AssertionError("transport must not open")
+        with patch("core.openai.transport.protocol_profiles.validate_protocol_profile", side_effect=ValueError("backend unavailable")), patch(
+            "core.openai.transport.wreq_session.WreqSession", side_effect=AssertionError("transport must not open")
         ):
             with self.assertRaisesRegex(ValueError, "backend unavailable"):
                 BrowserSession(proxy="", detect_exit_geo=False, server_device_id=True)
@@ -239,7 +239,7 @@ class RegistrationPreflightTests(unittest.TestCase):
             self.assertEqual(transports[0].warmup_calls, 0)
 
     def test_initial_trace_failure_does_not_trust_geo_cache(self):
-        from core import session as session_mod
+        from core.openai.transport import session as session_mod
         cache_key = "__direct__"
         session_mod._GEO_CACHE[cache_key] = {"country": "JP", "ip": "1.2.3.4"}
 
@@ -481,12 +481,12 @@ class RegistrationGeoGateTests(unittest.TestCase):
     def test_constructor_failure_releases_transport_and_owned_proxy_relay(self):
         raw = _Transport(lambda _: _Response(), lambda _: _Response())
         relay = Mock()
-        with patch("core.session.pick_proxy", return_value="http://127.0.0.1:9"), patch(
-            "core.proxy_chain.open_proxy_pool_proxy", return_value=("http://127.0.0.1:9", relay)
+        with patch("core.openai.transport.session.pick_proxy", return_value="http://127.0.0.1:9"), patch(
+            "core.infra.proxy_chain.open_proxy_pool_proxy", return_value=("http://127.0.0.1:9", relay)
         ), patch(
-            "core.wreq_session.WreqSession", return_value=raw
+            "core.openai.transport.wreq_session.WreqSession", return_value=raw
         ), patch(
-            "core.session.validate_browser_profile", side_effect=RuntimeError("synthetic profile failure")
+            "core.openai.transport.session.validate_browser_profile", side_effect=RuntimeError("synthetic profile failure")
         ):
             with self.assertRaisesRegex(RuntimeError, "synthetic profile failure"):
                 BrowserSession(proxy=None, detect_exit_geo=False, server_device_id=True)

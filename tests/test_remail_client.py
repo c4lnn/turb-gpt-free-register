@@ -3,14 +3,14 @@ import unittest
 from unittest.mock import Mock, patch
 
 from config import email as email_config
-from core import remail_client
+from core.mail import remail_client
 
 
 class RemailClientTests(unittest.TestCase):
     def setUp(self):
         remail_client._CONTEXT_CACHE.clear()
 
-    @patch("core.remail_client.requests.request")
+    @patch("core.mail.remail_client.requests.request")
     def test_pick_account_creates_code_order_and_caches_service_token(self, request):
         response = Mock(status_code=201)
         response.json.return_value = {
@@ -42,8 +42,8 @@ class RemailClientTests(unittest.TestCase):
         self.assertEqual(kwargs["headers"]["Authorization"], "Bearer rk-test-key")
         self.assertTrue(kwargs["headers"]["Idempotency-Key"].startswith("turb-gpt-free-register-"))
 
-    @patch("core.remail_client.time.sleep")
-    @patch("core.remail_client.requests.request")
+    @patch("core.mail.remail_client.time.sleep")
+    @patch("core.mail.remail_client.requests.request")
     def test_pick_account_can_wait_for_order_credentials(self, request, sleep):
         create_response = Mock(status_code=201)
         create_response.json.return_value = {
@@ -72,7 +72,7 @@ class RemailClientTests(unittest.TestCase):
             ("GET", "https://remail.aishop6.com/v1/open/orders/R20260829123456789"),
         )
 
-    @patch("core.remail_client.requests.request")
+    @patch("core.mail.remail_client.requests.request")
     def test_fetch_latest_otp_uses_pickup_token_without_api_key(self, request):
         account = remail_client.RemailAccount(
             email="fresh@outlook.test",
@@ -118,8 +118,8 @@ class RemailClientTests(unittest.TestCase):
         self.assertEqual(kwargs["params"], {"email": "fresh@outlook.test", "token": "st-test-token"})
         self.assertNotIn("Authorization", kwargs["headers"])
 
-    @patch("core.remail_client._saved_context_metadata")
-    @patch("core.remail_client.requests.request")
+    @patch("core.mail.remail_client._saved_context_metadata")
+    @patch("core.mail.remail_client.requests.request")
     def test_fetch_latest_otp_restores_saved_service_token_after_restart(self, request, saved):
         saved.return_value = {
             "source": "remail",
@@ -159,8 +159,8 @@ class RemailClientTests(unittest.TestCase):
             {"email": "FRESH@OUTLOOK.TEST", "token": "st-saved-token"},
         )
 
-    @patch("core.remail_client._saved_context_metadata", return_value={})
-    @patch("core.remail_client.requests.request")
+    @patch("core.mail.remail_client._saved_context_metadata", return_value={})
+    @patch("core.mail.remail_client.requests.request")
     def test_restore_context_requires_exact_email_match(self, request, saved):
         response = Mock(status_code=200)
         response.json.return_value = {

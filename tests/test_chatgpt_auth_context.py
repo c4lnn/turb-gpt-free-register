@@ -2,7 +2,7 @@
 import unittest
 from urllib.parse import parse_qs, urlparse
 
-from core.chatgpt_auth import _ensure_authorize_context, signin_openai
+from core.openai.auth.chatgpt_auth import _ensure_authorize_context, signin_openai
 
 
 class _Session:

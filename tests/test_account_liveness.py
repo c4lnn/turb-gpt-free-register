@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import core.account_liveness as liveness
+import core.openai.account.account_liveness as liveness
 
 
 class _DummyHttpSession:
@@ -57,10 +57,10 @@ class _DummyBrowserSession:
 
 class AccountLivenessTests(unittest.TestCase):
     def setUp(self):
-        plan_patch = patch("core.chatgpt_plan.check_account_plan", return_value={"ok": True, "current_plan_type": "plus"})
+        plan_patch = patch("core.openai.commerce.chatgpt_plan.check_account_plan", return_value={"ok": True, "current_plan_type": "plus"})
         self.plan_mock = plan_patch.start()
         self.addCleanup(plan_patch.stop)
-        rate_patch = patch("core.plan_check_service._wait_for_rate_slot")
+        rate_patch = patch("core.openai.commerce.plan_check_service._wait_for_rate_slot")
         rate_patch.start()
         self.addCleanup(rate_patch.stop)
         _DummyBrowserSession.created = []

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Iterable
 
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _POOL_PATH = _PROJECT_ROOT / "提链CDK池.json"
 _LOCK = threading.RLock()
 _LEASED_IDS: set[str] = set()

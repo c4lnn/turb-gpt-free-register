@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from core import codex_retry_service as service
+from core.openai.codex import codex_retry_service as service
 
 
 class CodexRetryLoggingTests(unittest.TestCase):

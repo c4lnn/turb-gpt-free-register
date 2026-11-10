@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from core import masi_cdk_pool as pool
+from core.link import masi_cdk_pool as pool
 from webui.app import create_app
 
 
@@ -17,7 +17,7 @@ class ExtractLinkWebUiTests(unittest.TestCase):
         self.path_patch.start()
         self.accounts_path = Path(self.tempdir.name) / "accounts.json"
         self.accounts_path.write_text("[]", encoding="utf-8")
-        self.accounts_patch = patch("core.db._ACCOUNTS_JSON", self.accounts_path)
+        self.accounts_patch = patch("core.infra.db._ACCOUNTS_JSON", self.accounts_path)
         self.accounts_patch.start()
         pool.reset_runtime_leases()
         self.app = create_app(auth_code="test-auth")
@@ -93,14 +93,14 @@ class ExtractLinkWebUiTests(unittest.TestCase):
 
     def test_import_reports_added_duplicate_and_refresh_summary(self):
         refresh = {"total": 1, "success_count": 1, "failed_count": 0, "moved_to_exhausted": 0, "moved_to_selectable": 0, "results": []}
-        with patch("core.extract_link_service.refresh_masi_cdks", return_value=refresh):
+        with patch("core.link.extract_link_service.refresh_masi_cdks", return_value=refresh):
             first = self.client.post("/api/extract-link/cdks/import", json={"text": "CDK-A", "refresh_quota": True}, headers=self.headers)
             second = self.client.post("/api/extract-link/cdks/import", json={"text": "CDK-A", "refresh_quota": True}, headers=self.headers)
         self.assertEqual(first.get_json()["added_count"], 1)
         self.assertEqual(second.get_json()["duplicate_count"], 1)
 
     def test_import_does_not_refresh_quota_by_default(self):
-        with patch("core.extract_link_service.refresh_masi_cdks") as refresh:
+        with patch("core.link.extract_link_service.refresh_masi_cdks") as refresh:
             response = self.client.post("/api/extract-link/cdks/import", json={"text": "CDK-A\nCDK-B"}, headers=self.headers)
         self.assertEqual(response.status_code, 200)
         body = response.get_json()
@@ -112,7 +112,7 @@ class ExtractLinkWebUiTests(unittest.TestCase):
     def test_duplicate_import_without_refresh_preserves_quota_and_pool(self):
         cdk_id = pool.import_cdks("CDK-A")["added"][0]["id"]
         pool.update_quota(cdk_id, {"total_uses": 1, "remaining_uses": 0, "pending_uses": 0, "available_uses": 0})
-        with patch("core.extract_link_service.refresh_masi_cdks") as refresh:
+        with patch("core.link.extract_link_service.refresh_masi_cdks") as refresh:
             response = self.client.post("/api/extract-link/cdks/import", json={"text": "CDK-A"}, headers=self.headers)
         self.assertEqual(response.status_code, 200)
         item = pool.list_cdks()[0]
@@ -165,7 +165,7 @@ class ExtractLinkWebUiTests(unittest.TestCase):
             "extract_link_error": "TimeoutError: Masi Job 等待超时",
         }]), encoding="utf-8")
         accepted = {"accepted": True, "busy": False, "job_id": "existing-job"}
-        with patch("core.extract_link_service.enqueue_existing_masi_job_poll", return_value=accepted) as enqueue:
+        with patch("core.link.extract_link_service.enqueue_existing_masi_job_poll", return_value=accepted) as enqueue:
             response = self.client.post(
                 "/api/accounts/extract-link-resume",
                 json={"account_id": 1},

@@ -5,9 +5,9 @@ import unittest
 from unittest.mock import patch
 
 from config import browser as browser_config
-import core.openai_auth as openai_auth
-import core.codex_oauth as codex_oauth
-from core.session import BrowserSession
+import core.openai.auth.openai_auth as openai_auth
+import core.openai.codex.codex_oauth as codex_oauth
+from core.openai.transport.session import BrowserSession
 
 
 class _Response:

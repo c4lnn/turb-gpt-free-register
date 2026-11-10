@@ -14,9 +14,9 @@ from urllib.parse import urlparse, urljoin
 import pyotp
 
 from config import openai_protocol as _protocol_cfg
-from core.session import BrowserSession
-from core.sentinel import build_sentinel_request_body
-from core.sentinel_runner import SentinelSDK
+from core.openai.transport.session import BrowserSession
+from core.openai.auth.sentinel import build_sentinel_request_body
+from core.openai.auth.sentinel_runner import SentinelSDK
 
 logger = logging.getLogger(__name__)
 
@@ -298,7 +298,7 @@ def _reset_retryable_circuit(session: BrowserSession) -> None:
 
 def _check_stop_requested() -> None:
     """懒加载任务服务，避免模块导入阶段形成 main/registration_service 循环依赖。"""
-    from core.registration_service import check_stop_requested
+    from core.openai.register.registration_service import check_stop_requested
     check_stop_requested()
 
 
@@ -341,8 +341,8 @@ def _request_with_proxy_retry(session: BrowserSession, label: str, fn):
 
 def _registration_preflight(session: BrowserSession) -> None:
     """初始 trace 冻结画像；有界 CSRF warmup 直接建立正式注册会话。"""
-    from core.registration_service import StopRequested
-    from core.registration_geo import (
+    from core.openai.register.registration_service import StopRequested
+    from core.openai.register.registration_geo import (
         RegistrationGeoError, CATEGORY_PROXY, CATEGORY_GEO_SERVICE, CATEGORY_GEO_PARSE, STAGE_DETECT,
     )
 
@@ -524,7 +524,7 @@ def follow_authorize(session: BrowserSession, authorize_url: str) -> str:
 
 def request_sentinel_token(session: BrowserSession, flow: str) -> dict:
     """当前步骤单 flow 采集、请求和求解，始终使用同一个 SDK 上下文。"""
-    from core.registration_service import StopRequested
+    from core.openai.register.registration_service import StopRequested
 
     if not session.device_id:
         raise SentinelRequestError("Sentinel 设备上下文尚未初始化")

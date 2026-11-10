@@ -5,11 +5,11 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
-from core import db
-from core.sqlite_store import SQLiteRuntimeStore
+from core.infra import db
+from core.infra.sqlite_store import SQLiteRuntimeStore
 from flask import Flask
 from webui.app import _account_status_filter_args
-from core.account_status_contracts import (
+from core.openai.account.account_status_contracts import (
     build_account_status_contract,
     classify_checkout_session_type,
     classify_plan_category,

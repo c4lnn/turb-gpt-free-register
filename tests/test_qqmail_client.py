@@ -2,11 +2,11 @@
 import unittest
 from unittest.mock import Mock, patch
 
-from core import qqmail_client
+from core.mail import qqmail_client
 
 
 class QQMailClientTests(unittest.TestCase):
-    @patch("core.qqmail_client.imaplib.IMAP4_SSL")
+    @patch("core.mail.qqmail_client.imaplib.IMAP4_SSL")
     def test_connect_imap_sets_socket_timeout(self, imap_ssl):
         mail = Mock()
         imap_ssl.return_value = mail

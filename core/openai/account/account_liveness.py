@@ -7,12 +7,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from core import db
-from core.session import BrowserSession, close_browser_session
-from core.codex_oauth import _account_registration_password, _account_totp_secret, _account_totp_code
-from core.humanize import delay as human_delay
-from core.chatgpt_auth import get_csrf_token, get_providers, probe_auth_session, signin_openai
-from core.openai_auth import (
+from core.infra import db
+from core.openai.transport.session import BrowserSession, close_browser_session
+from core.openai.codex.codex_oauth import _account_registration_password, _account_totp_secret, _account_totp_code
+from core.infra.humanize import delay as human_delay
+from core.openai.auth.chatgpt_auth import get_csrf_token, get_providers, probe_auth_session, signin_openai
+from core.openai.auth.openai_auth import (
     follow_authorize,
     send_email_otp,
     validate_email_otp,
@@ -25,17 +25,17 @@ from core.openai_auth import (
     AccountUnusableError,
     detect_account_unusable_text,
 )
-from core.account_export import (
+from core.openai.account.account_export import (
     _follow_reauth_with_retry,
     _trigger_reauth_with_retry,
     _validate_reauth_otp,
     fetch_session,
     follow_oauth_callback,
 )
-from core.email_provider import wait_for_otp
+from core.mail.email_provider import wait_for_otp
 
 logger = logging.getLogger(__name__)
-_LOG_DIR = Path(__file__).resolve().parent.parent / "注册日志"
+_LOG_DIR = Path(__file__).resolve().parents[3] / "注册日志"
 _RUNNING: set[str] = set()
 _RUNNING_LOCK = threading.Lock()
 
@@ -125,7 +125,7 @@ def _fingerprint_mode_label(state: dict) -> str:
 
 def _warm_login_fingerprint_context(session: BrowserSession) -> None:
     """复现 plus 纯协议注册成功样本的登录页初始化顺序。"""
-    from core.chatgpt_bootstrap import anonymous_bootstrap
+    from core.openai.auth.chatgpt_bootstrap import anonymous_bootstrap
 
     logger.info(
         "[查活] 登录链预热：/auth/login 顶层导航 → anonymous bootstrap → "
@@ -303,7 +303,7 @@ def _warm_authenticated_session(session: BrowserSession, access_token: str) -> N
     """复用 2FA 已验证的登录态预热流程。预热失败不直接判定账号死亡。"""
     if not access_token:
         return
-    from core.chatgpt_bootstrap import authenticated_bootstrap
+    from core.openai.auth.chatgpt_bootstrap import authenticated_bootstrap
 
     try:
         logger.info("[查活] 使用已有 accessToken 预热登录态...")
@@ -735,8 +735,8 @@ def check_account_liveness(
             return on_authenticated(result, session)
         # 直接调用底层查活时也自动查询；业务队列通过 hook 先落库新 AT，再统一占用套餐任务。
         try:
-            from core.chatgpt_plan import check_account_plan
-            from core.plan_check_service import _wait_for_rate_slot
+            from core.openai.commerce.chatgpt_plan import check_account_plan
+            from core.openai.commerce.plan_check_service import _wait_for_rate_slot
             _wait_for_rate_slot()
             result["plan_result"] = check_account_plan(access_token, session=session)
         except Exception as exc:

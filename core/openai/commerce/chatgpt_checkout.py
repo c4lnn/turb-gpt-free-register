@@ -16,8 +16,8 @@ from email.utils import parsedate_to_datetime
 from typing import Any, Callable, Mapping
 from urllib.parse import urlparse
 
-from core.chatgpt_plan import normalize_token
-from core.session import BrowserSession
+from core.openai.commerce.chatgpt_plan import normalize_token
+from core.openai.transport.session import BrowserSession
 
 logger = logging.getLogger(__name__)
 

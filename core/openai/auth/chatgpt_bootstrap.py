@@ -11,9 +11,9 @@ import json
 import logging
 from typing import Iterable
 
-from core.session import BrowserSession
-from core.sentinel import generate_requirements_token
-from core.http_diagnostics import response_summary
+from core.openai.transport.session import BrowserSession
+from core.openai.auth.sentinel import generate_requirements_token
+from core.infra.http_diagnostics import response_summary
 
 logger = logging.getLogger(__name__)
 

@@ -3,7 +3,7 @@ import string
 import unittest
 from unittest.mock import Mock, patch
 
-from core import cf_temp_mail_client as client
+from core.mail import cf_temp_mail_client as client
 
 
 class CFTempMailClientTests(unittest.TestCase):
@@ -16,7 +16,7 @@ class CFTempMailClientTests(unittest.TestCase):
             with self.assertRaisesRegex(client.CFTempMailError, "请填写 CLOUDFLARE_API_BASE"):
                 client.pick_account()
 
-    @patch("core.cf_temp_mail_client.requests.request")
+    @patch("core.mail.cf_temp_mail_client.requests.request")
     def test_pick_account_anonymous_create(self, request_mock):
         response = Mock(status_code=200)
         response.json.return_value = {
@@ -43,7 +43,7 @@ class CFTempMailClientTests(unittest.TestCase):
         self.assertEqual(args[1], "https://mail.example.com/api/new_address")
         self.assertEqual(kwargs["json"], {"domain": "mail.example.com"})
 
-    @patch("core.cf_temp_mail_client.requests.request")
+    @patch("core.mail.cf_temp_mail_client.requests.request")
     def test_admin_create_uses_name_payload_and_header(self, request_mock):
         response = Mock(status_code=200)
         response.json.return_value = {"address": "u@mail.example.com", "jwt": "jwt-2"}
@@ -68,7 +68,7 @@ class CFTempMailClientTests(unittest.TestCase):
         self.assertEqual(kwargs["json"]["domain"], "mail.example.com")
         self.assertIn("name", kwargs["json"])
 
-    @patch("core.cf_temp_mail_client.requests.request")
+    @patch("core.mail.cf_temp_mail_client.requests.request")
     def test_disabled_random_subdomain_preserves_domain_rotation(self, request_mock):
         first = Mock(status_code=200)
         first.json.return_value = {"address": "a@one.example.com", "jwt": "jwt-1"}
@@ -89,8 +89,8 @@ class CFTempMailClientTests(unittest.TestCase):
         payloads = [call.kwargs["json"] for call in request_mock.call_args_list]
         self.assertEqual(payloads, [{"domain": "one.example.com"}, {"domain": "two.example.com"}])
 
-    @patch("core.cf_temp_mail_client.secrets.choice", side_effect=list("kqmfax"))
-    @patch("core.cf_temp_mail_client.requests.request")
+    @patch("core.mail.cf_temp_mail_client.secrets.choice", side_effect=list("kqmfax"))
+    @patch("core.mail.cf_temp_mail_client.requests.request")
     def test_anonymous_create_uses_random_subdomain(self, request_mock, choice):
         response = Mock(status_code=200)
         response.json.return_value = {"address": "u@kqmfax-mail.example.com", "jwt": "jwt-random"}
@@ -111,9 +111,9 @@ class CFTempMailClientTests(unittest.TestCase):
         self.assertEqual(choice.call_count, 6)
         self.assertTrue(all(call.args[0] == string.ascii_lowercase for call in choice.call_args_list))
 
-    @patch("core.cf_temp_mail_client._generate_local", return_value="localname1")
-    @patch("core.cf_temp_mail_client.secrets.choice", return_value="q")
-    @patch("core.cf_temp_mail_client.requests.request")
+    @patch("core.mail.cf_temp_mail_client._generate_local", return_value="localname1")
+    @patch("core.mail.cf_temp_mail_client.secrets.choice", return_value="q")
+    @patch("core.mail.cf_temp_mail_client.requests.request")
     def test_admin_create_changes_only_domain_for_random_subdomain(self, request_mock, choice, generate_local):
         response = Mock(status_code=200)
         response.json.return_value = {"address": "localname1@qqqqqq-mail.example.com", "jwt": "jwt-admin"}
@@ -157,7 +157,7 @@ class CFTempMailClientTests(unittest.TestCase):
                 with self.assertRaisesRegex(client.CFTempMailError, expected):
                     client.validate_random_subdomain_config()
 
-    @patch("core.cf_temp_mail_client.secrets.choice", side_effect=list("abcdefuvwxyz"))
+    @patch("core.mail.cf_temp_mail_client.secrets.choice", side_effect=list("abcdefuvwxyz"))
     def test_random_subdomain_is_generated_for_each_create(self, choice):
         with patch.object(client._email_cfg, "CLOUDFLARE_RANDOM_SUBDOMAIN_ENABLED", True, create=True), patch.object(
             client._email_cfg, "CLOUDFLARE_RANDOM_SUBDOMAIN_LENGTH", 6, create=True
@@ -168,7 +168,7 @@ class CFTempMailClientTests(unittest.TestCase):
         self.assertEqual(first, "abcdef-mail.example.com")
         self.assertEqual(second, "uvwxyz-mail.example.com")
 
-    @patch("core.cf_temp_mail_client.requests.request")
+    @patch("core.mail.cf_temp_mail_client.requests.request")
     def test_worker_domain_rejection_adds_hint_without_retry(self, request_mock):
         response = Mock(status_code=400)
         response.json.return_value = {"error": "domain not allowed"}
@@ -187,8 +187,8 @@ class CFTempMailClientTests(unittest.TestCase):
 
         request_mock.assert_called_once()
 
-    @patch("core.cf_temp_mail_client.time.sleep")
-    @patch("core.cf_temp_mail_client.requests.request")
+    @patch("core.mail.cf_temp_mail_client.time.sleep")
+    @patch("core.mail.cf_temp_mail_client.requests.request")
     def test_fetch_latest_otp_reads_only_new_openai_email(self, request_mock, sleep):
         client._CONTEXT_CACHE["fresh@mail.example.com"] = client.CFTempMailAccount(
             email="fresh@mail.example.com",
@@ -253,7 +253,7 @@ class CFTempMailClientTests(unittest.TestCase):
                 client.pick_account()
 
 
-    @patch("core.cf_temp_mail_client.requests.request")
+    @patch("core.mail.cf_temp_mail_client.requests.request")
     def test_list_messages_sends_limit_offset(self, request_mock):
         response = Mock(status_code=200)
         response.json.return_value = {"results": []}
@@ -296,7 +296,7 @@ class CFTempMailClientTests(unittest.TestCase):
             "created_at": "2026-07-19 12:57:38",
         }
         otp_item = client._otp_item(item)
-        from core.otp_utils import looks_like_openai_email, extract_otp
+        from core.mail.otp_extract import looks_like_openai_email, extract_otp
         self.assertTrue(looks_like_openai_email(otp_item))
         self.assertEqual(extract_otp(otp_item), "449759")
 

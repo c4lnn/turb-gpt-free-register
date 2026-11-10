@@ -3,8 +3,8 @@ import unittest
 from unittest.mock import Mock, patch
 
 from config import email as email_config
-from core import email_provider
-from core.email_transport import (
+from core.mail import email_provider
+from core.mail.email_transport import (
     configure_curl_session,
     direct_email_requests,
     direct_email_requests_enabled,
@@ -39,12 +39,12 @@ class DirectEmailTransportTests(unittest.TestCase):
 
     def test_all_automatic_otp_provider_dispatches_run_in_direct_scope(self):
         providers = {
-            "outlook": "outlook_client",
-            "cloudflare": "cf_temp_mail_client",
-            "cloudflare_domain": "qqmail_client",
-            "icloud": "icloud_client",
-            "generic_api": "generic_api_mail_client",
-            "remail": "remail_client",
+            "outlook": "core.mail.outlook_client",
+            "cloudflare": "core.mail.cf_temp_mail_client",
+            "cloudflare_domain": "core.mail.qqmail_client",
+            "icloud": "core.mail.icloud_client",
+            "generic_api": "core.mail.generic_api_mail_client",
+            "remail": "core.mail.remail_client",
         }
         for source, module in providers.items():
             with self.subTest(source=source), patch.object(
@@ -54,7 +54,7 @@ class DirectEmailTransportTests(unittest.TestCase):
             ), patch.object(
                 email_provider, "resolve_email_source", return_value=source,
             ), patch(
-                f"core.{module}.fetch_latest_otp",
+                f"{module}.fetch_latest_otp",
                 side_effect=lambda *_args, **_kwargs: (
                     "654321" if direct_email_requests_enabled() else self.fail("provider ran outside direct scope")
                 ),

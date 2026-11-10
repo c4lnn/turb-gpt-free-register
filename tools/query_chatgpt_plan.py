@@ -25,13 +25,13 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
 from config import proxy as proxy_cfg  # noqa: E402
-from core.chatgpt_plan import (  # noqa: E402
+from core.openai.commerce.chatgpt_plan import (  # noqa: E402
     ACCOUNTS_CHECK_PATH,
     _common_headers,
     normalize_token,
     resolve_plan_check_route,
 )
-from core.session import BrowserSession  # noqa: E402
+from core.openai.transport.session import BrowserSession  # noqa: E402
 
 
 def _parse_response(text: str):

@@ -5,9 +5,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from core import extract_link_service as service
-from core import masi_cdk_pool as pool
-from core.extract_link_providers import ProviderError
+from core.link import extract_link_service as service
+from core.link import masi_cdk_pool as pool
+from core.link.extract_link_providers import ProviderError
 
 
 class FakeLegacyProvider:

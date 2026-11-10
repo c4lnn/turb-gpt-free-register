@@ -46,12 +46,12 @@ from config import (
 )
 # OTP_POLL_INTERVAL / OTP_MAX_WAIT 是 WebUI 可热改的，从模块读
 from config import email as _email_cfg
-from core.otp_utils import looks_like_openai_email, extract_otp
-from core.email_transport import configure_curl_session
+from core.mail.otp_extract import looks_like_openai_email, extract_otp
+from core.mail.email_transport import configure_curl_session
 
 logger = logging.getLogger(__name__)
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 # 邮箱 → account 上下文的内存缓存，fetch_latest_otp 用
 _CONTEXT_CACHE: dict[str, "OutlookAccount"] = {}
@@ -260,7 +260,7 @@ def pick_account() -> OutlookAccount:
     原子地挑一个 status='available' 的 Outlook 账号并标记为 'registering'（DB 事务）。
     多线程并发安全。
     """
-    from core.db import claim_next_outlook, outlook_pool_summary
+    from core.infra.db import claim_next_outlook, outlook_pool_summary
 
     inserted, skipped = import_outlook_from_file()
     if inserted:
@@ -297,7 +297,7 @@ def get_account_context(email: str) -> OutlookAccount | None:
         return None
     if cache_key in _CONTEXT_CACHE:
         return _CONTEXT_CACHE[cache_key]
-    from core.db import get_account_by_email, get_outlook_by_email
+    from core.infra.db import get_account_by_email, get_outlook_by_email
 
     pool_row = get_outlook_by_email(email)
     # 已注册账号的来源是权威值。即使本地 Outlook 池里残留了同名记录，
@@ -345,14 +345,14 @@ def get_account_context(email: str) -> OutlookAccount | None:
 
 def release_account(email: str, status: str = "failed", note: str | None = None) -> None:
     """按注册阶段结果更新 Outlook 账号状态；默认失败进入不可复用终态。"""
-    from core.db import release_outlook
+    from core.infra.db import release_outlook
     release_outlook(email, status=status, note=note)
     _CONTEXT_CACHE.pop(_cache_key(email), None)
 
 
 def import_outlook_from_file(path: str | Path | None = None, *, reactivate_existing: bool = False) -> tuple[int, int]:
     """读取一份账号文本文件，全量导入 DB，返回 (新增, 已存在跳过)。"""
-    from core.db import import_outlook_accounts
+    from core.infra.db import import_outlook_accounts
     p = Path(path or OUTLOOK_ACCOUNTS_FILE)
     if not p.is_absolute():
         p = _PROJECT_ROOT / p
@@ -366,7 +366,7 @@ def import_outlook_from_file(path: str | Path | None = None, *, reactivate_exist
 
 def import_outlook_from_text(text: str, *, reactivate_existing: bool = False) -> tuple[int, int]:
     """直接给一段多行文本（粘贴用），导入 DB。"""
-    from core.db import import_outlook_accounts
+    from core.infra.db import import_outlook_accounts
     records = []
     for raw in text.splitlines():
         line = raw.strip()

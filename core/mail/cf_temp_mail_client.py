@@ -23,9 +23,9 @@ from typing import Any
 
 import requests
 
-from core.email_transport import requests_request
+from core.mail.email_transport import requests_request
 from config import email as _email_cfg
-from core.otp_utils import extract_otp, looks_like_openai_email
+from core.mail.otp_extract import extract_otp, looks_like_openai_email
 
 logger = logging.getLogger(__name__)
 

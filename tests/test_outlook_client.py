@@ -2,15 +2,15 @@
 import unittest
 from unittest.mock import patch
 
-from core import outlook_client
+from core.mail import outlook_client
 
 
 class OutlookClientContextTests(unittest.TestCase):
     def setUp(self):
         outlook_client._CONTEXT_CACHE.clear()
 
-    @patch("core.db.get_account_by_email")
-    @patch("core.db.get_outlook_by_email", return_value=None)
+    @patch("core.infra.db.get_account_by_email")
+    @patch("core.infra.db.get_outlook_by_email", return_value=None)
     def test_restores_context_from_registered_account_after_pool_missing(
         self,
         get_outlook_by_email,
@@ -38,8 +38,8 @@ class OutlookClientContextTests(unittest.TestCase):
         get_outlook_by_email.assert_called_once_with("  registered@OUTLOOK.test ")
         get_account_by_email.assert_called_once_with("  registered@OUTLOOK.test ")
 
-    @patch("core.db.get_account_by_email")
-    @patch("core.db.get_outlook_by_email")
+    @patch("core.infra.db.get_account_by_email")
+    @patch("core.infra.db.get_outlook_by_email")
     def test_registered_account_fills_incomplete_pool_context(
         self,
         get_outlook_by_email,
@@ -66,14 +66,14 @@ class OutlookClientContextTests(unittest.TestCase):
         self.assertEqual(account.client_id, "saved-client")
         self.assertEqual(account.refresh_token, "pool-refresh")
 
-    @patch("core.db.get_account_by_email", return_value={
+    @patch("core.infra.db.get_account_by_email", return_value={
         "email": "registered@outlook.test",
         "email_source": "remail",
         "password": "saved-password",
         "client_id": "saved-client",
         "refresh_token": "saved-refresh",
     })
-    @patch("core.db.get_outlook_by_email", return_value={
+    @patch("core.infra.db.get_outlook_by_email", return_value={
         "email": "registered@outlook.test",
         "password": "pool-password",
         "client_id": "pool-client",
@@ -86,8 +86,8 @@ class OutlookClientContextTests(unittest.TestCase):
     ):
         self.assertIsNone(outlook_client.get_account_context("registered@outlook.test"))
 
-    @patch("core.db.get_account_by_email", return_value=None)
-    @patch("core.db.get_outlook_by_email", return_value={
+    @patch("core.infra.db.get_account_by_email", return_value=None)
+    @patch("core.infra.db.get_outlook_by_email", return_value={
         "email": "Pool@outlook.test",
         "password": "pool-password",
         "client_id": "pool-client",

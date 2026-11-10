@@ -13,9 +13,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from core import db
-from core import email_provider, registration_service
-from core.sqlite_store import SQLiteRuntimeStore
+from core.infra import db
+from core.mail import email_provider
+from core.openai.register import registration_service
+from core.infra.sqlite_store import SQLiteRuntimeStore
 
 
 class _JsonStoreTestCase(unittest.TestCase):

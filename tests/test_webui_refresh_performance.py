@@ -5,8 +5,8 @@ from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from core import db
-from core import registration_service as service
+from core.infra import db
+from core.openai.register import registration_service as service
 from webui import app as web_app
 
 

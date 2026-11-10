@@ -6,14 +6,17 @@ from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import patch
 
-from core import cf_temp_mail_client, db, email_provider, registration_service
-from core.email_pool_status import (
+from core.mail import cf_temp_mail_client
+from core.infra import db
+from core.mail import email_provider
+from core.openai.register import registration_service
+from core.mail.email_pool_status import (
     EMAIL_POOL_STATUSES,
     can_transition,
     canonical_status,
     status_counts,
 )
-from core.sqlite_store import SQLiteRuntimeStore
+from core.infra.sqlite_store import SQLiteRuntimeStore
 from config import email as email_config
 from webui import app as web_app
 

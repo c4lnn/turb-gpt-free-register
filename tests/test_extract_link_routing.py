@@ -2,7 +2,7 @@
 import unittest
 from unittest.mock import patch
 
-from core import extract_link_service as service
+from core.link import extract_link_service as service
 
 
 class ExtractLinkRoutingTests(unittest.TestCase):

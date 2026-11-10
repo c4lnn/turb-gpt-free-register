@@ -58,7 +58,7 @@ from config import (
 logger = logging.getLogger(__name__)
 
 # 项目根目录（core 的上一级）
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
 # Node 资源放在项目根的 sentinel/ 子目录下
 _SENTINEL_DIR = _PROJECT_ROOT / "sentinel"
 _RUNNER_PATH = _SENTINEL_DIR / "sentinel-runner.js"
