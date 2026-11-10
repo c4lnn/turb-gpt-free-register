@@ -1,28 +1,17 @@
-"""已安装协议后端的桌面浏览器指纹目录及基础 HTTP 画像同步。"""
+"""协议传输后端（wreq）的桌面浏览器指纹目录及基础 HTTP 画像同步。"""
 import re
-from typing import get_args
-
-PROFILE_FIELDS = {'CURL_CFFI_IMPERSONATE': 'curl_cffi', 'WREQ_EMULATION': 'wreq'}
 
 
 def supported_profiles(backend):
     """不暴露版本漂移别名、移动端或非浏览器协议，避免与桌面 JS 环境混用。"""
-    if backend == 'curl_cffi':
-        from curl_cffi.requests.impersonate import BrowserTypeLiteral
-        return [name for name in get_args(BrowserTypeLiteral)
-                if re.fullmatch(r'(?:chrome\d+a?|edge\d+|firefox\d+|safari\d+)', name)]
-    if backend == 'wreq':
-        try:
-            from wreq import Profile
-        except ImportError:
-            return []
-        return [name.lower() for name in dir(Profile)
-                if re.fullmatch(r'(?:Chrome\d+|Edge\d+|Firefox\d+|Safari[\d_]+)', name)]
-    raise ValueError(f'未知协议 HTTP 客户端: {backend}')
-
-
-def profile_choices(key):
-    return [{'value': name, 'label': name} for name in supported_profiles(PROFILE_FIELDS[key])]
+    if backend != 'wreq':
+        raise ValueError(f'未知协议 HTTP 客户端: {backend}（协议会话固定使用 wreq）')
+    try:
+        from wreq import Profile
+    except ImportError:
+        return []
+    return [name.lower() for name in dir(Profile)
+            if re.fullmatch(r'(?:Chrome\d+|Edge\d+|Firefox\d+|Safari[\d_]+)', name)]
 
 
 def validate_protocol_profile(backend, name):

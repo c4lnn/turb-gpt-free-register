@@ -81,8 +81,9 @@ class WreqSession:
         self.impersonate = profile_name
         self._wreq = wreq
         jar = wreq.Jar()
-        self._client = Client(emulation=profile, cookie_provider=jar,
-                              default_headers=False, no_proxy=True)
+        # default_headers 只在逐请求配置里生效；Client 层传入会被静默忽略。
+        # 默认头的抑制统一在 request() 中施加，见该方法内的说明。
+        self._client = Client(emulation=profile, cookie_provider=jar, no_proxy=True)
         self.cookies = WreqCookies(jar, wreq)
         self.proxies = {}
         self.timeout = 30
@@ -112,7 +113,12 @@ class WreqSession:
     def request(self, method, url, **kwargs):
         if self._client is None:
             raise RuntimeError("wreq 会话已关闭")
-        options = {}
+        # 关闭传输层默认头注入。否则 wreq 会给所有请求补上
+        # upgrade-insecure-requests 与 sec-fetch-user；这两个头浏览器只在文档
+        # 导航时发送，出现在 XHR 上属于明显的非浏览器特征。导航头由
+        # BrowserSession 的导航头构造函数显式写入，不受此处影响。
+        # 注意：只能逐请求传 False；传空串会发出空值头，传 None 会抛 TypeError。
+        options = {"default_headers": False}
         for key in ("headers", "json", "cookies"):
             if key in kwargs:
                 options[key] = kwargs.pop(key)

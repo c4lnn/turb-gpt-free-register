@@ -33,13 +33,12 @@ SAFARI_WEBKIT_VERSION = "537.36"
 MAC_OS_UA_VERSION = "10_15_7"
 
 # ---------- curl_cffi 模拟浏览器 ----------
-# curl_cffi 0.15 当前最高内置到 chrome146。UA、Client Hints、JS navigator
-# 必须同步为 146；不能出现 TLS=146、HTTP/JS=149 的跨版本拼接指纹。
+# 仅邮箱 / 接码等旁路模块直接使用 curl_cffi；curl_cffi 0.15 当前最高内置到
+# chrome146，UA、Client Hints、JS navigator 必须同步为 146，不能出现
+# TLS=146、HTTP/JS=149 的跨版本拼接指纹。
 IMPERSONATE = "chrome146"
 
-# BrowserSession 的协议传输后端。
-PROTOCOL_HTTP_CLIENT = "curl_cffi"
-CURL_CFFI_IMPERSONATE = "chrome146"
+# 协议会话（BrowserSession）固定使用 wreq，此处只配指纹版本。
 WREQ_EMULATION = "chrome146"
 
 # ---------- 桌面 Chrome 画像 ----------
@@ -374,4 +373,4 @@ def validate_browser_profile(profile: dict) -> list[str]:
     return issues
 
 # ---- .env overrides for WebUI editable fields ----
-apply_env_overrides(globals(), {'PROTOCOL_HTTP_CLIENT': 'str', 'CURL_CFFI_IMPERSONATE': 'str', 'WREQ_EMULATION': 'str', 'BROWSER_LOCALE_PROFILE': 'str', 'AUTO_BROWSER_LOCALE_FROM_IP': 'bool', 'IP_GEO_TIMEOUT': 'float', 'REJECT_CLOUD_PROXY': 'bool'})
+apply_env_overrides(globals(), {'WREQ_EMULATION': 'str', 'BROWSER_LOCALE_PROFILE': 'str', 'AUTO_BROWSER_LOCALE_FROM_IP': 'bool', 'IP_GEO_TIMEOUT': 'float', 'REJECT_CLOUD_PROXY': 'bool'})

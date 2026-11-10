@@ -5,7 +5,6 @@ from types import SimpleNamespace
 from requests.cookies import RequestsCookieJar
 from http.cookiejar import Cookie
 from unittest.mock import patch
-from config import browser
 
 from config.browser import build_browser_environment
 from core.session import BrowserSession
@@ -105,10 +104,9 @@ class SessionNavigationHeaderTests(unittest.TestCase):
         self.assertNotIn("referer", headers)
         self.assertNotIn("cache-control", headers)
 
-    def test_chrome146_client_hints_match_curl_impersonation(self):
-        # 固定此用例的协议版本，不能受开发机 Web/.env 当前选择影响。
-        with patch.multiple(browser, PROTOCOL_HTTP_CLIENT="curl_cffi", CURL_CFFI_IMPERSONATE="chrome146"):
-            session = BrowserSession(proxy="", detect_exit_geo=False)
+    def test_chrome146_client_hints_match_transport_profile(self):
+        # 传输后端已固定为 wreq，指纹取自 WREQ_EMULATION；此用例锁住头与指纹一致。
+        session = BrowserSession(proxy="", detect_exit_geo=False)
         try:
             headers = session.get_chatgpt_navigate_headers(referer="")
             self.assertEqual(
@@ -119,6 +117,34 @@ class SessionNavigationHeaderTests(unittest.TestCase):
             self.assertEqual(headers["sec-ch-ua-mobile"], "?0")
         finally:
             session.close()
+
+    def test_navigation_headers_keep_navigation_only_fields(self):
+        # 关闭传输层默认头后，导航头必须由构造函数显式提供，否则导航报文会缺这两项。
+        session = BrowserSession(proxy="", detect_exit_geo=False)
+        try:
+            auth_headers = session.get_auth_navigate_headers(referer="https://chatgpt.com/")
+            chat_headers = session.get_chatgpt_navigate_headers(referer="https://chatgpt.com/")
+        finally:
+            session.close()
+        for headers in (auth_headers, chat_headers):
+            self.assertEqual(headers["upgrade-insecure-requests"], "1")
+            self.assertEqual(headers["sec-fetch-user"], "?1")
+            self.assertEqual(headers["sec-fetch-dest"], "document")
+            self.assertEqual(headers["sec-fetch-mode"], "navigate")
+
+    def test_xhr_header_sets_omit_navigation_only_fields(self):
+        # 同一会话的 XHR 头集合不得携带导航专属字段。
+        session = BrowserSession(proxy="", detect_exit_geo=False)
+        try:
+            xhr_headers = [
+                session.get_nextauth_headers(),
+                session.get_sentinel_headers(),
+            ]
+        finally:
+            session.close()
+        for headers in xhr_headers:
+            self.assertNotIn("upgrade-insecure-requests", headers)
+            self.assertNotIn("sec-fetch-user", headers)
 
     def test_browser_sessions_are_independent_without_seed(self):
         first = BrowserSession(proxy="", detect_exit_geo=False, device_id="device-for-test")

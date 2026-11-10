@@ -157,9 +157,9 @@ class RegistrationPreflightTests(unittest.TestCase):
                     openai_auth.network_preflight(session)
                 self.assertEqual(session.device_id, "")
 
-    def test_missing_registration_backend_cannot_fall_back_to_legacy_transport(self):
+    def test_missing_registration_backend_aborts_before_opening_transport(self):
         with patch("core.protocol_profiles.validate_protocol_profile", side_effect=ValueError("backend unavailable")), patch(
-            "core.session.Session", side_effect=AssertionError("legacy backend must not open")
+            "core.wreq_session.WreqSession", side_effect=AssertionError("transport must not open")
         ):
             with self.assertRaisesRegex(ValueError, "backend unavailable"):
                 BrowserSession(proxy="", detect_exit_geo=False, server_device_id=True)

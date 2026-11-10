@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-可选 curl_cffi / wreq 的协议 Session 封装
+基于 wreq 的协议 Session 封装
 统一管理 Cookie、请求头和 TLS 指纹
 """
 import logging
@@ -12,7 +12,6 @@ import time
 import uuid
 from ipaddress import ip_address
 from urllib.parse import urlparse
-from curl_cffi.requests import Session
 
 from config import (
     USER_AGENT, SEC_CH_UA, SEC_CH_UA_PLATFORM, SEC_CH_UA_MOBILE,
@@ -87,7 +86,7 @@ def _seeded_browser_profile(seed: str, geo: dict | None = None) -> dict:
 class BrowserSession:
     """
     模拟 Chrome 浏览器的 HTTP 会话管理器。
-    通过 curl_cffi / wreq 模拟浏览器 TLS 指纹，不负责执行交互式挑战。
+    通过 wreq 模拟浏览器 TLS 指纹，不负责执行交互式挑战。
     """
 
     def __init__(
@@ -210,23 +209,15 @@ class BrowserSession:
                 self.react_container_key = "__reactContainer$" + uuid.uuid4().hex[:11]
             self.react_resources_key = "__reactResources$" + self.react_container_key.split("$", 1)[1]
 
-            # 每个会话固定后端；Web 配置热更新只影响后续新会话。
+            # 传输后端固定为 wreq；Web 配置热更新只影响后续新会话的指纹版本。
             from config import browser as browser_cfg
-            self.http_client = "wreq" if self.server_device_id else str(browser_cfg.PROTOCOL_HTTP_CLIENT).strip().lower()
             from core.protocol_profiles import validate_protocol_profile, align_browser_profile
-            self.impersonate = ("chrome152" if self.server_device_id else
-                                browser_cfg.CURL_CFFI_IMPERSONATE if self.http_client == "curl_cffi"
-                                else browser_cfg.WREQ_EMULATION)
-            self.impersonate = validate_protocol_profile(self.http_client, str(self.impersonate).strip())
-            if self.http_client == "curl_cffi":
-                self.session = Session(impersonate=self.impersonate)
-            elif self.http_client == "wreq":
-                from core.wreq_session import WreqSession
-                self.session = WreqSession(impersonate=self.impersonate)
-            else:
-                raise ValueError(f"未知协议 HTTP 客户端: {self.http_client}")
-            logger.info("[协议会话] HTTP 客户端=%s 指纹=%s 实际实现=%s.%s",
-                        self.http_client, self.impersonate,
+            self.impersonate = "chrome152" if self.server_device_id else browser_cfg.WREQ_EMULATION
+            self.impersonate = validate_protocol_profile("wreq", str(self.impersonate).strip())
+            from core.wreq_session import WreqSession
+            self.session = WreqSession(impersonate=self.impersonate)
+            logger.info("[协议会话] 后端=wreq 指纹=%s 实际实现=%s.%s",
+                        self.impersonate,
                         type(self.session).__module__, type(self.session).__name__)
 
             # 设置代理
@@ -958,13 +949,9 @@ class BrowserSession:
         return random.choice(candidates)
 
     def _open_raw_session(self):
-        """按当前 http_client/impersonate 新建原始传输会话，保持冻结指纹。"""
-        if self.http_client == "curl_cffi":
-            return Session(impersonate=self.impersonate)
-        if self.http_client == "wreq":
-            from core.wreq_session import WreqSession
-            return WreqSession(impersonate=self.impersonate)
-        raise ValueError(f"未知协议 HTTP 客户端: {self.http_client}")
+        """按当前 impersonate 新建原始传输会话，保持冻结指纹。"""
+        from core.wreq_session import WreqSession
+        return WreqSession(impersonate=self.impersonate)
 
     def reset_preflight_transport(self) -> None:
         """注册预检专用：重建干净传输会话与 Cookie Jar，保留冻结画像/ID/SID。
@@ -1021,8 +1008,8 @@ class BrowserSession:
         self.blocked_until = 0.0
         self.blocked_reason = ""
         self._cf_cookie_seen = self.cf_cookie_snapshot()
-        logger.info("[协议会话] 注册预检传输已重建 route_changed=%s 客户端=%s",
-                    next_proxy != previous_proxy, self.http_client)
+        logger.info("[协议会话] 注册预检传输已重建 route_changed=%s 指纹=%s",
+                    next_proxy != previous_proxy, self.impersonate)
 
     @staticmethod
     def _parse_retry_after(value: str | None) -> int:
