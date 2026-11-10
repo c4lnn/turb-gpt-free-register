@@ -22,8 +22,6 @@ PLAN_CATEGORY_CODES = (
 PLAN_QUERY_STATUSES = (
     "pending", "queued", "running", "success", "failed", "unknown",
 )
-CHECKOUT_SESSION_TYPES = ("oaics", "cs_live", "other_cs", "unknown")
-CHECKOUT_QUERY_STATUSES = ("pending", "queued", "running", "success", "failed", "unknown")
 LIVE_CHECK_STATUSES = (
     "pending", "queued", "running", "live", "deactivated", "failed", "unknown",
 )
@@ -32,7 +30,6 @@ _CODEX_AUTH_SET = frozenset(CODEX_AUTH_STATUSES)
 _CODEX_OPERATION_SET = frozenset(CODEX_OPERATION_STATUSES)
 _PLAN_QUERY_SET = frozenset(PLAN_QUERY_STATUSES)
 _LIVE_SET = frozenset(LIVE_CHECK_STATUSES)
-_CHECKOUT_QUERY_SET = frozenset(CHECKOUT_QUERY_STATUSES)
 
 # 这是语义集合，不是对上游套餐开放集合的完整枚举。其它值保留为 raw，
 # 只有明确识别的付费语义才归入 paid。
@@ -154,25 +151,6 @@ def plan_capabilities(
     }
 
 
-def normalize_checkout_query_status(raw: Any) -> str:
-    value = _text(raw)
-    return value if value in _CHECKOUT_QUERY_SET else ("pending" if not value else "unknown")
-
-
-def checkout_capabilities(status: Any, *, has_access_token: bool = True) -> dict[str, bool]:
-    value = normalize_checkout_query_status(status)
-    running = value in {"queued", "running"}
-    actionable = value in {"pending", "success", "failed"} and bool(has_access_token)
-    return {
-        "is_checking": running,
-        "is_terminal": value in {"success", "failed"},
-        "can_retry": actionable and not running,
-        "can_start": actionable and not running,
-        "can_stop": False,
-        "has_access_token": bool(has_access_token),
-    }
-
-
 def normalize_live_check_status(raw: Any) -> str:
     value = _text(raw)
     # 查活是可选操作；空值表示尚未主动查活，不伪装成待处理任务。
@@ -195,22 +173,6 @@ def live_check_capabilities(status: Any) -> dict[str, bool]:
     }
 
 
-def classify_checkout_session_id(session_id: str) -> str:
-    """按 checkout session id 前缀判别类型；纯字符串契约，无网络依赖。"""
-    value = str(session_id or "").strip()
-    if value.startswith("oaics_"):
-        return "oaics"
-    if value.startswith("cs_live_"):
-        return "cs_live"
-    if value.startswith("cs_"):
-        return "other_cs"
-    return "unknown"
-
-
-def classify_checkout_session_type(session_id: Any) -> str:
-    return classify_checkout_session_id(str(session_id or "").strip())
-
-
 def build_account_status_contract(row: Mapping[str, Any] | None) -> dict[str, Any]:
     """生成可直接合并进账号 DTO 的非敏感规范状态摘要。"""
     row = row or {}
@@ -230,28 +192,18 @@ def build_account_status_contract(row: Mapping[str, Any] | None) -> dict[str, An
             plan_query,
             has_access_token=bool(str(row.get("access_token") or "").strip()),
         ),
-        "checkout_query_status": normalize_checkout_query_status(row.get("checkout_check_status")),
-        "checkout_capabilities": checkout_capabilities(
-            row.get("checkout_check_status"),
-            has_access_token=bool(str(row.get("access_token") or "").strip()),
-        ),
         "live_check_status": live,
         "live_check_capabilities": live_check_capabilities(live),
-        "checkout_session_type": classify_checkout_session_type(row.get("checkout_session_id"))
-        if row.get("checkout_session_id")
-        else (_text(row.get("checkout_session_type"))
-              if _text(row.get("checkout_session_type")) in CHECKOUT_SESSION_TYPES
-              else "unknown"),
     }
 
 
 __all__ = [
-    "CHECKOUT_QUERY_STATUSES", "CHECKOUT_SESSION_TYPES", "CODEX_AUTH_STATUSES", "CODEX_OPERATION_STATUSES",
+    "CODEX_AUTH_STATUSES", "CODEX_OPERATION_STATUSES",
     "LIVE_CHECK_STATUSES", "PLAN_CATEGORY_CODES",
-    "PLAN_QUERY_STATUSES", "build_account_status_contract", "classify_checkout_session_type",
+    "PLAN_QUERY_STATUSES", "build_account_status_contract",
     "classify_plan_category", "codex_auth_status", "codex_capabilities",
     "codex_operation_status", "normalize_codex_auth_status",
     "normalize_codex_operation_status",
     "normalize_live_check_status", "normalize_plan_query_status", "plan_capabilities",
-    "live_check_capabilities", "checkout_capabilities", "normalize_checkout_query_status",
+    "live_check_capabilities",
 ]

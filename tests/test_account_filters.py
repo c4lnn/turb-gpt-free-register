@@ -85,49 +85,6 @@ class AccountFilterTests(unittest.TestCase):
 
         self.assertEqual([item["id"] for item in page["items"]], [1])
 
-    def test_checkout_type_filter_runs_before_pagination(self):
-        self.accounts_path.write_text(json.dumps([
-            {"id": 1, "email": "oaics@example.invalid", "checkout_session_type": "oaics"},
-            {"id": 2, "email": "live-one@example.invalid", "checkout_session_type": "cs_live"},
-            {"id": 3, "email": "not-checked@example.invalid"},
-            {"id": 4, "email": "live-two@example.invalid", "checkout_session_type": "cs_live"},
-        ]), encoding="utf-8")
-
-        page = db.list_accounts_page(
-            limit=1,
-            offset=1,
-            checkout_type_filter="cs_live",
-        )
-
-        self.assertEqual(page["total"], 2)
-        self.assertEqual([item["id"] for item in page["items"]], [2])
-
-    def test_checkout_type_snapshot_supports_unchecked_accounts(self):
-        self.accounts_path.write_text(json.dumps([
-            {"id": 1, "email": "oaics@example.invalid", "checkout_session_type": "oaics"},
-            {"id": 2, "email": "not-checked@example.invalid"},
-        ]), encoding="utf-8")
-
-        snapshot = db.list_account_plan_check_statuses(
-            limit=20,
-            checkout_type_filter="none",
-        )
-
-        self.assertEqual(snapshot["total"], 1)
-        self.assertEqual([item["id"] for item in snapshot["items"]], [2])
-
-    def test_checkout_none_does_not_match_explicit_unknown_type(self):
-        self.accounts_path.write_text(json.dumps([
-            {"id": 1, "email": "not-checked@example.invalid"},
-            {"id": 2, "email": "unknown-type@example.invalid", "checkout_session_type": "unknown"},
-        ]), encoding="utf-8")
-
-        unchecked = db.list_accounts_page(checkout_type_filter="none")
-        unknown = db.list_accounts_page(checkout_type_filter="unknown")
-
-        self.assertEqual([item["id"] for item in unchecked["items"]], [1])
-        self.assertEqual([item["id"] for item in unknown["items"]], [2])
-
     def test_email_source_filter_runs_before_pagination_and_preserves_raw_values(self):
         self.accounts_path.write_text(json.dumps([
             {"id": 1, "email": "outlook@example.invalid", "email_source": "outlook"},
@@ -186,10 +143,8 @@ class AccountFilterTests(unittest.TestCase):
                     "items": [], "total": 0, "offset": 3, "limit": 3, "revision": "0",
                 }))
                 stack.enter_context(patch.object(web_app.plan_check_service, "queue_settings", return_value={}))
-                stack.enter_context(patch.object(web_app.checkout_session_service, "queue_settings", return_value={}))
                 for name in (
                     "recover_interrupted_plan_checks",
-                    "recover_interrupted_checkout_sessions",
                     "recover_interrupted_live_checks",
                 ):
                     stack.enter_context(patch.object(web_app.db, name, return_value=0))
@@ -199,7 +154,7 @@ class AccountFilterTests(unittest.TestCase):
                     "/api/accounts/plan-check-status?page=2&page_size=3&archived=all"
                     "&email_source=icloud&plan=plus&codex_auth_status=failed"
                     "&codex_operation_status=running&live_check_status=live"
-                    "&checkout_type=cs_live&q=needle&date_from=2026-08-01&date_to=2026-08-02",
+                    "&q=needle&date_from=2026-08-01&date_to=2026-08-02",
                     headers={"X-Auth-Code": "test-auth"},
                 )
 
@@ -211,7 +166,6 @@ class AccountFilterTests(unittest.TestCase):
                 self.assertEqual(kwargs["codex_auth_status_filter"], "failed")
                 self.assertEqual(kwargs["codex_operation_status_filter"], "running")
                 self.assertEqual(kwargs["live_check_status_filter"], "live")
-                self.assertEqual(kwargs["checkout_type_filter"], "cs_live")
                 self.assertEqual(kwargs["q"], "needle")
                 self.assertEqual(kwargs["date_from"], "2026-08-01")
                 self.assertEqual(kwargs["date_to"], "2026-08-02")

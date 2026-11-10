@@ -52,12 +52,10 @@ class AccountFilterToolbarTemplateTests(unittest.TestCase):
         for code in (
             "not_started", "success", "failed", "skipped",
             "idle", "queued", "running", "canceled",
-            "pending", "live", "deactivated", "none",
-            "oaics", "cs_live", "other_cs",
+            "pending", "live", "deactivated",
             "outlook", "generic_api", "cloudflare_domain", "icloud", "cloudflare",
         ):
             self.assertIn(code, metadata)
-        self.assertIn("labelOverrides: Object.freeze({none: '未检测'})", metadata)
 
     def test_list_and_poll_build_from_the_same_query_function(self):
         load_start = self.template.index("function loadAccounts()")
@@ -94,7 +92,6 @@ class AccountFilterToolbarTemplateTests(unittest.TestCase):
             ("accountCodexAuthFilterV2", "codex_auth_status"),
             ("accountCodexOperationFilterV2", "codex_operation_status"),
             ("accountLiveCheckFilterV2", "live_check_status"),
-            ("checkoutTypeFilterV2", "checkout_type"),
         ):
             self.assertIn(f'id="{element_id}" data-account-filter="{state_key}"', self.template)
         binding_start = self.template.index("(function bindAccountsFilterV2()")
@@ -125,11 +122,6 @@ class AccountFilterToolbarTemplateTests(unittest.TestCase):
         self.assertIn(": 3", workers)
 
         self.assertIn("body: JSON.stringify({account_ids: ids, workers})", self.template)
-        checkout_start = self.template.index("async function checkSelectedCheckoutSessions()")
-        checkout_end = self.template.index("async function checkSelectedLive", checkout_start)
-        checkout = self.template[checkout_start:checkout_end]
-        self.assertIn("/api/accounts/check-checkout-session-bulk", checkout)
-        self.assertNotIn("workers", checkout)
 
     def test_capability_driven_batch_buttons_cover_live_and_plan_status(self):
         start = self.template.index("function updateAccountSelectionUi")
@@ -138,7 +130,6 @@ class AccountFilterToolbarTemplateTests(unittest.TestCase):
         self.assertIn("btnCheckSelectedLiveV2", selection)
         self.assertIn("row.live_check_capabilities?.can_start === true", selection)
         self.assertIn("row.plan_capabilities?.can_start === true", selection)
-        self.assertIn("row.checkout_capabilities?.can_retry === true", selection)
         self.assertIn("row.codex_capabilities?.can_retry === true", selection)
         self.assertIn("btnStopSelectedCodexV2", selection)
 
@@ -152,14 +143,6 @@ class AccountFilterToolbarTemplateTests(unittest.TestCase):
         self.assertNotIn("'pending', 'queued', 'running'", plan)
         self.assertNotIn('"pending", "queued", "running"', plan)
 
-        checkout_start = self.template.index("function _checkoutSessionAction")
-        checkout_end = self.template.index("function _checkoutSessionCell", checkout_start)
-        checkout = self.template[checkout_start:checkout_end]
-        self.assertIn("capabilities.is_checking === true", checkout)
-        self.assertIn("const hasAccessToken = capabilities.has_access_token === true;", checkout)
-        self.assertIn("capabilities.can_retry !== true", checkout)
-        self.assertNotIn("r.has_access_token", checkout)
-
         codex_start = self.template.index("function _codexAction")
         codex_end = self.template.index("function _tokenCellV2", codex_start)
         codex = self.template[codex_start:codex_end]
@@ -168,12 +151,8 @@ class AccountFilterToolbarTemplateTests(unittest.TestCase):
 
     def test_action_handlers_recheck_capabilities_before_requests(self):
         plan_start = self.template.index("async function checkOnePlan")
-        plan_end = self.template.index("async function checkOneCheckoutSession", plan_start)
+        plan_end = self.template.index("async function checkSelectedPlans", plan_start)
         self.assertIn("account?.plan_capabilities?.can_start !== true", self.template[plan_start:plan_end])
-
-        checkout_start = self.template.index("async function checkOneCheckoutSession")
-        checkout_end = self.template.index("async function checkSelectedPlans", checkout_start)
-        self.assertIn("account?.checkout_capabilities?.can_retry !== true", self.template[checkout_start:checkout_end])
 
         stop_start = self.template.index("async function stopSelectedCodex")
         retry_start = self.template.index("async function retrySelectedCodex", stop_start)

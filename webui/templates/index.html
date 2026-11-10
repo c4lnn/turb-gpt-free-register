@@ -756,7 +756,6 @@
     .accounts-table-v2 .col-source { width: 90px; }
     .accounts-table-v2 .col-token { width: 100px; }
     .accounts-table-v2 .col-password { width: 120px; min-width: 120px; }
-    .accounts-table-v2 .col-checkout { width: 190px; min-width: 190px; }
     .accounts-table-v2 .col-plan { width: 240px; min-width: 240px; }
     .accounts-table-v2 .col-note { width: 140px; }
     .accounts-table-v2 .col-small {
@@ -794,21 +793,10 @@
     .accounts-table-v2 tbody td:first-child { padding-left: 16px; }
     .accounts-table-v2 tbody td:last-child { padding-right: 16px; }
     .accounts-table-v2 .col-email,
-    .accounts-table-v2 .col-checkout,
     .accounts-table-v2 .col-plan,
     .accounts-table-v2 .col-note,
     .accounts-table-v2 .col-actions {
       white-space: normal; overflow: visible; text-overflow: clip; vertical-align: middle;
-    }
-    .accounts-table-v2 .checkout-session-cell {
-      display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
-      min-width: 0; width: 100%;
-    }
-    .accounts-table-v2 .col-checkout .pill {
-      width: 150px; min-width: 150px; max-width: 150px;
-      height: 26px; min-height: 26px; justify-content: center;
-      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-      box-sizing: border-box;
     }
     .accounts-table-v2 .acc-v2-email {
       font-weight: 700; color: #303133; line-height: 1.35;
@@ -2368,10 +2356,6 @@
             <span>查活状态</span>
             <select id="accountLiveCheckFilterV2" data-account-filter="live_check_status" aria-label="筛选查活状态"></select>
           </label>
-          <label class="acc-v2-select-field" for="checkoutTypeFilterV2" title="按已保存的 Checkout Session 类型筛选账号">
-            <span>Checkout类型</span>
-            <select id="checkoutTypeFilterV2" data-account-filter="checkout_type" aria-label="筛选 Checkout 类型"></select>
-          </label>
           <label class="acc-v2-inline" title="按账号 2FA/TOTP 状态筛选账号">
             <select id="totpStatusFilterV2">
               <option value="">2FA：全部</option>
@@ -2426,7 +2410,6 @@
         </div>
         <div class="acc-v2-btn-group">
           <span class="acc-v2-btn-group-title">批量</span>
-          <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCheckSelectedCheckoutV2" disabled title="批量查询选中账号的 Checkout Session 类型">查Checkout类型</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnNoteSelectedAccountsV2" disabled title="给选中的账号统一设置备注，留空可清空备注">备注</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnCopySelectedLinesV2" disabled title="按所选格式复制选中账号的 AT，每个账号一行">复制AT</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnCopySelectedEmailsV2" disabled title="复制选中账号的邮箱，每个账号一行">复制邮箱</button>
@@ -2449,7 +2432,7 @@
         <table class="accounts-table-v2">
           <colgroup>
             <col class="col-check"><col class="col-id"><col class="col-email"><col class="col-source">
-            <col class="col-token"><col class="col-password"><col class="col-plan"><col class="col-checkout"><col class="col-small"><col class="col-status">
+            <col class="col-token"><col class="col-password"><col class="col-plan"><col class="col-small"><col class="col-status">
             <col class="col-note"><col class="col-time"><col class="col-actions">
           </colgroup>
           <thead>
@@ -2461,7 +2444,6 @@
               <th class="col-token">AT</th>
               <th class="col-password">密码</th>
               <th class="col-plan">套餐</th>
-              <th class="col-checkout">Checkout类型</th>
               <th class="col-small">2FA</th>
               <th class="col-status">Codex</th>
               <th class="col-note">备注</th>
@@ -2752,7 +2734,6 @@ const ACCOUNT_FILTER_STATE = {
   codex_auth_status: '',
   codex_operation_status: '',
   live_check_status: '',
-  checkout_type: '',
   date_from: '',
   date_to: '',
 };
@@ -3493,14 +3474,6 @@ const ACCOUNT_FILTER_META = Object.freeze({
     domain: 'live',
     codes: Object.freeze(['pending', 'queued', 'running', 'live', 'deactivated', 'failed', 'unknown']),
   }),
-  checkoutType: Object.freeze({
-    id: 'checkoutTypeFilterV2',
-    stateKey: 'checkout_type',
-    param: 'checkout_type',
-    domain: 'checkoutType',
-    codes: Object.freeze(['none', 'oaics', 'cs_live', 'other_cs', 'unknown']),
-    labelOverrides: Object.freeze({none: '未检测'}),
-  }),
 });
 
 function accountFilterLabel(meta, code) {
@@ -3629,12 +3602,9 @@ async function pollAccountPlanStatuses() {
         const account = accountById.get(Number(item.id));
         const wasChecking = Boolean(account?.plan_capabilities?.is_checking);
         const isChecking = Boolean(item.plan_capabilities?.is_checking);
-        const wasCheckouting = Boolean(account?.checkout_capabilities?.is_checking);
-        const isCheckouting = Boolean(item.checkout_capabilities?.is_checking);
         const wasLiveChecking = ['queued', 'running'].includes(String(account?.live_check_status || '').toLowerCase());
         const isLiveChecking = ['queued', 'running'].includes(String(item.live_check_status || '').toLowerCase());
         if (wasChecking && !isChecking) needsFullReload = true;
-        if (wasCheckouting && !isCheckouting) needsFullReload = true;
         if (wasLiveChecking && !isLiveChecking) needsFullReload = true;
         Object.assign(account, item);
       });
@@ -3651,7 +3621,6 @@ const ACCOUNT_STATUS_LABELS = Object.freeze({
   query: Object.freeze({pending: '待查询', queued: '查询排队中', running: '查询中', success: '查询成功', failed: '查询失败', unknown: '未知'}),
   planCategory: Object.freeze({free_trial_eligible: 'Free｜有套餐优惠', free_no_trial: 'Free｜无套餐优惠', paid: '付费套餐', unknown: '未知'}),
   emailSource: Object.freeze({outlook: 'Outlook 邮箱池', generic_api: '通用 API 邮箱', cloudflare_domain: 'Cloudflare 域名邮箱', icloud: 'iCloud 隐私邮箱', cloudflare: 'Cloudflare 临时邮箱', unknown: '未知'}),
-  checkoutType: Object.freeze({oaics: 'OAICS', cs_live: 'Stripe Live', other_cs: '其它 Stripe', unknown: '未知'}),
   live: Object.freeze({pending: '待查活', queued: '排队', running: '运行中', live: '正常', deactivated: '已废', failed: '失败', unknown: '未知'}),
 });
 function _statusLabel(domain, code) {
@@ -3720,63 +3689,6 @@ function _planStatusMeta(r) {
   const time = _fmtPlanTime(updated);
   const detailText = `${label}|${time}`;
   return `<div class="acc-v2-sub" title="${esc(detailText)}">${esc(detailText)}</div>`;
-}
-function _checkoutStatusMeta(r) {
-  const status = String(r.checkout_query_status || 'unknown').toLowerCase();
-  const label = _statusLabel('query', status);
-  const updated = r.checkout_check_updated_at || r.checkout_session_last_success_at || '';
-  if (!updated) return '';
-  const text = `${label}|${_fmtPlanTime(updated)}`;
-  return `<div class="acc-v2-sub" title="${esc(text)}">${esc(text)}</div>`;
-}
-function _checkoutSessionErrorTitle(r) {
-  const status = r.checkout_check_http_status !== undefined && r.checkout_check_http_status !== null && r.checkout_check_http_status !== ''
-    ? `HTTP ${r.checkout_check_http_status}` : '';
-  const code = r.checkout_check_error_code ? `错误码: ${r.checkout_check_error_code}` : '';
-  const message = r.checkout_check_error_message || r.checkout_check_error || r.checkout_check_message || '';
-  const transport = !status && message ? `传输错误: ${message}` : message;
-  return [status, code, transport].filter(Boolean).join('；') || '暂无 Checkout 检测详情';
-}
-function _checkoutSessionAction(r) {
-  const status = String(r.checkout_query_status || 'unknown').toLowerCase();
-  const capabilities = r.checkout_capabilities || {};
-  if (capabilities.is_checking === true) {
-    const automatic = r.checkout_check_trigger === 'registration_auto';
-    const label = automatic ? (status === 'queued' ? '自动排队中…' : '自动检测中…') : (status === 'queued' ? '排队中…' : '检测中…');
-    return `<button type="button" data-checkout-session="${esc(r.id)}" disabled title="Checkout 检测正在执行，完成后可再次检测">${label}</button>`;
-  }
-  const hasAccessToken = capabilities.has_access_token === true;
-  if (!hasAccessToken) {
-    return `<button type="button" disabled title="该账号没有 access_token">无AT</button>`;
-  }
-  if (capabilities.can_retry !== true) {
-    return `<button type="button" disabled title="Checkout 类型状态未知或当前不可检测">${status === 'unknown' ? '状态未知' : '不可检测'}</button>`;
-  }
-  const label = status === 'success' ? '重查' : '查类型';
-  return `<button type="button" data-checkout-session="${esc(r.id)}" title="只创建初始 Checkout Session 并识别类型">${label}</button>`;
-}
-function _checkoutSessionCell(r) {
-  const status = String(r.checkout_query_status || 'unknown').toLowerCase();
-  const type = String(r.checkout_session_type || 'unknown').toLowerCase();
-  const wrap = main => `<div class="checkout-session-cell">${main}${_checkoutStatusMeta(r)}</div>`;
-  let main;
-  if (status === 'queued' || status === 'running') {
-    const automatic = r.checkout_check_trigger === 'registration_auto';
-    const label = automatic ? (status === 'queued' ? '自动检测排队中' : '自动检测中') : (status === 'queued' ? '检测排队中' : '检测中');
-    const stamp = status === 'queued' ? r.checkout_check_queued_at : r.checkout_check_started_at;
-    const detail = stamp ? `${label}；${status === 'queued' ? '入队' : '开始'}: ${stamp}` : label;
-    main = `<span class="pill status-running" title="${esc(detail)}">${esc(label)}</span>`;
-  } else if (status === 'success' && type !== 'unknown') {
-    const detail = r.checkout_session_last_success_at ? `成功时间: ${r.checkout_session_last_success_at}` : 'Checkout Session 类型检测成功';
-    main = `<span class="pill status-success" title="${esc(detail)}">${esc(_statusLabel('checkoutType', type))}</span>`;
-  } else if (status === 'success') {
-    main = `<span class="pill status-used" title="查询成功，但 Checkout Session 类型未知">${esc(_statusLabel('checkoutType', type))}</span>`;
-  } else if (status === 'failed') {
-    main = `<span class="pill status-failed" title="${esc(_checkoutSessionErrorTitle(r))}">检测失败</span>`;
-  } else {
-    main = `<span class="pill status-used" title="尚未检测 Checkout Session 类型">-</span>`;
-  }
-  return wrap(main);
 }
 function _planCell(r) {
   const ok = r.plan_check_ok;
@@ -3912,7 +3824,6 @@ function _accountsV2MoreMenu(r) {
     liveAction,
     `<button type="button" data-account-live-log="${esc(r.email)}" title="查看该账号最近一次查活日志">查活日志</button>`,
     _planAction(r),
-    _checkoutSessionAction(r),
     _codexAction(r),
     `<button type="button" data-codex-log="${esc(r.email)}" title="查看该账号最近一次 Codex 补跑日志">补跑日志</button>`,
     `<button type="button" data-account-totp-log="${esc(r.email)}" title="查看该账号最近一次 2FA 设置日志">2FA日志</button>`,
@@ -3957,7 +3868,6 @@ function renderAccounts() {
       <td class="col-token">${_tokenCellV2(r)}</td>
       <td class="col-password">${r.password ? `<span class="mono" title="${esc(r.password)}">${esc(short(r.password, 18))}</span>` : '<span class="acc-v2-muted">-</span>'}</td>
       <td class="col-plan">${_planCell(r)}</td>
-      <td class="col-checkout">${_checkoutSessionCell(r)}</td>
       <td class="col-small">${_twofaCell(r)}</td>
       <td class="col-status">${_codexCellV2(r)}</td>
       <td class="col-note" title="${esc(r.note || '')}">${r.note ? esc(short(r.note, 80)) : '<span class="acc-v2-muted">-</span>'}</td>
@@ -3991,7 +3901,7 @@ function updateAccountSelectionUi(pageRows = null) {
   const archiveTitle = archivedOnly ? '把选中的归档账号恢复到默认账号列表' : '归档选中的账号；默认账号列表将不再查询/显示这些账号';
   const v2Ids = [
     'btnCheckSelectedLiveV2',
-    'btnCheckSelectedPlansV2', 'btnCheckSelectedCheckoutV2',
+    'btnCheckSelectedPlansV2',
     'btnRetrySelectedCodexV2', 'btnDownloadSelectedCpaV2', 'btnStopSelectedCodexV2',
     'btnNoteSelectedAccountsV2', 'btnCopySelectedLinesV2', 'btnCopySelectedEmailsV2',
     'btnDownloadSelectedTxtV2', 'btnArchiveSelectedAccountsV2', 'btnDeleteSelectedAccountsV2',
@@ -4010,7 +3920,6 @@ function updateAccountSelectionUi(pageRows = null) {
   const capabilityButtons = {
     btnCheckSelectedLiveV2: selectedAccounts.some(row => row.live_check_capabilities?.can_start === true),
     btnCheckSelectedPlansV2: selectedAccounts.some(row => row.plan_capabilities?.can_start === true),
-    btnCheckSelectedCheckoutV2: selectedAccounts.some(row => row.checkout_capabilities?.can_retry === true),
     btnRetrySelectedCodexV2: selectedAccounts.some(row => row.codex_capabilities?.can_retry === true),
     btnStopSelectedCodexV2: selectedAccounts.some(row => row.codex_capabilities?.can_stop === true),
   };
@@ -4253,12 +4162,6 @@ async function onAccountsBodyClick(e) {
   const planBtn = e.target.closest('[data-plan-check]');
   if (planBtn) {
     await checkOnePlan(Number(planBtn.dataset.planCheck), planBtn);
-    return;
-  }
-
-  const checkoutBtn = e.target.closest('[data-checkout-session]');
-  if (checkoutBtn) {
-    await checkOneCheckoutSession(Number(checkoutBtn.dataset.checkoutSession), checkoutBtn);
     return;
   }
 
@@ -4807,31 +4710,6 @@ async function checkOnePlan(id, btn) {
   }
 }
 
-async function checkOneCheckoutSession(id, btn) {
-  const account = ACCOUNTS.find(item => Number(item.id) === Number(id));
-  if (account?.checkout_capabilities?.can_retry !== true) {
-    showToast('该账号当前 Checkout 检测状态不可执行');
-    return;
-  }
-  btn.disabled = true;
-  const old = btn.textContent;
-  btn.textContent = '检测中…';
-  try {
-    const r = await api('/api/accounts/check-checkout-session', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({account_id: id}),
-    });
-    showToast(r.message || 'Checkout 类型检测已加入后台队列');
-    await pollAccountPlanStatuses();
-  } catch (err) {
-    showToast(err.message);
-    await pollAccountPlanStatuses();
-    btn.disabled = false;
-    btn.textContent = old;
-  }
-}
-
 async function checkSelectedPlans() {
   const ids = Array.from(ACCOUNT_SELECTED);
   if (ids.length === 0) { showToast('请先选择账号'); return; }
@@ -4856,34 +4734,6 @@ async function checkSelectedPlans() {
     updateAccountSelectionUi();
   } finally {
     btn.textContent = old;
-  }
-}
-
-async function checkSelectedCheckoutSessions() {
-  const ids = Array.from(ACCOUNT_SELECTED);
-  if (ids.length === 0) { showToast('请先选择账号'); return; }
-  const btn = $('#btnCheckSelectedCheckoutV2');
-  if (!btn) return;
-  btn.disabled = true;
-  const old = btn.textContent;
-  btn.textContent = '查询中…';
-  try {
-    const r = await api('/api/accounts/check-checkout-session-bulk', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({account_ids: ids}),
-    });
-    const failed = r.failed_count || 0;
-    const busy = r.busy_count || 0;
-    const skipped = r.skipped_count || 0;
-    showToast(`已入队 ${r.started_count || 0} 个，检测中跳过 ${busy} 个，跳过 ${skipped} 个，入队失败 ${failed} 个`);
-    await pollAccountPlanStatuses();
-  } catch(err) {
-    showToast('批量查 Checkout 类型失败: ' + err.message);
-    updateAccountSelectionUi();
-  } finally {
-    btn.textContent = old;
-    updateAccountSelectionUi();
   }
 }
 
@@ -5160,7 +5010,6 @@ async function copySelectedAccountTokens() {
     if (el) el.addEventListener('click', fn);
   };
   bind('btnCheckSelectedPlansV2', checkSelectedPlans);
-  bind('btnCheckSelectedCheckoutV2', checkSelectedCheckoutSessions);
   bind('btnRetrySelectedCodexV2', retrySelectedCodex);
   bind('btnDownloadSelectedCpaV2', downloadSelectedCpa);
   bind('btnStopSelectedCodexV2', stopSelectedCodex);

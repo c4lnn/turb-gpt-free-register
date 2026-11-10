@@ -11,7 +11,6 @@ from flask import Flask
 from webui.app import _account_status_filter_args
 from core.infra.contracts.account_status import (
     build_account_status_contract,
-    classify_checkout_session_type,
     classify_plan_category,
     codex_capabilities,
     live_check_capabilities,
@@ -19,8 +18,6 @@ from core.infra.contracts.account_status import (
     normalize_live_check_status,
     normalize_plan_query_status,
     plan_capabilities,
-    checkout_capabilities,
-    normalize_checkout_query_status,
 )
 from webui.app import _compact_account_for_list
 
@@ -57,16 +54,9 @@ class AccountStatusContractTests(unittest.TestCase):
             "plan_last_success_at": "2026-08-01T00:00:00",
         }), "free_no_trial")
 
-    def test_checkout_query_state_is_separate_from_session_type(self):
-        self.assertEqual(normalize_checkout_query_status("running"), "running")
-        self.assertEqual(normalize_checkout_query_status("future_state"), "unknown")
-        self.assertTrue(checkout_capabilities("queued")["is_checking"])
-        self.assertFalse(checkout_capabilities("future_state")["can_retry"])
-
     def test_unknown_capabilities_are_not_actionable(self):
         self.assertFalse(codex_capabilities("unknown", "idle")["can_start"])
         self.assertFalse(plan_capabilities("unknown", "future_state")["can_start"])
-        self.assertFalse(checkout_capabilities("future_state")["can_start"])
         self.assertFalse(live_check_capabilities("future_state")["can_start"])
 
     def test_initial_liveness_is_unset_and_can_be_checked(self):
@@ -75,12 +65,6 @@ class AccountStatusContractTests(unittest.TestCase):
         contract = build_account_status_contract({"access_token": "token-fixture"})
         self.assertEqual(contract["live_check_status"], "")
         self.assertTrue(contract["live_check_capabilities"]["can_start"])
-
-    def test_checkout_capability_requires_an_access_token(self):
-        capabilities = checkout_capabilities("pending", has_access_token=False)
-        self.assertFalse(capabilities["can_start"])
-        self.assertFalse(capabilities["can_retry"])
-        self.assertFalse(capabilities["has_access_token"])
 
     def test_plan_capabilities_require_an_access_token_to_start(self):
         plan = plan_capabilities("free_no_trial", "success", has_access_token=False)
@@ -91,10 +75,6 @@ class AccountStatusContractTests(unittest.TestCase):
         self.assertTrue(codex_capabilities("failed", "queued")["is_running"])
         self.assertFalse(codex_capabilities("failed", "queued")["can_retry"])
         self.assertTrue(codex_capabilities("failed", "canceled")["can_retry"])
-
-        self.assertTrue(checkout_capabilities("running")["is_checking"])
-        self.assertFalse(checkout_capabilities("running")["can_retry"])
-        self.assertTrue(checkout_capabilities("failed")["can_retry"])
 
         self.assertTrue(live_check_capabilities("queued")["is_running"])
         self.assertFalse(live_check_capabilities("queued")["can_start"])
@@ -109,9 +89,6 @@ class AccountStatusContractTests(unittest.TestCase):
             self.assertFalse(codex["can_retry"])
             self.assertTrue(plan_capabilities("free_no_trial", status)["is_checking"])
             self.assertFalse(plan_capabilities("free_no_trial", status)["can_start"])
-            checkout = checkout_capabilities(status)
-            self.assertTrue(checkout["is_checking"])
-            self.assertFalse(checkout["can_retry"])
             live = live_check_capabilities(status)
             self.assertTrue(live["is_running"])
             self.assertFalse(live["can_start"])
@@ -127,13 +104,10 @@ class AccountStatusContractTests(unittest.TestCase):
         self.assertTrue(plan_capabilities("free_no_trial", "failed")["can_start"])
         self.assertFalse(plan_capabilities("free_no_trial", "pending")["is_checking"])
         self.assertTrue(plan_capabilities("free_no_trial", "pending")["can_start"])
-        self.assertTrue(checkout_capabilities("success")["can_retry"])
-        self.assertTrue(checkout_capabilities("failed")["can_retry"])
 
         for factory, args in (
             (codex_capabilities, ("unknown", "idle")),
             (plan_capabilities, ("unknown", "unknown")),
-            (checkout_capabilities, ("unknown",)),
             (live_check_capabilities, ("unknown",)),
         ):
             capabilities = factory(*args)
@@ -194,12 +168,6 @@ class AccountStatusContractTests(unittest.TestCase):
         self.assertEqual(contract["codex_auth_status"], "unknown")
         self.assertEqual(contract["codex_operation_status"], "running")
 
-    def test_checkout_session_types_use_one_classifier(self):
-        self.assertEqual(classify_checkout_session_type("oaics_123"), "oaics")
-        self.assertEqual(classify_checkout_session_type("cs_live_123"), "cs_live")
-        self.assertEqual(classify_checkout_session_type("cs_test_123"), "other_cs")
-        self.assertEqual(classify_checkout_session_type(""), "unknown")
-
     def test_contract_contains_capabilities_and_no_input_secrets(self):
         row = {
             "current_plan_type": "free",
@@ -213,22 +181,17 @@ class AccountStatusContractTests(unittest.TestCase):
         self.assertNotIn("access_token", result)
         self.assertNotIn("password", result)
 
-    def test_account_list_dto_excludes_credentials_and_raw_checkout_payload(self):
+    def test_account_list_dto_excludes_credentials_and_raw_payload(self):
         result = _compact_account_for_list({
             "id": 1,
             "email": "fixture@example.invalid",
             "access_token": "token-fixture",
             "password": "password-fixture",
             "totp_secret": "totp-fixture",
-            "checkout_session_id": "cs_live_fixture",
-            "checkout_check_result_json": '{"secret":"fixture"}',
             "current_plan_type": "free",
             "eligible_promo_campaigns": {},
         })
-        for key in (
-            "access_token", "password", "totp_secret", "checkout_session_id",
-            "checkout_check_result_json",
-        ):
+        for key in ("access_token", "password", "totp_secret"):
             self.assertNotIn(key, result)
         self.assertEqual(result["plan_category_code"], "free_no_trial")
 
@@ -344,7 +307,6 @@ class AccountStatusContractTests(unittest.TestCase):
         self.assertIn("emailSource", template)
         self.assertIn("r.codex_capabilities || {}", template)
         self.assertIn("const capabilities = r.plan_capabilities || {}", template)
-        self.assertIn("const capabilities = r.checkout_capabilities || {}", template)
         self.assertIn("row.live_check_capabilities?.can_start", template)
         self.assertIn("const ACCOUNT_FILTER_STATE", template)
         self.assertIn("const ACCOUNT_FILTER_META", template)
@@ -358,10 +320,8 @@ class AccountStatusContractTests(unittest.TestCase):
         self.assertNotIn("plan !== 'free' || !acc.plus_trial_eligible", template)
         self.assertNotIn("a.current_plan_type || a.plan_type", template)
         self.assertNotIn("r.plan_result_class ===", template)
-        self.assertNotIn("['oaics', 'cs_live', 'other_cs', 'unknown'].includes", template)
         self.assertNotIn("codex_status=${encodeURIComponent(codexStatus)}", template)
         self.assertNotIn("SHOW_CODEX_SUCCESS_ONLY", template)
-        self.assertIn("status === 'success' && type !== 'unknown'", template)
         self.assertIn("capabilities.can_retry !== true", template)
         self.assertIn("capabilities.can_start !== true", template)
 

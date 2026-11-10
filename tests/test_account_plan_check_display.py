@@ -224,7 +224,6 @@ class AccountPlanCheckDbTests(unittest.TestCase):
             stack.enter_context(patch.object(web_app.db, "_render_static_viewer"))
             for name in (
                 "recover_interrupted_plan_checks",
-                "recover_interrupted_checkout_sessions",
                     "recover_interrupted_live_checks",
             ):
                 stack.enter_context(patch.object(web_app.db, name, return_value=0))
@@ -301,7 +300,6 @@ class AccountPlanCheckDbTests(unittest.TestCase):
             stack.enter_context(patch.object(web_app.db, "_render_static_viewer"))
             for name in (
                 "recover_interrupted_plan_checks",
-                "recover_interrupted_checkout_sessions",
                     "recover_interrupted_live_checks",
             ):
                 stack.enter_context(patch.object(web_app.db, name, return_value=0))

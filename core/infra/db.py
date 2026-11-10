@@ -12,7 +12,6 @@
 import hashlib
 import json
 import os
-import re
 import sqlite3
 import threading
 import uuid
@@ -52,8 +51,6 @@ _LEGACY_DATA_DIR = _PROJECT_ROOT / "data"
 _LOG_DIR = _PROJECT_ROOT / "注册日志"
 _PLAN_CHECK_STALE_SECONDS = 120
 _PLAN_CHECK_QUEUE_STALE_SECONDS = 1800
-_CHECKOUT_SESSION_STALE_SECONDS = 120
-_CHECKOUT_SESSION_QUEUE_STALE_SECONDS = 1800
 
 _OUTLOOK_JSON = _PROJECT_ROOT / "用于注册的邮箱.json"
 _OUTLOOK_TXT = _PROJECT_ROOT / "用于注册的邮箱.txt"
@@ -911,7 +908,7 @@ def _viewer_snapshot(outlook_rows: list[dict], account_rows: list[dict]) -> dict
     return {
         "generated_at": _now(),
         "accounts": [
-            _decorate_account(r, include_checkout_session_id=False)
+            _decorate_account(r, redact_secrets=True)
             for r in sorted(complete_rows, key=lambda x: int(x.get("id") or 0), reverse=True)
         ],
         "outlook": [
@@ -1485,7 +1482,7 @@ def promote_pending_totp_secret(email: str) -> str:
         return secret
 
 
-def _decorate_account(row: dict, *, include_checkout_session_id: bool = True) -> dict:
+def _decorate_account(row: dict, *, redact_secrets: bool = False) -> dict:
     out = {
         key: value
         for key, value in dict(row).items()
@@ -1494,20 +1491,8 @@ def _decorate_account(row: dict, *, include_checkout_session_id: bool = True) ->
             or str(key).lower() in {"agent_identity", "agent_runtime_id", "agent_private_key"}
         )
     }
-    if not include_checkout_session_id:
-        # 完整 Checkout Session ID 只允许留在服务端账号 JSON 和内部任务边界。
-        out.pop("checkout_session_id", None)
-        # 兼容旧记录：公共装饰路径不携带可能包含响应 secret 的原始诊断。
-        out.pop("checkout_check_result_json", None)
-        for key in (
-            "checkout_check_error_code",
-            "checkout_check_error_message",
-            "checkout_check_error",
-            "checkout_check_message",
-            "checkout_check_proxy_used",
-        ):
-            if key in out:
-                out[key] = _safe_checkout_diagnostic_text(out.get(key))
+    if redact_secrets:
+        # 公共 DTO 不携带可能包含响应 secret 的原始字段。
         for key in (
             "client_secret",
             "customer_session",
@@ -1533,28 +1518,6 @@ def _decorate_account(row: dict, *, include_checkout_session_id: bool = True) ->
             out["plan_check_status"] = "failed"
             out["plan_check_error"] = "上次套餐查询状态异常，可重新查询"
             out["plan_check_stale"] = True
-    checkout_status = out.get("checkout_check_status")
-    if checkout_status in {"queued", "running"}:
-        try:
-            stamp_key = "checkout_check_queued_at" if checkout_status == "queued" else "checkout_check_started_at"
-            stale_after = (
-                _CHECKOUT_SESSION_QUEUE_STALE_SECONDS
-                if checkout_status == "queued"
-                else _CHECKOUT_SESSION_STALE_SECONDS
-            )
-            started_at = datetime.fromisoformat(str(out.get(stamp_key) or ""))
-            if (datetime.now() - started_at).total_seconds() >= stale_after:
-                out["checkout_check_status"] = "failed"
-                out["checkout_check_error_message"] = "上次 Checkout 检测状态已超时，可重新检测"
-                out["checkout_check_error"] = out["checkout_check_error_message"]
-                out["checkout_check_ok"] = False
-                out["checkout_check_stale"] = True
-        except (TypeError, ValueError):
-            out["checkout_check_status"] = "failed"
-            out["checkout_check_error_message"] = "上次 Checkout 检测状态异常，可重新检测"
-            out["checkout_check_error"] = out["checkout_check_error_message"]
-            out["checkout_check_ok"] = False
-            out["checkout_check_stale"] = True
     out.update(build_account_status_contract(out))
     out["copy_line"] = _account_line(out)
     return out
@@ -1637,17 +1600,6 @@ def _account_matches_codex_filter(row: dict, status_filter: str | None = None) -
     if value == "deactivated":
         return str(row.get("live_check_status") or "").strip().lower() == "deactivated"
     return codex_auth_status(row) == normalize_codex_auth_status(value)
-
-
-def _account_matches_checkout_type_filter(row: dict, checkout_type_filter: str | None = None) -> bool:
-    """账号 Checkout Session 类型过滤；none 表示尚未保存类型。"""
-    f = str(checkout_type_filter or "").strip().lower()
-    if not f or f in {"all", "any"}:
-        return True
-    current = str(row.get("checkout_session_type") or "").strip().lower()
-    if f in {"none", "empty", "未检测"}:
-        return not current
-    return current == f
 
 
 def _account_email_source_code(row: dict | None) -> str:
@@ -2200,188 +2152,6 @@ def recover_interrupted_totp_setups() -> int:
         return recovered
 
 
-def claim_account_checkout_session(acc_id: int, trigger: str = "manual") -> bool:
-    """原子占用账号的 Checkout Session 检测任务。"""
-    with _LOCK:
-        accounts = _load_accounts()
-        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
-        if row is None:
-            return False
-
-        current_status = row.get("checkout_check_status")
-        if current_status in {"queued", "running"}:
-            try:
-                stamp_key = "checkout_check_queued_at" if current_status == "queued" else "checkout_check_started_at"
-                stale_after = (
-                    _CHECKOUT_SESSION_QUEUE_STALE_SECONDS
-                    if current_status == "queued"
-                    else _CHECKOUT_SESSION_STALE_SECONDS
-                )
-                started_at = datetime.fromisoformat(str(row.get(stamp_key) or ""))
-                if (datetime.now() - started_at).total_seconds() < stale_after:
-                    return False
-            except (TypeError, ValueError):
-                pass
-
-        now = _now()
-        row["checkout_check_status"] = "queued"
-        row["checkout_check_ok"] = False
-        row["checkout_check_trigger"] = str(trigger or "manual")
-        row["checkout_check_queued_at"] = now
-        row["checkout_check_started_at"] = None
-        row["checkout_check_completed_at"] = None
-        row["checkout_check_updated_at"] = now
-        row["checkout_check_error_code"] = None
-        row["checkout_check_error_message"] = None
-        row["checkout_check_error"] = None
-        row["checkout_check_message"] = "已入队"
-        row["updated_at"] = now
-        _save_accounts(accounts)
-        return True
-
-
-def mark_account_checkout_session_running(acc_id: int) -> bool:
-    """把已排队的 Checkout 检测标记为运行中。"""
-    with _LOCK:
-        accounts = _load_accounts()
-        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
-        if row is None or row.get("checkout_check_status") not in {"queued", "running"}:
-            return False
-        now = _now()
-        row["checkout_check_status"] = "running"
-        row["checkout_check_started_at"] = now
-        row["checkout_check_updated_at"] = now
-        row["checkout_check_error_code"] = None
-        row["checkout_check_error_message"] = None
-        row["checkout_check_error"] = None
-        row["checkout_check_message"] = "正在创建初始 Checkout Session"
-        row["updated_at"] = now
-        _save_accounts(accounts)
-        return True
-
-
-def _safe_checkout_diagnostic_text(value: Any) -> str | None:
-    if value is None:
-        return None
-    text = " ".join(str(value).replace("\x00", " ").split())[:240]
-    text = re.sub(r"(?i)((?:[a-z][a-z0-9+.-]*://)?)([^/@\s:]+):([^/@\s]+)@", r"\1[redacted]@", text)
-    text = re.sub(r"(?i)(?:oaics_|cs_)[A-Za-z0-9._~-]+", "[redacted-session]", text)
-    text = re.sub(
-        r"(?ix)([\"']?(?:client_secret|customer_session[^\s\"'=:\\]*|publishable_key|authorization)[\"']?\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^,;\s}]+)",
-        r"\1[redacted]",
-        text,
-    )
-    text = re.sub(
-        r"(?i)(?:client_secret|customer_session(?:_secret)?|publishable_key)[A-Za-z0-9._~-]*",
-        "[redacted-secret]",
-        text,
-    )
-    return text or None
-
-
-def update_account_checkout_session(acc_id: int, result: dict | None = None) -> bool:
-    """写入 Checkout 检测终态；失败不得清空上次成功 ID/type。"""
-    result = result or {}
-    with _LOCK:
-        accounts = _load_accounts()
-        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
-        if row is None:
-            return False
-
-        ok = bool(result.get("ok")) and bool(result.get("checkout_session_id"))
-        now = _now()
-        status = "success" if ok else "failed"
-        row["checkout_check_status"] = status
-        row["checkout_check_ok"] = ok
-        row["checkout_check_completed_at"] = now
-        row["checkout_check_updated_at"] = now
-        row["checkout_check_http_status"] = result.get("http_status")
-        row["checkout_check_error_code"] = None if ok else _safe_checkout_diagnostic_text(result.get("error_code"))
-        message = None if ok else _safe_checkout_diagnostic_text(
-            result.get("error_message") or result.get("error")
-        )
-        row["checkout_check_error_message"] = message
-        row["checkout_check_error"] = message
-        row["checkout_check_message"] = "检测成功" if ok else (message or "Checkout 检测失败")
-        row["checkout_check_attempt_count"] = result.get("attempt_count")
-        row["checkout_check_max_attempts"] = result.get("max_attempts")
-        row["checkout_check_request_timeout"] = result.get("request_timeout")
-        row["checkout_check_network_route"] = result.get("network_route")
-        row["checkout_check_proxy_mode"] = result.get("proxy_mode")
-        row["checkout_check_proxy_used"] = _safe_checkout_diagnostic_text(result.get("proxy_used"))
-        row["checkout_check_retryable"] = bool(result.get("retryable"))
-        row["checkout_check_content_type"] = _safe_checkout_diagnostic_text(result.get("content_type"))
-        row["checkout_check_response_bytes"] = result.get("response_bytes")
-        row["checkout_check_retry_after_seconds"] = result.get("retry_after_seconds")
-        row["checkout_check_checked_at"] = result.get("checked_at") or now
-
-        if ok:
-            # 完整 ID 只写入账号 JSON；任何装饰/列表路径都会主动移除它。
-            row["checkout_session_id"] = str(result.get("checkout_session_id") or "").strip()
-            session_type = str(result.get("checkout_session_type") or "").strip().lower()
-            row["checkout_session_type"] = session_type if session_type in {
-                "oaics", "cs_live", "other_cs", "unknown",
-            } else "unknown"
-            row["checkout_session_last_success_at"] = result.get("checked_at") or now
-
-        # 仅保存白名单诊断，禁止把原始响应、AT、完整代理或完整 ID 序列化到结果字段。
-        diagnostic = {
-            key: row.get(key)
-            for key in (
-                "checkout_check_status",
-                "checkout_check_ok",
-                "checkout_check_http_status",
-                "checkout_check_error_code",
-                "checkout_check_error_message",
-                "checkout_check_attempt_count",
-                "checkout_check_max_attempts",
-                "checkout_check_network_route",
-                "checkout_check_proxy_mode",
-                "checkout_check_proxy_used",
-                "checkout_check_response_bytes",
-                "checkout_check_content_type",
-            )
-            if row.get(key) is not None
-        }
-        row["checkout_check_result_json"] = json.dumps(diagnostic, ensure_ascii=False)
-        row["updated_at"] = now
-        _save_accounts(accounts)
-        return True
-
-
-def recover_interrupted_checkout_sessions() -> int:
-    """服务启动时恢复遗留任务，不自动重新发送可能有副作用的 POST。"""
-    with _LOCK:
-        accounts = _load_accounts()
-        recovered = 0
-        now = _now()
-        for row in accounts:
-            if row.get("checkout_check_status") not in {"queued", "running"}:
-                continue
-            row["checkout_check_status"] = "failed"
-            row["checkout_check_ok"] = False
-            row["checkout_check_error_code"] = "interrupted"
-            row["checkout_check_error_message"] = (
-                "WebUI 重启导致 Checkout 检测中断，服务端可能已创建 Session，请确认后再重新检测"
-            )
-            row["checkout_check_error"] = row["checkout_check_error_message"]
-            row["checkout_check_message"] = row["checkout_check_error_message"]
-            row["checkout_check_completed_at"] = now
-            row["checkout_check_updated_at"] = now
-            row["updated_at"] = now
-            recovered += 1
-        if recovered:
-            _save_accounts(accounts)
-        return recovered
-
-
-# 兼容更短的内部命名，便于队列/API 测试和后续调用方复用。
-claim_account_checkout_check = claim_account_checkout_session
-mark_account_checkout_check_running = mark_account_checkout_session_running
-update_account_checkout_check = update_account_checkout_session
-recover_interrupted_checkout_checks = recover_interrupted_checkout_sessions
-
-
 def _account_matches_query(row: dict, q: str | None) -> bool:
     q = str(q or "").strip().lower()
     if not q:
@@ -2422,7 +2192,6 @@ def _filtered_decorated_accounts(
     live_check_status_filter: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
-    checkout_type_filter: str | None = None,
 ) -> list[dict]:
     rows = _load_accounts()
     # 默认完整账号列表/统计/导出/静态查看器排除中间凭据记录；
@@ -2435,9 +2204,7 @@ def _filtered_decorated_accounts(
     else:
         rows = [r for r in rows if not bool(r.get("archived"))]
     rows = [r for r in rows if _account_matches_email_source_filter(r, email_source_filter)]
-    # Checkout 的 none 需要区分“原始字段缺失”和显式 unknown，必须在装饰器补默认值前筛选。
-    rows = [r for r in rows if _account_matches_checkout_type_filter(r, checkout_type_filter)]
-    decorated = [_decorate_account(r, include_checkout_session_id=False) for r in rows]
+    decorated = [_decorate_account(r, redact_secrets=True) for r in rows]
     decorated = [r for r in decorated if _account_matches_plan_filter(r, plan_filter)]
     codex_status_filter = str(codex_status_filter or "").strip().lower()
     if codex_status_filter:
@@ -2484,7 +2251,6 @@ def list_account_plan_check_statuses(
     live_check_status_filter: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
-    checkout_type_filter: str | None = None,
 ) -> dict:
     """返回不含 Token/邮箱密码的套餐查询轻量状态快照。"""
     fields = (
@@ -2495,15 +2261,6 @@ def list_account_plan_check_statuses(
         "plan_check_trigger", "plan_check_queued_at", "plan_check_started_at",
         "plan_check_completed_at", "plan_check_updated_at", "plan_checked_at", "plan_last_success_at",
         "plan_check_network_route", "plan_check_proxy_used", "plan_check_proxy_fallback_reason",
-        "checkout_check_status", "checkout_check_ok", "checkout_check_trigger",
-        "checkout_check_queued_at", "checkout_check_started_at", "checkout_check_completed_at",
-        "checkout_check_updated_at", "checkout_check_checked_at", "checkout_check_http_status",
-        "checkout_check_error_code", "checkout_check_error_message", "checkout_check_error",
-        "checkout_check_message", "checkout_check_attempt_count", "checkout_check_max_attempts",
-        "checkout_check_request_timeout", "checkout_check_network_route", "checkout_check_proxy_mode",
-        "checkout_check_proxy_used", "checkout_check_retryable", "checkout_check_content_type",
-        "checkout_check_response_bytes", "checkout_check_retry_after_seconds",
-        "checkout_session_type", "checkout_session_last_success_at",
         "live_check_device_id", "live_check_proxy_used", "live_check_fingerprint_text",
         "expires_at", "plan_expires_at", "plan_renews_at", "renews_at",
         "billing_period", "billing_currency", "discount_amount", "discount_type",
@@ -2513,7 +2270,7 @@ def list_account_plan_check_statuses(
         "codex_auth_status", "codex_operation_status", "codex_capabilities",
         "plan_category_code", "plan_query_status", "plan_capabilities",
         "live_check_status", "live_check_ok", "live_check_error", "live_checked_at",
-        "live_check_capabilities", "checkout_query_status", "checkout_capabilities",
+        "live_check_capabilities",
     )
     with _LOCK:
         all_rows = _filtered_decorated_accounts(
@@ -2527,7 +2284,6 @@ def list_account_plan_check_statuses(
             live_check_status_filter=live_check_status_filter,
             date_from=date_from,
             date_to=date_to,
-            checkout_type_filter=checkout_type_filter,
         )
         total = len(all_rows)
         limit = max(1, int(limit))
@@ -2563,17 +2319,6 @@ def list_account_plan_check_statuses(
                     "plan_check_error": row.get("plan_check_error"),
                     "plan_check_http_status": row.get("plan_check_http_status"),
                     "plan_check_updated_at": row.get("plan_check_updated_at"),
-                    "checkout_check_status": row.get("checkout_check_status"),
-                    "checkout_check_ok": row.get("checkout_check_ok"),
-                    "checkout_check_error_code": row.get("checkout_check_error_code"),
-                    "checkout_check_error_message": row.get("checkout_check_error_message"),
-                    "checkout_check_updated_at": row.get("checkout_check_updated_at"),
-                    "checkout_check_http_status": row.get("checkout_check_http_status"),
-                    "checkout_check_attempt_count": row.get("checkout_check_attempt_count"),
-                    "checkout_check_network_route": row.get("checkout_check_network_route"),
-                    "checkout_check_proxy_used": row.get("checkout_check_proxy_used"),
-                    "checkout_session_type": row.get("checkout_session_type"),
-                    "checkout_session_last_success_at": row.get("checkout_session_last_success_at"),
                     "current_plan_type": row.get("current_plan_type"),
                     "plan_type": row.get("plan_type"),
                     "plus_trial_eligible": row.get("plus_trial_eligible"),
@@ -2607,7 +2352,6 @@ def list_accounts(
     live_check_status_filter: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
-    checkout_type_filter: str | None = None,
 ) -> list[dict]:
     with _LOCK:
         rows = _filtered_decorated_accounts(
@@ -2621,7 +2365,6 @@ def list_accounts(
             live_check_status_filter=live_check_status_filter,
             date_from=date_from,
             date_to=date_to,
-            checkout_type_filter=checkout_type_filter,
         )
         return rows[max(0, int(offset or 0)): max(0, int(offset or 0)) + max(1, int(limit))]
 
@@ -2639,7 +2382,6 @@ def list_accounts_page(
     live_check_status_filter: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
-    checkout_type_filter: str | None = None,
 ) -> dict:
     with _LOCK:
         rows = _filtered_decorated_accounts(
@@ -2653,7 +2395,6 @@ def list_accounts_page(
             live_check_status_filter=live_check_status_filter,
             date_from=date_from,
             date_to=date_to,
-            checkout_type_filter=checkout_type_filter,
         )
         total = len(rows)
         limit = max(1, int(limit))
@@ -2663,10 +2404,10 @@ def list_accounts_page(
         return {"items": items, "total": total, "offset": offset, "limit": limit, "revision": f"{total}:{latest}"}
 
 
-def get_account(acc_id: int, *, include_checkout_session_id: bool = True) -> dict | None:
+def get_account(acc_id: int, *, redact_secrets: bool = False) -> dict | None:
     with _LOCK:
         row = next((r for r in _load_accounts() if int(r.get("id") or 0) == int(acc_id)), None)
-        return _decorate_account(row, include_checkout_session_id=include_checkout_session_id) if row else None
+        return _decorate_account(row, redact_secrets=redact_secrets) if row else None
 
 
 def get_retry_account_snapshot() -> dict[str, dict[int | str, dict]]:
