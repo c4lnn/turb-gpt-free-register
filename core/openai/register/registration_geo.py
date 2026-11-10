@@ -11,8 +11,13 @@
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime
+from ipaddress import ip_address
 from zoneinfo import ZoneInfo
+
+
+logger = logging.getLogger(__name__)
 
 
 # ---- 对外可判定的失败类别（进入任务结果 category 字段）----
@@ -420,3 +425,133 @@ def build_registration_locale(country: str, timezone: str = "") -> dict:
         "timezone_offset_minutes": timezone_offset_for(timezone),
         "timezone_name": timezone_display_name(timezone),
     }
+
+
+# ----------------------------------------------------------------------
+# 会话侧门禁：在校验通过后把画像冻结到 session 上。
+# 这些函数接收 BrowserSession，但模块本身不依赖 transport，方向为 register → transport。
+# ----------------------------------------------------------------------
+
+
+def classify_geo_exception(exc: Exception) -> tuple[str, str]:
+    """仅在确有代理证据时判为代理失败，否则归为地域服务不可达。"""
+    name = type(exc).__name__.lower()
+    msg = str(exc).lower()
+    proxy_markers = (
+        "407", "proxy authentication", "proxy-authorization", "proxy auth",
+        "proxy requires auth", "connection to proxy", "proxy connect", "socks",
+    )
+    if "proxyerror" in name or any(marker in msg for marker in proxy_markers):
+        return CATEGORY_PROXY, "代理连接/认证失败"
+    return CATEGORY_GEO_SERVICE, f"网络异常({type(exc).__name__})"
+
+
+def validate_session_geo(session, trace: dict | None = None) -> None:
+    """用会话当前 trace 确认实际国家；不读取 GeoIP 服务或历史缓存。
+
+    首次通过时冻结画像，后续只复核出口是否变化并保留冻结画像。
+    """
+    if not session.server_device_id:
+        return
+    trace = trace or {}
+    country = session.normalize_country_code(trace.get("loc"))
+    try:
+        ip = str(ip_address(str(trace.get("ip") or "").strip()))
+    except ValueError:
+        raise RegistrationGeoError("地域信息不完整：缺少有效出口 IP",
+                                   CATEGORY_GEO_INCOMPLETE, STAGE_VALIDATE) from None
+    if not is_known_country(country):
+        raise RegistrationGeoError("地域信息不完整：出口国家缺失或不受支持",
+                                   CATEGORY_GEO_INCOMPLETE, STAGE_VALIDATE)
+    session.exit_geo_observation_scope = "latest_trace"
+    observed = {"ip": ip, "country": country, "sources": ["trace"]}
+    if session.geo_frozen:
+        _revalidate_session_geo(session, observed)
+        return
+    profile_country, supplied, source = _profile_selection(session, country)
+    locale = build_registration_locale(profile_country, supplied.get("timezone_iana", ""))
+    _validate_explicit_profile(supplied, locale)
+    frozen = {**observed, **locale, "profile_country": profile_country, "locale_source": source}
+    _freeze_session_geo(session, frozen)
+    session._enforce_proxy_quality()
+
+
+def _profile_selection(session, actual_country: str) -> tuple[str, dict, str]:
+    from config import browser as browser_cfg
+
+    supplied = session._explicit_browser_profile
+    geo = supplied.get("geo") or {}
+    has_country = isinstance(geo, dict) and any(field in geo for field in ("country_code", "country"))
+    country_value = (geo.get("country_code") or geo.get("country")) if has_country else None
+    key = supplied.get("locale_profile")
+    has_locale = any(field in supplied for field in (
+        "navigator_language", "navigator_languages", "accept_language", "timezone_iana"))
+    if not has_country and not key and not has_locale and not browser_cfg.AUTO_BROWSER_LOCALE_FROM_IP:
+        key = browser_cfg.BROWSER_LOCALE_PROFILE
+        supplied = dict(browser_cfg.BROWSER_LOCALE_PROFILES.get(key) or {})
+    if has_country:
+        country = session.normalize_country_code(country_value)
+    elif key:
+        # 完整 profile key（jp/us 等）与 geo:xx 都可明确国家；不要反查复用模板的 AU/CA。
+        country = session.normalize_country_code(str(key).removeprefix("geo:"))
+    elif has_locale or not browser_cfg.AUTO_BROWSER_LOCALE_FROM_IP:
+        country = ""
+    else:
+        return actual_country, {}, "auto"
+    if not is_known_country(country):
+        raise RegistrationGeoError("手动画像国家缺失或不受支持",
+                                   CATEGORY_GEO_INCOMPLETE, STAGE_VALIDATE)
+    return country, supplied, "manual"
+
+
+def _validate_explicit_profile(supplied: dict, locale: dict) -> None:
+    fields = ("navigator_language", "navigator_languages", "accept_language", "timezone_iana")
+    if not any(field in supplied for field in fields):
+        return
+    language = str(supplied.get("navigator_language") or "").strip()
+    languages = supplied.get("navigator_languages")
+    accept = str(supplied.get("accept_language") or "").strip()
+    accepted = [part.split(";", 1)[0].strip().lower() for part in accept.split(",") if part.strip()]
+    if (not language or not isinstance(languages, (list, tuple)) or not languages
+            or not accepted or not supplied.get("timezone_iana")):
+        raise RegistrationGeoError("显式画像语言或时区信息不完整",
+                                   CATEGORY_GEO_INCOMPLETE, STAGE_VALIDATE)
+    normalized = [str(value).strip().lower() for value in languages]
+    expected = locale["navigator_language"].lower()
+    if (language.lower() != expected or normalized[0] != language.lower()
+            or accepted[0] != language.lower() or any(value not in accepted for value in normalized)):
+        raise RegistrationGeoError("显式画像语言与画像国家或 HTTP 偏好不一致",
+                                   CATEGORY_GEO_MISMATCH, STAGE_VALIDATE)
+    locale.update(navigator_language=language, navigator_languages=list(languages), accept_language=accept)
+
+
+def _freeze_session_geo(session, frozen: dict) -> None:
+    session.geo_frozen = True
+    session.geo_frozen_profile = dict(frozen)
+    session.exit_geo = {key: frozen[key] for key in ("ip", "country", "sources")}
+    profile = session.browser_profile
+    profile["geo"] = dict(session.exit_geo)
+    for field in ("navigator_language", "accept_language", "timezone_iana",
+                  "timezone_offset_minutes", "timezone_name", "profile_country", "locale_source"):
+        profile[field] = frozen[field]
+    profile["navigator_languages"] = list(frozen["navigator_languages"])
+    logger.info("[注册地域] 画像冻结 actual_country=%s profile_country=%s source=%s tz=%s",
+                frozen["country"], frozen["profile_country"], frozen["locale_source"], frozen["timezone_iana"])
+
+
+def _revalidate_session_geo(session, observed: dict) -> None:
+    changed = (observed["ip"] != session.exit_geo.get("ip")
+               or observed["country"] != session.exit_geo.get("country"))
+    session.exit_geo = observed
+    session.browser_profile["geo"] = dict(observed)
+    logger.info("[注册地域] 后续观测 actual_country=%s profile_country=%s changed=%s，保留冻结画像",
+                observed["country"], session.browser_profile["profile_country"], changed)
+
+
+__all__ = [
+    "CATEGORY_GEO_INCOMPLETE", "CATEGORY_GEO_MISMATCH", "CATEGORY_GEO_PARSE",
+    "CATEGORY_GEO_SERVICE", "CATEGORY_PROXY", "COUNTRY_DEFAULT_TIMEZONE", "COUNTRY_TIMEZONES",
+    "RegistrationGeoError", "STAGE_DETECT", "STAGE_FREEZE", "STAGE_REVALIDATE", "STAGE_VALIDATE",
+    "build_registration_locale", "canonical_iana", "classify_geo_exception", "is_known_country",
+    "resolve_timezone", "timezone_display_name", "timezone_offset_for", "validate_session_geo",
+]

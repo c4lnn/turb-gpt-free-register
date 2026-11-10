@@ -239,16 +239,10 @@ def _now() -> str:
 
 
 def _current_registration_job_id() -> int | None:
-    """读取当前注册线程的任务 ID，避免模块导入阶段产生循环依赖。"""
-    try:
-        from core.openai.register import registration_service
+    """读取当前线程绑定的任务 ID；job_context 在函数内导入，保持 infra 底座不反向依赖业务域。"""
+    from core.infra import job_context
 
-        value = getattr(registration_service._THREAD_CTX, "job_id", None)
-        if value in (None, ""):
-            return None
-        return int(value)
-    except (AttributeError, TypeError, ValueError):
-        return None
+    return job_context.current_job_id()
 
 
 def _normalize_pool_row(row: dict, *, missing_status: str = "disabled", alias: bool = False) -> dict:

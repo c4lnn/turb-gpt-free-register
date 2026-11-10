@@ -10,7 +10,6 @@ import re
 import threading
 import time
 import uuid
-from ipaddress import ip_address
 from urllib.parse import urlparse
 
 from config import (
@@ -20,16 +19,6 @@ from config import (
     ACCEPT_LANGUAGE, IMPERSONATE, OAI_CLIENT_BUILD_NUMBER, OAI_CLIENT_VERSION,
     REQUEST_TIMEOUT, pick_proxy, pick_browser_profile, validate_browser_profile,
     BROWSER_PROFILE_POOL, build_browser_environment,
-)
-from core.openai.register.registration_geo import (
-    RegistrationGeoError,
-    build_registration_locale,
-    is_known_country,
-    CATEGORY_PROXY,
-    CATEGORY_GEO_SERVICE,
-    CATEGORY_GEO_INCOMPLETE,
-    CATEGORY_GEO_MISMATCH,
-    STAGE_VALIDATE,
 )
 
 
@@ -122,8 +111,8 @@ class BrowserSession:
         self._proxy_pool_selected = proxy is None
         self.server_device_id = bool(server_device_id)
         # 注册地域硬门禁状态：仅 server_device_id 会话使用，独立消费者不受影响。
-        self._registration_geo_frozen = False
-        self._registration_geo_frozen_profile: dict = {}
+        self.geo_frozen = False
+        self.geo_frozen_profile: dict = {}
         self.exit_geo_observation_scope = "unobserved"
         self.session = None
         self._explicit_browser_profile = dict(browser_profile or {})
@@ -465,118 +454,6 @@ class BrowserSession:
         """兼容提链项目的显式 API，供需要手工 Cookie 头的调用点使用。"""
         return self._cookie_header_with_device("chatgpt.com")
 
-    # ------------------------------------------------------------------
-    # 注册地域硬门禁：只服务 server_device_id 注册初始化，不改变独立消费者策略。
-    # ------------------------------------------------------------------
-
-    def validate_registration_geo(self, trace: dict | None = None) -> None:
-        """用本会话当前 trace 确认实际国家；不读取 GeoIP 服务或历史缓存。"""
-        if not self.server_device_id:
-            return
-        trace = trace or {}
-        country = self._normalize_country_code(trace.get("loc"))
-        try:
-            ip = str(ip_address(str(trace.get("ip") or "").strip()))
-        except ValueError:
-            raise RegistrationGeoError("地域信息不完整：缺少有效出口 IP",
-                                       CATEGORY_GEO_INCOMPLETE, STAGE_VALIDATE) from None
-        if not is_known_country(country):
-            raise RegistrationGeoError("地域信息不完整：出口国家缺失或不受支持",
-                                       CATEGORY_GEO_INCOMPLETE, STAGE_VALIDATE)
-        self.exit_geo_observation_scope = "latest_trace"
-        observed = {"ip": ip, "country": country, "sources": ["trace"]}
-        if self._registration_geo_frozen:
-            self._revalidate_registration_geo(observed)
-            return
-        profile_country, supplied, source = self._registration_profile_selection(country)
-        locale = build_registration_locale(profile_country, supplied.get("timezone_iana", ""))
-        self._validate_explicit_registration_profile(supplied, locale)
-        frozen = {**observed, **locale, "profile_country": profile_country, "locale_source": source}
-        self._freeze_registration_geo(frozen)
-        self._enforce_proxy_quality()
-
-    def _registration_profile_selection(self, actual_country: str) -> tuple[str, dict, str]:
-        from config import browser as browser_cfg
-        supplied = self._explicit_browser_profile
-        geo = supplied.get("geo") or {}
-        has_country = isinstance(geo, dict) and any(field in geo for field in ("country_code", "country"))
-        country_value = (geo.get("country_code") or geo.get("country")) if has_country else None
-        key = supplied.get("locale_profile")
-        has_locale = any(field in supplied for field in (
-            "navigator_language", "navigator_languages", "accept_language", "timezone_iana"))
-        if not has_country and not key and not has_locale and not browser_cfg.AUTO_BROWSER_LOCALE_FROM_IP:
-            key = browser_cfg.BROWSER_LOCALE_PROFILE
-            supplied = dict(browser_cfg.BROWSER_LOCALE_PROFILES.get(key) or {})
-        if has_country:
-            country = self._normalize_country_code(country_value)
-        elif key:
-            # 完整 profile key（jp/us 等）与 geo:xx 都可明确国家；不要反查复用模板的 AU/CA。
-            country = self._normalize_country_code(str(key).removeprefix("geo:"))
-        elif has_locale or not browser_cfg.AUTO_BROWSER_LOCALE_FROM_IP:
-            country = ""
-        else:
-            return actual_country, {}, "auto"
-        if not is_known_country(country):
-            raise RegistrationGeoError("手动画像国家缺失或不受支持",
-                                       CATEGORY_GEO_INCOMPLETE, STAGE_VALIDATE)
-        return country, supplied, "manual"
-
-    def _validate_explicit_registration_profile(self, supplied: dict, locale: dict) -> None:
-        fields = ("navigator_language", "navigator_languages", "accept_language", "timezone_iana")
-        if not any(field in supplied for field in fields):
-            return
-        language = str(supplied.get("navigator_language") or "").strip()
-        languages = supplied.get("navigator_languages")
-        accept = str(supplied.get("accept_language") or "").strip()
-        accepted = [part.split(";", 1)[0].strip().lower() for part in accept.split(",") if part.strip()]
-        if (not language or not isinstance(languages, (list, tuple)) or not languages
-                or not accepted or not supplied.get("timezone_iana")):
-            raise RegistrationGeoError("显式画像语言或时区信息不完整",
-                                       CATEGORY_GEO_INCOMPLETE, STAGE_VALIDATE)
-        normalized = [str(value).strip().lower() for value in languages]
-        expected = locale["navigator_language"].lower()
-        if (language.lower() != expected or normalized[0] != language.lower()
-                or accepted[0] != language.lower() or any(value not in accepted for value in normalized)):
-            raise RegistrationGeoError("显式画像语言与画像国家或 HTTP 偏好不一致",
-                                       CATEGORY_GEO_MISMATCH, STAGE_VALIDATE)
-        locale.update(navigator_language=language, navigator_languages=list(languages), accept_language=accept)
-
-
-    @staticmethod
-    def _classify_geo_exception(exc: Exception) -> tuple[str, str]:
-        """仅在确有代理证据时判为代理失败，否则归为地域服务不可达。"""
-        name = type(exc).__name__.lower()
-        msg = str(exc).lower()
-        proxy_markers = (
-            "407", "proxy authentication", "proxy-authorization", "proxy auth",
-            "proxy requires auth", "connection to proxy", "proxy connect", "socks",
-        )
-        if "proxyerror" in name or any(marker in msg for marker in proxy_markers):
-            return CATEGORY_PROXY, "代理连接/认证失败"
-        return CATEGORY_GEO_SERVICE, f"网络异常({type(exc).__name__})"
-
-
-    def _freeze_registration_geo(self, frozen: dict) -> None:
-        self._registration_geo_frozen = True
-        self._registration_geo_frozen_profile = dict(frozen)
-        self.exit_geo = {key: frozen[key] for key in ("ip", "country", "sources")}
-        profile = self.browser_profile
-        profile["geo"] = dict(self.exit_geo)
-        for field in ("navigator_language", "accept_language", "timezone_iana",
-                      "timezone_offset_minutes", "timezone_name", "profile_country", "locale_source"):
-            profile[field] = frozen[field]
-        profile["navigator_languages"] = list(frozen["navigator_languages"])
-        logger.info("[注册地域] 画像冻结 actual_country=%s profile_country=%s source=%s tz=%s",
-                    frozen["country"], frozen["profile_country"], frozen["locale_source"], frozen["timezone_iana"])
-
-    def _revalidate_registration_geo(self, observed: dict) -> None:
-        changed = (observed["ip"] != self.exit_geo.get("ip")
-                   or observed["country"] != self.exit_geo.get("country"))
-        self.exit_geo = observed
-        self.browser_profile["geo"] = dict(observed)
-        logger.info("[注册地域] 后续观测 actual_country=%s profile_country=%s changed=%s，保留冻结画像",
-                    observed["country"], self.browser_profile["profile_country"], changed)
-
     def _detect_exit_geo(self) -> dict:
         """通过当前代理检测出口 IP 地理信息；失败返回空 dict 并回退到默认地区画像。"""
         try:
@@ -619,7 +496,7 @@ class BrowserSession:
         return {}
 
     @staticmethod
-    def _normalize_country_code(value: object) -> str:
+    def normalize_country_code(value: object) -> str:
         text = str(value or "").strip().upper().replace("_", " ")
         if len(text) == 2 and text.isalpha():
             return text
@@ -644,7 +521,7 @@ class BrowserSession:
                 raw_country = country_obj
         return {
             "ip": data.get("ip") or data.get("query"),
-            "country": BrowserSession._normalize_country_code(raw_country),
+            "country": BrowserSession.normalize_country_code(raw_country),
             "region": data.get("region") or data.get("regionName"),
             "city": data.get("city"),
             "timezone": timezone or "",
@@ -1045,3 +922,17 @@ class BrowserSession:
         headers = self._attach_openai_target_headers_for_url(url, headers)
         resp = self.session.post(url, headers=headers, **kwargs)
         return self._observe_response_for_circuit_breaker(resp, url)
+
+
+def reset_retryable_circuit(session) -> None:
+    """仅清除本地熔断，保留当前会话的 Cookie Jar 和完整身份上下文。
+
+    兼容没有 reset_circuit_breaker 的会话替身（测试桩）。
+    """
+    reset = getattr(session, "reset_circuit_breaker", None)
+    if callable(reset):
+        reset()
+    else:
+        session.blocked_until = 0.0
+        session.blocked_reason = ""
+

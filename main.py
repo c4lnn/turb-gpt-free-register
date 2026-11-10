@@ -18,6 +18,8 @@ from config import email as _email_cfg
 from config import openai_protocol as _protocol_cfg
 from core.openai.transport.session import BrowserSession, close_browser_session
 from core.infra import db
+from core.infra.job_context import StopRequested, record_progress
+from core.openai.register.registration_preflight import registration_preflight
 from core.openai.auth.chatgpt_auth import get_csrf_token, signin_openai
 from core.openai.auth.openai_auth import (
     follow_authorize,
@@ -28,7 +30,6 @@ from core.openai.auth.openai_auth import (
     request_sentinel_token,
     build_sentinel_header,
     validate_email_otp,
-    network_preflight,
     EmailOtpInvalidError,
     AccountUnusableError,
     SentinelRequestError,
@@ -324,8 +325,7 @@ def run_registration(
         "credential_persistence": "not_attempted", "authenticated": False,
         "account_saved": False, "twofa_status": "not_attempted",
     }
-    from core.openai.register.registration_service import StopRequested, record_registration_progress
-    record_registration_progress(progress)
+    record_progress(progress)
 
     # 纯协议驱动没有“邮箱输入框”可等待，因此在创建 BrowserSession 前领取。
     if not str(email or "").strip():
@@ -353,7 +353,7 @@ def run_registration(
         logger.info("[注册] 开始，proxy_configured=%s", bool(session.proxy))
         logger.info("[注册] 本次随机生日已生成: present=%s", bool(birthday))
         # 网络预检必须在 signin/follow_authorize 之前完成；预检不带邮箱，不会触发 OTP。
-        network_preflight(session)
+        registration_preflight(session)
         human_delay("navigate")
 
         # ==================== 阶段1: ChatGPT 认证 ====================

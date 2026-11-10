@@ -18,6 +18,7 @@ from typing import Any
 
 from core.openai.codex import codex_retry_service
 from core.infra import db
+from core.infra import job_context
 from core.openai.account.account_status_contracts import codex_auth_status
 
 logger = logging.getLogger(__name__)
@@ -31,64 +32,6 @@ _executor_workers = _DEFAULT_MAX_WORKERS
 _executor_generation = 0
 _retired_executors: list[ThreadPoolExecutor] = []
 _executor_lock = threading.RLock()
-
-_STOP_EVENTS: dict[int, threading.Event] = {}
-_ACTIVE_JOBS: set[int] = set()
-_STOP_LOCK = threading.Lock()
-_THREAD_CTX = threading.local()
-
-
-class StopRequested(RuntimeError):
-    """用户手动停止注册任务。"""
-
-
-def _activate_job(job_id: int) -> None:
-    _THREAD_CTX.job_id = int(job_id)
-    _THREAD_CTX.registration = {}
-    with _STOP_LOCK:
-        _STOP_EVENTS.setdefault(int(job_id), threading.Event())
-        _ACTIVE_JOBS.add(int(job_id))
-
-
-def _deactivate_job(job_id: int) -> None:
-    with _STOP_LOCK:
-        _STOP_EVENTS.pop(int(job_id), None)
-        _ACTIVE_JOBS.discard(int(job_id))
-    for attr in ("job_id", "registration"):
-        try:
-            delattr(_THREAD_CTX, attr)
-        except AttributeError:
-            pass
-
-def record_registration_progress(progress: dict) -> None:
-    """保留当前任务事实；异常和停止收口也使用同一上下文。"""
-    if getattr(_THREAD_CTX, "job_id", None) is not None:
-        _THREAD_CTX.registration = progress
-
-
-def _existing_account_task() -> bool:
-    return getattr(_THREAD_CTX, "registration", {}).get("account_kind") == "existing"
-
-
-
-def is_stop_requested(job_id: int | None = None) -> bool:
-    if job_id is None:
-        job_id = getattr(_THREAD_CTX, "job_id", None)
-    if not job_id:
-        return False
-    with _STOP_LOCK:
-        ev = _STOP_EVENTS.get(int(job_id))
-        if ev and ev.is_set():
-            return True
-    job = db.get_job(int(job_id))
-    return bool(job and job.get("status") in ("stopping", "stopped", "cancelled"))
-
-
-def check_stop_requested() -> None:
-    job_id = getattr(_THREAD_CTX, "job_id", None)
-    if is_stop_requested(job_id):
-        raise StopRequested(f"任务 #{job_id} 已被用户手动停止")
-
 
 def _append_job_log(job_id: int, message: str) -> None:
     try:
@@ -143,7 +86,7 @@ def _prepare_registration_args() -> tuple[str | None, str, str]:
 
 def _release_unconsumed_job_email(email: str | None, reason: str, *, job_id: int | None = None) -> None:
     """任务失败兜底：把已领取但未生成账号的邮箱永久标记为 failed。"""
-    if _existing_account_task():
+    if job_context.is_current_account_task():
         return
     if not email:
         return
@@ -190,7 +133,7 @@ def _should_disable_failed_registration_email(error: object) -> bool:
 
 def _disable_job_email(email: str | None, reason: str) -> bool:
     """把本次任务邮箱停用，避免后续再次领取。"""
-    if _existing_account_task():
+    if job_context.is_current_account_task():
         return False
     if not email:
         return False
@@ -305,18 +248,18 @@ class _JobLogContext:
 def _run_one_job(job_id: int, log_file: str) -> None:
     """单任务入口（线程池里跑这个）。"""
     log_logger = logging.getLogger(__name__)
-    _activate_job(job_id)
+    job_context.activate_job(job_id)
 
     # 取消检查：用户可能在任务排队期间点了"取消排队"，把 status 改成了 cancelled。
     # 因为 Future 已经 submit 进线程池无法撤回，只能在真正执行前自检一下，跳过 cancelled 的。
     current = db.get_job(job_id)
     if not current:
         log_logger.info(f"[Job {job_id}] 任务记录已删除，跳过执行")
-        _deactivate_job(job_id)
+        job_context.deactivate_job(job_id)
         return
     if current.get("status") == "cancelled":
         log_logger.info(f"[Job {job_id}] 已被用户取消，跳过执行")
-        _deactivate_job(job_id)
+        job_context.deactivate_job(job_id)
         return
 
     db.update_job(job_id, status="running", started_at=datetime.now().isoformat(timespec="seconds"))
@@ -328,7 +271,7 @@ def _run_one_job(job_id: int, log_file: str) -> None:
             log_logger.info(f"[Job {job_id}] 开始注册任务")
             email, name, birthday = _prepare_registration_args()
             db.update_job(job_id, email=email)
-            check_stop_requested()
+            job_context.check_stop_requested()
             def _on_email_acquired(acquired_email: str) -> None:
                 nonlocal email
                 email = str(acquired_email or "").strip() or None
@@ -343,14 +286,14 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                 on_email_acquired=_on_email_acquired,
             )
             if isinstance(result, dict) and isinstance(result.get("registration"), dict):
-                record_registration_progress(result["registration"])
-            if is_stop_requested(job_id):
+                job_context.record_progress(result["registration"])
+            if job_context.is_stop_requested(job_id):
                 _release_unconsumed_job_email(email, "用户手动停止")
                 db.update_job(
                     job_id,
                     status="stopped",
                     network_traffic=(result or {}).get("network_traffic") if isinstance(result, dict) else None,
-                    registration=getattr(_THREAD_CTX, "registration", {}),
+                    registration=job_context.progress(),
                     error="用户手动停止",
                     completed_at=datetime.now().isoformat(timespec="seconds"),
                 )
@@ -363,7 +306,7 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                     email=result.get("email"),
                     account_id=result.get("account_id"),
                     network_traffic=result.get("network_traffic"),
-                    registration=getattr(_THREAD_CTX, "registration", {}),
+                    registration=job_context.progress(),
                     completed_at=datetime.now().isoformat(timespec="seconds"),
                 )
                 log_logger.info(f"[Job {job_id}] 成功: {result.get('email')}")
@@ -380,7 +323,7 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                     error=str(err)[:500],
                     error_code=(result or {}).get("error_code") if isinstance(result, dict) else None,
                     error_stage=(result or {}).get("error_stage") if isinstance(result, dict) else None,
-                    registration=getattr(_THREAD_CTX, "registration", {}),
+                    registration=job_context.progress(),
                     completed_at=datetime.now().isoformat(timespec="seconds"),
                 )
                 email_to_handle = str(result_email or email or "").strip()
@@ -395,14 +338,14 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                     (result or {}).get("error_code") if isinstance(result, dict) else None,
                     err,
                 )
-    except StopRequested as exc:
+    except job_context.StopRequested as exc:
         _release_unconsumed_job_email(email, str(exc))
         log_logger.warning(f"[Job {job_id}] 已停止: {exc}")
         db.update_job(
             job_id,
             status="stopped",
             error="用户手动停止",
-            registration=getattr(_THREAD_CTX, "registration", {}),
+            registration=job_context.progress(),
             completed_at=datetime.now().isoformat(timespec="seconds"),
         )
     except Exception as exc:
@@ -411,13 +354,13 @@ def _run_one_job(job_id: int, log_file: str) -> None:
             _disable_job_email(email, err_text)
         else:
             _release_unconsumed_job_email(email, err_text)
-        if is_stop_requested(job_id):
+        if job_context.is_stop_requested(job_id):
             log_logger.warning(f"[Job {job_id}] 停止中捕获异常，按停止处理: {type(exc).__name__}: {exc}")
             db.update_job(
                 job_id,
                 status="stopped",
                 error="用户手动停止",
-                registration=getattr(_THREAD_CTX, "registration", {}),
+                registration=job_context.progress(),
                 completed_at=datetime.now().isoformat(timespec="seconds"),
             )
             return
@@ -428,20 +371,20 @@ def _run_one_job(job_id: int, log_file: str) -> None:
             error=f"{type(exc).__name__}: {exc}"[:500],
             error_code=getattr(exc, "category", None),
             error_stage=getattr(exc, "stage", None),
-            registration=getattr(_THREAD_CTX, "registration", {}),
+            registration=job_context.progress(),
             completed_at=datetime.now().isoformat(timespec="seconds"),
         )
     finally:
-        _deactivate_job(job_id)
+        job_context.deactivate_job(job_id)
 
 
 def _run_codex_retry_job(job_id: int, log_file: str, email: str, account_id: int) -> None:
     """把 Codex 补跑作为标准任务执行，并复用任务状态、日志和停止入口。"""
-    _activate_job(job_id)
+    job_context.activate_job(job_id)
     current = db.get_job(job_id)
     if not current or current.get("status") == "cancelled":
         codex_retry_service.release(email)
-        _deactivate_job(job_id)
+        job_context.deactivate_job(job_id)
         return
 
     db.update_job(job_id, status="running", started_at=datetime.now().isoformat(timespec="seconds"))
@@ -452,7 +395,7 @@ def _run_codex_retry_job(job_id: int, log_file: str, email: str, account_id: int
             target_log_path=log_file,
         )
         now_iso = datetime.now().isoformat(timespec="seconds")
-        if is_stop_requested(job_id) or result.get("status") == "stopped":
+        if job_context.is_stop_requested(job_id) or result.get("status") == "stopped":
             db.update_job(job_id, status="stopped", email=email, account_id=account_id, error=str(result.get("message") or "用户手动停止")[:500], completed_at=now_iso)
         elif result.get("ok"):
             db.update_job(
@@ -481,7 +424,7 @@ def _run_codex_retry_job(job_id: int, log_file: str, email: str, account_id: int
         codex_retry_service.release(email)
         logger.exception("[Job %s] Codex 补跑异常", job_id)
     finally:
-        _deactivate_job(job_id)
+        job_context.deactivate_job(job_id)
 
 
 # ============================================================
@@ -731,17 +674,11 @@ def request_stop_job(job_id: int) -> dict:
     if status in ("success", "failed", "cancelled", "stopped"):
         return {"ok": True, "message": f"任务已结束：{status}", "job_id": job_id, "state": status}
     if status in ("running", "stopping"):
-        with _STOP_LOCK:
-            active = int(job_id) in _ACTIVE_JOBS
-            ev = _STOP_EVENTS.get(int(job_id)) if active else None
-            if ev is not None:
-                ev.set()
-        if not active or ev is None:
+        has_instance = job_context.request_stop(int(job_id))
+        if not has_instance:
             # Web 服务重启、线程异常退出、历史残留 stopping，或之前手动停止时只创建了 stop event
             # 但没有真实线程实例：直接落为 stopped，避免永远卡在“停止中”。
-            with _STOP_LOCK:
-                _STOP_EVENTS.pop(int(job_id), None)
-                _ACTIVE_JOBS.discard(int(job_id))
+            job_context.discard_stop_state(int(job_id))
             db.update_job(
                 job_id,
                 status="stopped",

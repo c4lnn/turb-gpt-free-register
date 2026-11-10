@@ -12,8 +12,11 @@ from unittest.mock import Mock, patch
 from curl_cffi.requests import Cookies
 from config import browser as browser_cfg
 from core.openai.auth import openai_auth
-from core.openai.register.registration_geo import RegistrationGeoError
-from core.openai.register.registration_service import StopRequested
+from core.infra import job_context
+from core.infra.job_context import StopRequested
+from core.openai.register.registration_geo import RegistrationGeoError, validate_session_geo
+from core.openai.register import registration_preflight as registration_preflight_module
+from core.openai.register.registration_preflight import registration_preflight
 from core.openai.transport.session import BrowserSession
 
 
@@ -73,8 +76,8 @@ def _session(warmup, *, trace=None, server=True, proxy="", profile=None):
 
     session.session = create()
     with patch.object(session, "_open_raw_session", side_effect=create), patch.object(
-        openai_auth, "_interruptible_sleep"
-    ), patch.object(openai_auth._protocol_cfg, "OPENAI_REGISTRATION_WARMUP_ATTEMPTS", 3):
+        job_context, "interruptible_sleep"
+    ), patch.object(registration_preflight_module._protocol_cfg, "OPENAI_REGISTRATION_WARMUP_ATTEMPTS", 3):
         try:
             yield session, transports
         finally:
@@ -105,7 +108,7 @@ class RegistrationPreflightTests(unittest.TestCase):
     def test_success_binds_server_cookie_not_explicit_constructor_value(self):
         with _session(_cookie) as (session, _):
             self.assertEqual(session.device_id, "")
-            openai_auth.network_preflight(session)
+            registration_preflight(session)
             self.assertEqual(session.device_id, "server-device")
             self.assertEqual(session.get_server_device_id(), session.device_id)
 
@@ -117,7 +120,7 @@ class RegistrationPreflightTests(unittest.TestCase):
         for warmup in (lambda _: _Response(), lambda r: _cookie(r, domain="auth.openai.com"), ambiguous):
             with self.subTest(warmup=warmup), _session(warmup) as (session, transports):
                 with self.assertRaises(RuntimeError):
-                    openai_auth.network_preflight(session)
+                    registration_preflight(session)
                 self.assertEqual(session.device_id, "")
                 self.assertEqual(len(transports), 3)
                 self.assertTrue(all(raw.closed for raw in transports[:-1]))
@@ -128,7 +131,7 @@ class RegistrationPreflightTests(unittest.TestCase):
             raise ConnectionError("response interrupted after headers")
 
         with _session(warmup) as (session, _):
-            openai_auth.network_preflight(session)
+            registration_preflight(session)
             self.assertEqual(session.device_id, "server-device")
 
     def test_error_status_with_valid_cookie_clears_circuit_for_auth(self):
@@ -137,7 +140,7 @@ class RegistrationPreflightTests(unittest.TestCase):
             return _Response(status=403)
 
         with _session(warmup) as (session, _):
-            openai_auth.network_preflight(session)
+            registration_preflight(session)
             self.assertEqual(session.device_id, "server-device")
             # 后续真实会话 get 不应被 warmup 的熔断阻止。
             self.assertEqual(session.get("https://chatgpt.com/api/auth/providers").status_code, 200)
@@ -154,7 +157,7 @@ class RegistrationPreflightTests(unittest.TestCase):
 
             with self.subTest(attributes=attributes), _session(invalid_cookie) as (session, _):
                 with self.assertRaises(RuntimeError):
-                    openai_auth.network_preflight(session)
+                    registration_preflight(session)
                 self.assertEqual(session.device_id, "")
 
     def test_missing_registration_backend_aborts_before_opening_transport(self):
@@ -170,7 +173,7 @@ class RegistrationPreflightTests(unittest.TestCase):
 
         with _session(forbidden, trace=lambda _: _Response(status=403)) as (session, transports):
             with self.assertRaises(RegistrationGeoError) as ctx:
-                openai_auth.network_preflight(session)
+                registration_preflight(session)
             self.assertEqual(ctx.exception.category, "geo_service")
             self.assertEqual(ctx.exception.stage, "detect")
             self.assertEqual(session.device_id, "")
@@ -182,7 +185,7 @@ class RegistrationPreflightTests(unittest.TestCase):
 
         with _session(forbidden, trace=lambda _: _Response(status=407)) as (session, transports):
             with self.assertRaises(RegistrationGeoError) as ctx:
-                openai_auth.network_preflight(session)
+                registration_preflight(session)
             self.assertEqual(ctx.exception.category, "proxy")
             self.assertEqual(ctx.exception.stage, "detect")
             self.assertEqual(transports[0].warmup_calls, 0)
@@ -196,7 +199,7 @@ class RegistrationPreflightTests(unittest.TestCase):
 
         with _session(forbidden, trace=down) as (session, transports):
             with self.assertRaises(RegistrationGeoError) as ctx:
-                openai_auth.network_preflight(session)
+                registration_preflight(session)
             self.assertEqual(ctx.exception.category, "geo_service")
             self.assertEqual(ctx.exception.stage, "detect")
             self.assertEqual(session.device_id, "")
@@ -208,7 +211,7 @@ class RegistrationPreflightTests(unittest.TestCase):
 
         with _session(forbidden, trace=lambda _: _Response(text="no key-value pairs")) as (session, transports):
             with self.assertRaises(RegistrationGeoError) as ctx:
-                openai_auth.network_preflight(session)
+                registration_preflight(session)
             self.assertEqual(ctx.exception.category, "geo_parse")
             self.assertEqual(ctx.exception.stage, "detect")
             self.assertEqual(transports[0].warmup_calls, 0)
@@ -219,7 +222,7 @@ class RegistrationPreflightTests(unittest.TestCase):
 
         with _session(forbidden, trace=lambda _: _Response(text="loc=JP\nip=not-an-ip\n")) as (session, transports):
             with self.assertRaises(RegistrationGeoError) as ctx:
-                openai_auth.network_preflight(session)
+                registration_preflight(session)
             self.assertEqual(ctx.exception.category, "geo_incomplete")
             self.assertEqual(ctx.exception.stage, "validate")
             self.assertEqual(transports[0].warmup_calls, 0)
@@ -232,7 +235,7 @@ class RegistrationPreflightTests(unittest.TestCase):
         with _session(forbidden, trace=lambda _: _Response(text="loc=XX\nip=1.2.3.4\n"),
                       profile=profile) as (session, transports):
             with self.assertRaises(RegistrationGeoError) as ctx:
-                openai_auth.network_preflight(session)
+                registration_preflight(session)
             self.assertEqual(ctx.exception.category, "geo_incomplete")
             self.assertEqual(ctx.exception.stage, "validate")
             self.assertEqual(session.device_id, "")
@@ -252,7 +255,7 @@ class RegistrationPreflightTests(unittest.TestCase):
         try:
             with _session(forbidden, trace=down) as (session, transports):
                 with self.assertRaises(RegistrationGeoError) as ctx:
-                    openai_auth.network_preflight(session)
+                    registration_preflight(session)
                 self.assertEqual(ctx.exception.category, "geo_service")
                 self.assertEqual(transports[0].warmup_calls, 0)
         finally:
@@ -261,7 +264,7 @@ class RegistrationPreflightTests(unittest.TestCase):
     def test_warmup_403_without_valid_device_stops(self):
         with _session(lambda _: _Response(status=403)) as (session, transports):
             with self.assertRaises(RuntimeError):
-                openai_auth.network_preflight(session)
+                registration_preflight(session)
             self.assertEqual(session.device_id, "")
             self.assertEqual(len(transports), 3)
 
@@ -279,9 +282,9 @@ class RegistrationPreflightTests(unittest.TestCase):
 
         with _session(warmup, proxy="socks5://127.0.0.1:10009") as (session, transports):
             # 先触发一次门禁冻结，得到跨重试应保持不变的画像快照。
-            session.validate_registration_geo({"loc": "JP", "ip": "1.2.3.4"})
+            validate_session_geo(session, {"loc": "JP", "ip": "1.2.3.4"})
             profile = dict(session.browser_profile)
-            openai_auth.network_preflight(session)
+            registration_preflight(session)
             self.assertEqual(session.device_id, "second-attempt")
             self.assertEqual(session.browser_profile, profile)
             self.assertEqual(session.proxy, "socks5://127.0.0.1:10009")
@@ -300,15 +303,15 @@ class RegistrationPreflightTests(unittest.TestCase):
 
         with _session(stopped) as (session, _):
             with self.assertRaises(StopRequested):
-                openai_auth.network_preflight(session)
+                registration_preflight(session)
             self.assertEqual(session.device_id, "")
 
     def test_stop_before_network_leaves_uninitialized_identity(self):
         with _session(_cookie) as (session, _), patch.object(
-            openai_auth, "_check_stop_requested", side_effect=StopRequested("stopped")
+            job_context, "check_stop_requested", side_effect=StopRequested("stopped")
         ):
             with self.assertRaises(StopRequested):
-                openai_auth.network_preflight(session)
+                registration_preflight(session)
             self.assertEqual(session.get_server_device_id(), "")
             self.assertEqual(session.device_id, "")
 
@@ -325,17 +328,17 @@ class RegistrationGeoGateTests(unittest.TestCase):
     def test_none_rejects_geo_incomplete_without_network(self):
         with _geo_session() as (session, spy):
             with self.assertRaises(RegistrationGeoError) as ctx:
-                session.validate_registration_geo(None)
+                validate_session_geo(session, None)
             self.assertEqual(ctx.exception.category, "geo_incomplete")
             self.assertEqual(ctx.exception.stage, "validate")
-            self.assertFalse(session._registration_geo_frozen)
+            self.assertFalse(session.geo_frozen)
             self.assertEqual(spy.trace_calls, 0)
             self.assertEqual(spy.warmup_calls, 0)
 
     def test_freezes_auto_profile_and_records_actual_country(self):
         with _geo_session() as (session, _):
-            session.validate_registration_geo({"loc": "JP", "ip": "1.2.3.4"})
-            self.assertTrue(session._registration_geo_frozen)
+            validate_session_geo(session, {"loc": "JP", "ip": "1.2.3.4"})
+            self.assertTrue(session.geo_frozen)
             self.assertEqual(session.exit_geo["country"], "JP")
             self.assertEqual(session.exit_geo["ip"], "1.2.3.4")
             self.assertEqual(session.exit_geo["sources"], ["trace"])
@@ -349,7 +352,7 @@ class RegistrationGeoGateTests(unittest.TestCase):
 
     def test_auto_vn_profile_and_constructor_default_is_not_manual(self):
         with _geo_session() as (session, _):
-            session.validate_registration_geo({"loc": "VN", "ip": "1.2.3.4"})
+            validate_session_geo(session, {"loc": "VN", "ip": "1.2.3.4"})
             # 构造阶段默认 jp 画像不算手动，自动模式取实际国家 VN。
             self.assertEqual(session.exit_geo["country"], "VN")
             self.assertEqual(session.browser_profile["profile_country"], "VN")
@@ -360,7 +363,7 @@ class RegistrationGeoGateTests(unittest.TestCase):
     def test_manual_jp_overrides_known_vn_without_rewriting_actual(self):
         profile = {"geo": {"country": "JP"}}
         with _geo_session(profile=profile) as (session, _):
-            session.validate_registration_geo({"loc": "VN", "ip": "1.2.3.4"})
+            validate_session_geo(session, {"loc": "VN", "ip": "1.2.3.4"})
             self.assertEqual(session.exit_geo["country"], "VN")
             self.assertEqual(session.exit_geo["ip"], "1.2.3.4")
             self.assertEqual(session.browser_profile["profile_country"], "JP")
@@ -372,14 +375,14 @@ class RegistrationGeoGateTests(unittest.TestCase):
     def test_manual_via_geo_country_code(self):
         profile = {"geo": {"country_code": "JP"}}
         with _geo_session(profile=profile) as (session, _):
-            session.validate_registration_geo({"loc": "VN", "ip": "1.2.3.4"})
+            validate_session_geo(session, {"loc": "VN", "ip": "1.2.3.4"})
             self.assertEqual(session.browser_profile["profile_country"], "JP")
             self.assertEqual(session.browser_profile["locale_source"], "manual")
 
     def test_manual_via_locale_profile(self):
         profile = {"locale_profile": "jp"}
         with _geo_session(profile=profile) as (session, _):
-            session.validate_registration_geo({"loc": "VN", "ip": "1.2.3.4"})
+            validate_session_geo(session, {"loc": "VN", "ip": "1.2.3.4"})
             self.assertEqual(session.browser_profile["profile_country"], "JP")
             self.assertEqual(session.browser_profile["locale_source"], "manual")
             self.assertEqual(session.browser_profile["navigator_language"], "ja-JP")
@@ -388,30 +391,30 @@ class RegistrationGeoGateTests(unittest.TestCase):
         profile = {"geo": {"country": "JP"}}
         with _geo_session(profile=profile) as (session, _):
             with self.assertRaises(RegistrationGeoError) as ctx:
-                session.validate_registration_geo({"loc": "XX", "ip": "1.2.3.4"})
+                validate_session_geo(session, {"loc": "XX", "ip": "1.2.3.4"})
             self.assertEqual(ctx.exception.category, "geo_incomplete")
-            self.assertFalse(session._registration_geo_frozen)
+            self.assertFalse(session.geo_frozen)
 
     def test_unknown_manual_country_rejects(self):
         profile = {"geo": {"country": "ZZ"}}
         with _geo_session(profile=profile) as (session, _):
             with self.assertRaises(RegistrationGeoError) as ctx:
-                session.validate_registration_geo({"loc": "JP", "ip": "1.2.3.4"})
+                validate_session_geo(session, {"loc": "JP", "ip": "1.2.3.4"})
             self.assertEqual(ctx.exception.category, "geo_incomplete")
-            self.assertFalse(session._registration_geo_frozen)
+            self.assertFalse(session.geo_frozen)
 
     def test_manual_empty_country_rejects_not_silent_auto(self):
         profile = {"geo": {"country": ""}}
         with _geo_session(profile=profile) as (session, _):
             with self.assertRaises(RegistrationGeoError) as ctx:
-                session.validate_registration_geo({"loc": "JP", "ip": "1.2.3.4"})
+                validate_session_geo(session, {"loc": "JP", "ip": "1.2.3.4"})
             self.assertEqual(ctx.exception.category, "geo_incomplete")
 
     def test_manual_bad_timezone_rejects(self):
         profile = {"geo": {"country": "JP"}, "timezone_iana": "Europe/London"}
         with _geo_session(profile=profile) as (session, _):
             with self.assertRaises(RegistrationGeoError) as ctx:
-                session.validate_registration_geo({"loc": "JP", "ip": "1.2.3.4"})
+                validate_session_geo(session, {"loc": "JP", "ip": "1.2.3.4"})
             self.assertEqual(ctx.exception.category, "geo_mismatch")
 
     def test_manual_bad_language_rejects(self):
@@ -424,19 +427,19 @@ class RegistrationGeoGateTests(unittest.TestCase):
         }
         with _geo_session(profile=profile) as (session, _):
             with self.assertRaises(RegistrationGeoError) as ctx:
-                session.validate_registration_geo({"loc": "JP", "ip": "1.2.3.4"})
+                validate_session_geo(session, {"loc": "JP", "ip": "1.2.3.4"})
             self.assertEqual(ctx.exception.category, "geo_mismatch")
 
     def test_manual_incomplete_locale_rejects(self):
         profile = {"geo": {"country": "JP"}, "navigator_language": "ja-JP"}
         with _geo_session(profile=profile) as (session, _):
             with self.assertRaises(RegistrationGeoError) as ctx:
-                session.validate_registration_geo({"loc": "JP", "ip": "1.2.3.4"})
+                validate_session_geo(session, {"loc": "JP", "ip": "1.2.3.4"})
             self.assertEqual(ctx.exception.category, "geo_incomplete")
 
     def test_auto_disabled_still_detects_actual_country(self):
         with _geo_session() as (session, _), patch.object(browser_cfg, "AUTO_BROWSER_LOCALE_FROM_IP", False):
-            session.validate_registration_geo({"loc": "VN", "ip": "1.2.3.4"})
+            validate_session_geo(session, {"loc": "VN", "ip": "1.2.3.4"})
             # 关闭自动画像仍探测实际国家，但画像取自 BROWSER_LOCALE_PROFILE (jp)。
             self.assertEqual(session.exit_geo["country"], "VN")
             self.assertEqual(session.browser_profile["profile_country"], "JP")
@@ -445,9 +448,9 @@ class RegistrationGeoGateTests(unittest.TestCase):
 
     def test_same_country_ip_rotation_keeps_frozen_locale(self):
         with _geo_session() as (session, _):
-            session.validate_registration_geo({"loc": "JP", "ip": "1.2.3.4"})
+            validate_session_geo(session, {"loc": "JP", "ip": "1.2.3.4"})
             language = session.browser_profile["navigator_language"]
-            session.validate_registration_geo({"loc": "JP", "ip": "1.2.3.5"})
+            validate_session_geo(session, {"loc": "JP", "ip": "1.2.3.5"})
             self.assertEqual(session.exit_geo["ip"], "1.2.3.5")
             self.assertEqual(session.exit_geo["country"], "JP")
             self.assertEqual(session.browser_profile["navigator_language"], language)
@@ -455,8 +458,8 @@ class RegistrationGeoGateTests(unittest.TestCase):
 
     def test_subsequent_known_country_keeps_frozen_locale(self):
         with _geo_session() as (session, _):
-            session.validate_registration_geo({"loc": "JP", "ip": "1.2.3.4"})
-            session.validate_registration_geo({"loc": "VN", "ip": "1.2.3.5"})
+            validate_session_geo(session, {"loc": "JP", "ip": "1.2.3.4"})
+            validate_session_geo(session, {"loc": "VN", "ip": "1.2.3.5"})
             self.assertEqual(session.exit_geo["country"], "VN")
             self.assertEqual(session.browser_profile["navigator_language"], "ja-JP")
             self.assertEqual(session.browser_profile["profile_country"], "JP")
@@ -464,9 +467,9 @@ class RegistrationGeoGateTests(unittest.TestCase):
 
     def test_subsequent_unknown_country_rejects(self):
         with _geo_session() as (session, _):
-            session.validate_registration_geo({"loc": "JP", "ip": "1.2.3.4"})
+            validate_session_geo(session, {"loc": "JP", "ip": "1.2.3.4"})
             with self.assertRaises(RegistrationGeoError) as ctx:
-                session.validate_registration_geo({"loc": "XX", "ip": "1.2.3.5"})
+                validate_session_geo(session, {"loc": "XX", "ip": "1.2.3.5"})
             self.assertEqual(ctx.exception.category, "geo_incomplete")
             self.assertEqual(session.browser_profile["navigator_language"], "ja-JP")
 
@@ -474,9 +477,9 @@ class RegistrationGeoGateTests(unittest.TestCase):
         for trace in ({"loc": "JP"}, {"loc": "JP", "ip": ""}, {"loc": "JP", "ip": "not-an-ip"}):
             with self.subTest(trace=trace), _geo_session() as (session, _):
                 with self.assertRaises(RegistrationGeoError) as raised:
-                    session.validate_registration_geo(trace)
+                    validate_session_geo(session, trace)
                 self.assertEqual(raised.exception.category, "geo_incomplete")
-                self.assertFalse(session._registration_geo_frozen)
+                self.assertFalse(session.geo_frozen)
 
     def test_constructor_failure_releases_transport_and_owned_proxy_relay(self):
         raw = _Transport(lambda _: _Response(), lambda _: _Response())
@@ -496,7 +499,7 @@ class RegistrationGeoGateTests(unittest.TestCase):
     def test_independent_task_is_not_gated(self):
         with _geo_session(server=False) as (session, spy):
             # 非注册会话不触发地域门禁，不探测也不抛错。
-            session.validate_registration_geo(None)
+            validate_session_geo(session, None)
             self.assertEqual(spy.trace_calls, 0)
 
 

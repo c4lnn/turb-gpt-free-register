@@ -404,7 +404,7 @@ class SmsBowerProviderTests(unittest.TestCase):
 
     def test_polling_honors_stop_request(self):
         provider = SmsBowerProvider(config=_cfg(), sleep=lambda _: None)
-        with patch("core.openai.register.registration_service.check_stop_requested", side_effect=RuntimeError("stop-now")):
+        with patch("core.infra.job_context.check_stop_requested", side_effect=RuntimeError("stop-now")):
             with self.assertRaisesRegex(RuntimeError, "stop-now"):
                 provider.wait_for_sms_code("act-1", http=_Http([]), max_wait=1, poll_interval=0)
 

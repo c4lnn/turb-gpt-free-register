@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import main as registration
 from core.openai.codex import codex_oauth
-from core.infra import db
+from core.infra import db, job_context
 from core.mail import email_provider
 from core.link import flow_trigger
 from core.openai.register import registration_service
@@ -81,7 +81,7 @@ class RegistrationPipelineTests(unittest.TestCase):
             for name, value in {
                 "_prepare_persisted_email_registration": False,
                 "BrowserSession": session,
-                "network_preflight": None,
+                "registration_preflight": None,
                 "human_delay": None,
                 "get_csrf_token": "csrf",
                 "signin_openai": "https://auth.openai.com/authorize",
@@ -572,12 +572,12 @@ class RegistrationPipelineTests(unittest.TestCase):
 
                 def fail_login(*args, **kwargs):
                     if outcome == "stop":
-                        registration_service._STOP_EVENTS[job["id"]].set()
-                        raise registration_service.StopRequested("stopped during existing login")
+                        job_context.request_stop(job["id"])
+                        raise job_context.StopRequested("stopped during existing login")
                     raise TimeoutError("/log-in/password OTP timeout")
 
                 def raise_after_classification(*args, **kwargs):
-                    registration_service.record_registration_progress({"account_kind": "existing"})
+                    job_context.record_progress({"account_kind": "existing"})
                     raise RuntimeError("/log-in/password authentication failed")
 
                 with self._pipeline({}, kind="existing", step="otp"), \

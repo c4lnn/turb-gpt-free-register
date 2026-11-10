@@ -469,7 +469,7 @@ def wait_for_sms_code(
         round_no = 0
         while time.time() < deadline:
             try:
-                from core.openai.register.registration_service import check_stop_requested
+                from core.infra.job_context import check_stop_requested
                 check_stop_requested()
             except ImportError:
                 pass

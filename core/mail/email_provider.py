@@ -204,12 +204,8 @@ def wait_for_otp(
         from core.mail.manual_otp import wait_for_manual_otp
         from config import email as _email_cfg
         timeout = int(max_wait if max_wait is not None else (getattr(_email_cfg, "OTP_MAX_WAIT", 180) or 180))
-        job_id = None
-        try:
-            from core.openai.register import registration_service as svc
-            job_id = getattr(svc._THREAD_CTX, "job_id", None)
-        except Exception:
-            job_id = None
+        from core.infra import job_context
+        job_id = job_context.current_job_id()
         return wait_for_manual_otp(email, timeout=timeout, job_id=job_id)
 
     extra_kwargs = {}

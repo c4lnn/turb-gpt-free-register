@@ -14,7 +14,8 @@ from urllib.parse import urlparse, urljoin
 import pyotp
 
 from config import openai_protocol as _protocol_cfg
-from core.openai.transport.session import BrowserSession
+from core.infra import job_context
+from core.openai.transport.session import BrowserSession, reset_retryable_circuit
 from core.openai.auth.sentinel import build_sentinel_request_body
 from core.openai.auth.sentinel_runner import SentinelSDK
 
@@ -286,39 +287,12 @@ def _exception_http_status(exc: Exception) -> int:
         return 0
 
 
-def _reset_retryable_circuit(session: BrowserSession) -> None:
-    """仅清除本地熔断，保留当前 Session 的 Cookie Jar 和完整身份上下文。"""
-    reset = getattr(session, "reset_circuit_breaker", None)
-    if callable(reset):
-        reset()
-    else:
-        session.blocked_until = 0.0
-        session.blocked_reason = ""
-
-
-def _check_stop_requested() -> None:
-    """懒加载任务服务，避免模块导入阶段形成 main/registration_service 循环依赖。"""
-    from core.openai.register.registration_service import check_stop_requested
-    check_stop_requested()
-
-
-def _interruptible_sleep(seconds: float, interval: float = 0.25) -> None:
-    """分段等待，使 WebUI 手动停止无需等完整指数退避结束。"""
-    deadline = time.monotonic() + max(0.0, float(seconds))
-    while True:
-        _check_stop_requested()
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return
-        time.sleep(min(max(0.01, interval), remaining))
-
-
 def _request_with_proxy_retry(session: BrowserSession, label: str, fn):
     """对代理/TLS/超时及可恢复 HTTP 错误进行有限指数退避重试。"""
     max_attempts, retry_delay = _proxy_retry_config()
     last_exc: Exception | None = None
     for attempt in range(1, max_attempts + 1):
-        _check_stop_requested()
+        job_context.check_stop_requested()
         try:
             response = fn()
             response.raise_for_status()
@@ -329,102 +303,18 @@ def _request_with_proxy_retry(session: BrowserSession, label: str, fn):
             last_exc = exc
             if not _is_retryable_authorize_error(exc) or attempt >= max_attempts:
                 raise
-            _reset_retryable_circuit(session)
+            reset_retryable_circuit(session)
             backoff = retry_delay * (2 ** (attempt - 1))
             logger.warning(
                 "[%s] 代理链路临时失败 (%s/%s): %s HTTP=%s，保留当前会话，%.1fs 后重试",
                 label, attempt, max_attempts, type(exc).__name__, _exception_http_status(exc), backoff,
             )
-            _interruptible_sleep(backoff)
+            job_context.interruptible_sleep(backoff)
     raise last_exc if last_exc else RuntimeError(f"{label} 重试耗尽但无异常记录")
 
 
-def _registration_preflight(session: BrowserSession) -> None:
-    """初始 trace 冻结画像；有界 CSRF warmup 直接建立正式注册会话。"""
-    from core.openai.register.registration_service import StopRequested
-    from core.openai.register.registration_geo import (
-        RegistrationGeoError, CATEGORY_PROXY, CATEGORY_GEO_SERVICE, CATEGORY_GEO_PARSE, STAGE_DETECT,
-    )
-
-    _check_stop_requested()
-    fields = None
-    try:
-        logger.info("[注册预检:trace] 初始出口观测")
-        response = session.get(
-            "https://cloudflare.com/cdn-cgi/trace",
-            headers=session.get_auth_navigate_headers(referer=""),
-            timeout=15,
-        )
-        status = int(response.status_code)
-        if status != 200:
-            category = CATEGORY_PROXY if status == 407 else CATEGORY_GEO_SERVICE
-            raise RegistrationGeoError(f"地域观测服务不可用：HTTP {status}", category, STAGE_DETECT)
-    except StopRequested:
-        raise
-    except Exception as exc:
-        if isinstance(exc, RegistrationGeoError):
-            error = exc
-        else:
-            category, reason = session._classify_geo_exception(exc)
-            error = RegistrationGeoError(f"地域观测不可用：{reason}", category, STAGE_DETECT)
-        _reset_retryable_circuit(session)
-        if not session._registration_geo_frozen:
-            raise error from None
-        logger.warning("[注册预检:trace] 后续观测不可用 category=%s，保留冻结画像", error.category)
-    else:
-        try:
-            fields = dict(line.split("=", 1) for line in response.text.splitlines() if "=" in line)
-            if not fields:
-                raise ValueError("empty trace")
-        except Exception:
-            raise RegistrationGeoError("地域观测响应无法解析", CATEGORY_GEO_PARSE, STAGE_DETECT) from None
-    if fields is not None:
-        session.validate_registration_geo(fields)
-
-    headers = session.get_chatgpt_navigate_headers(referer="", user_initiated=False)
-    headers.update({
-        "accept": "application/json",
-        "sec-fetch-dest": "empty",
-        "sec-fetch-mode": "cors",
-        "sec-fetch-site": "same-origin",
-    })
-    headers.pop("upgrade-insecure-requests", None)
-    attempts = max(1, int(_protocol_cfg.OPENAI_REGISTRATION_WARMUP_ATTEMPTS))
-    timeout = max(1.0, float(_protocol_cfg.OPENAI_REGISTRATION_WARMUP_TIMEOUT))
-    for attempt in range(1, attempts + 1):
-        _check_stop_requested()
-        if attempt > 1:
-            _interruptible_sleep(3 + 2 * (attempt - 1))
-            session.reset_preflight_transport()
-        try:
-            logger.info("[注册预检:warmup] 初始化服务端设备 cookie (%s/%s)", attempt, attempts)
-            response = session.get(
-                "https://chatgpt.com/api/auth/csrf",
-                headers=headers,
-                allow_redirects=True,
-                timeout=timeout,
-            )
-            response.raise_for_status()
-        except StopRequested:
-            raise
-        except Exception as exc:
-            logger.warning("[注册预检:warmup] 请求未正常完成 (%s)，检查已接收 cookie", type(exc).__name__)
-        _check_stop_requested()
-        device_id = session.get_server_device_id()
-        if device_id:
-            session.device_id = device_id
-            _reset_retryable_circuit(session)
-            logger.info("[注册预检:warmup] 服务端设备身份已绑定 (%s/%s)", attempt, attempts)
-            return
-        logger.warning("[注册预检:warmup] 缺少有效服务端设备 cookie，剩余尝试=%s", attempts - attempt)
-    raise RuntimeError(f"注册初始化失败：{attempts} 次 warmup 后仍无有效服务端 oai-did")
-
-
 def network_preflight(session: BrowserSession) -> None:
-    """注册使用服务端设备初始化；独立 Codex 等沿用既有预检策略。"""
-    if getattr(session, "server_device_id", False) is True:
-        _registration_preflight(session)
-        return
+    """OAuth authorize 前的连通性预检；注册会话不走这里，见 registration_preflight。"""
     # 成功链路在 OAuth authorize 前只访问 ChatGPT 登录页；提前直打
     # auth/log-in 和 Sentinel frame 会制造浏览器中不存在的跨站访问序列。
     timeout = max(1.0, float(getattr(_protocol_cfg, "OPENAI_PREFLIGHT_TIMEOUT", 12.0)))
@@ -495,7 +385,7 @@ def follow_authorize(session: BrowserSession, authorize_url: str) -> str:
                 if attempt >= max_attempts:
                     logger.warning("[步骤4] authorize HTTP 403，已达到最大重试次数")
                     raise
-                _reset_retryable_circuit(session)
+                reset_retryable_circuit(session)
                 backoff = retry_delay * (2 ** (attempt - 1))
                 logger.warning(
                     "[步骤4] authorize HTTP 403，保留当前指纹和 Cookie，%.1fs 后重试 (%s/%s)",
@@ -510,7 +400,7 @@ def follow_authorize(session: BrowserSession, authorize_url: str) -> str:
                 break
             # 首次 403 常会同时刷新 __cf_bm；保留同一个 BrowserSession/Cookie
             # Jar，只清掉本地熔断后重试，不能重建会话丢掉该 Cookie。
-            _reset_retryable_circuit(session)
+            reset_retryable_circuit(session)
             backoff = retry_delay * (2 ** (attempt - 1))
             logger.warning(
                 f"[步骤4] authorize 临时失败 ({type(exc).__name__}: {str(exc)[:120]})，"
@@ -524,8 +414,6 @@ def follow_authorize(session: BrowserSession, authorize_url: str) -> str:
 
 def request_sentinel_token(session: BrowserSession, flow: str) -> dict:
     """当前步骤单 flow 采集、请求和求解，始终使用同一个 SDK 上下文。"""
-    from core.openai.register.registration_service import StopRequested
-
     if not session.device_id:
         raise SentinelRequestError("Sentinel 设备上下文尚未初始化")
 
@@ -533,7 +421,7 @@ def request_sentinel_token(session: BrowserSession, flow: str) -> dict:
     cookie = session.auth_cookie_header() if hasattr(session, "auth_cookie_header") else ""
     with SentinelSDK(
         flow=flow, device_id=session.device_id, browser_profile=profile,
-        cookie=cookie, check_stop_requested=_check_stop_requested,
+        cookie=cookie, check_stop_requested=job_context.check_stop_requested,
     ) as sdk:
         request_p = sdk.requirements()
         body = build_sentinel_request_body(request_p, session.device_id, flow)
@@ -545,7 +433,7 @@ def request_sentinel_token(session: BrowserSession, flow: str) -> dict:
                     headers=session.get_sentinel_headers(), data=body,
                 ),
             )
-        except StopRequested:
+        except job_context.StopRequested:
             raise
         except Exception as exc:
             status = _exception_http_status(exc)

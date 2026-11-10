@@ -267,7 +267,7 @@ class SmsBowerProvider:
         deadline = self._time() + total_wait
         while self._time() < deadline:
             try:
-                from core.openai.register.registration_service import check_stop_requested
+                from core.infra.job_context import check_stop_requested
                 check_stop_requested()
             except ImportError:
                 pass
