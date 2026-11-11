@@ -222,17 +222,6 @@ class RegisteredICloudOtpRoutingTests(unittest.TestCase):
         fetch_otp.assert_not_called()
 
 
-class RegisteredICloudTemplateTests(unittest.TestCase):
-    def test_template_exposes_registered_icloud_format(self):
-        root = Path(__file__).resolve().parents[1] / "webui" / "templates"
-        html = (root / "index.html").read_text(encoding="utf-8")
-        self.assertIn("iCloud 已注册账号：邮箱----AT", html)
-        self.assertIn("email----accessToken", html)
-        self.assertIn('value="icloud"', html)
-        self.assertIn('<input id="importAsRegisteredV2" type="checkbox">', html)
-        self.assertIn("const as_registered = registeredEl ? !!registeredEl.checked : false;", html)
-        self.assertIn('<th class="col-token">AT</th>', html)
-        self.assertNotIn('<th class="col-token">Token</th>', html)
 
 
 if __name__ == "__main__":

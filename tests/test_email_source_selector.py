@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 import unittest
 from contextlib import ExitStack
-from pathlib import Path
 from unittest.mock import patch
 
 from core.mail import email_provider
@@ -124,22 +123,6 @@ class EmailSourceConfigApiTests(unittest.TestCase):
         reload_all.assert_called_once_with()
 
 
-class EmailSourceTemplateTests(unittest.TestCase):
-    def test_template_exposes_ordered_multi_select_controls_and_client_validation(self):
-        source = (Path(__file__).parents[1] / "webui" / "templates" / "index.html").read_text(encoding="utf-8")
-
-        for token in (
-            "renderEmailSourceField",
-            "data-email-source-picker-toggle",
-            "data-email-source-option",
-            "data-email-source-move",
-            "data-email-source-remove-index",
-            "emailSourceValidationMessage",
-        ):
-            self.assertIn(token, source)
-
-        field = next(item for item in config_editor.EDITABLE_FIELDS if item["key"] == "EMAIL_SOURCE")
-        self.assertIn("第一个为主来源，后续来源按顺序兜底", field["help"])
 
 
 if __name__ == "__main__":

@@ -298,32 +298,6 @@ class AccountStatusContractTests(unittest.TestCase):
             _, error = _account_status_filter_args()
         self.assertEqual(error, "codex_status 不能与新状态筛选参数同时提交")
 
-    def test_frontend_uses_central_labels_machine_codes_and_capabilities(self):
-        template = (Path(__file__).parents[1] / "webui" / "templates" / "index.html").read_text(encoding="utf-8")
-        self.assertIn("const ACCOUNT_STATUS_LABELS", template)
-        self.assertIn("return ACCOUNT_STATUS_LABELS[domain]", template)
-        self.assertIn("plan_category_code", template)
-        self.assertIn("email_source", template)
-        self.assertIn("emailSource", template)
-        self.assertIn("r.codex_capabilities || {}", template)
-        self.assertIn("const capabilities = r.plan_capabilities || {}", template)
-        self.assertIn("row.live_check_capabilities?.can_start", template)
-        self.assertIn("const ACCOUNT_FILTER_STATE", template)
-        self.assertIn("const ACCOUNT_FILTER_META", template)
-        self.assertIn("function buildAccountsQueryParams()", template)
-        self.assertIn("params.set(meta.param, value)", template)
-        self.assertIn("const params = buildAccountsQueryParams()", template)
-        self.assertIn("return ACCOUNT_STATUS_LABELS[domain]?.[String(code || '').toLowerCase()] || '未知';", template)
-        self.assertNotIn("acc.codex_status !== 'retrying'", template)
-        self.assertNotIn("(a.codex_status || '') === 'retrying'", template)
-        self.assertNotIn("(a.codex_status || '') === 'deactivated'", template)
-        self.assertNotIn("plan !== 'free' || !acc.plus_trial_eligible", template)
-        self.assertNotIn("a.current_plan_type || a.plan_type", template)
-        self.assertNotIn("r.plan_result_class ===", template)
-        self.assertNotIn("codex_status=${encodeURIComponent(codexStatus)}", template)
-        self.assertNotIn("SHOW_CODEX_SUCCESS_ONLY", template)
-        self.assertIn("capabilities.can_retry !== true", template)
-        self.assertIn("capabilities.can_start !== true", template)
 
 
 if __name__ == "__main__":

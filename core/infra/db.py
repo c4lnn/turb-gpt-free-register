@@ -1491,6 +1491,8 @@ def _decorate_account(row: dict, *, redact_secrets: bool = False) -> dict:
             or str(key).lower() in {"agent_identity", "agent_runtime_id", "agent_private_key"}
         )
     }
+    out.pop("archived", None)
+    out.pop("archived_at", None)
     if redact_secrets:
         # 公共 DTO 不携带可能包含响应 secret 的原始字段。
         for key in (
@@ -2182,7 +2184,6 @@ def _parse_iso_dt(value: str | None, end_of_day: bool = False) -> datetime | Non
 
 
 def _filtered_decorated_accounts(
-    archived: str | bool | None = False,
     email_source_filter: str | None = None,
     plan_filter: str | None = None,
     q: str | None = None,
@@ -2197,12 +2198,6 @@ def _filtered_decorated_accounts(
     # 默认完整账号列表/统计/导出/静态查看器排除中间凭据记录；
     # 只有密码的 password_set 记录不冒充完整账号。
     rows = [r for r in rows if is_complete_account(r)]
-    if archived in (True, "1", "true", "yes", "only"):
-        rows = [r for r in rows if bool(r.get("archived"))]
-    elif archived in ("all", "include"):
-        pass
-    else:
-        rows = [r for r in rows if not bool(r.get("archived"))]
     rows = [r for r in rows if _account_matches_email_source_filter(r, email_source_filter)]
     decorated = [_decorate_account(r, redact_secrets=True) for r in rows]
     decorated = [r for r in decorated if _account_matches_plan_filter(r, plan_filter)]
@@ -2241,7 +2236,6 @@ def _filtered_decorated_accounts(
 def list_account_plan_check_statuses(
     limit: int = 5000,
     offset: int = 0,
-    archived: str | bool | None = False,
     email_source_filter: str | None = None,
     plan_filter: str | None = None,
     q: str | None = None,
@@ -2254,7 +2248,6 @@ def list_account_plan_check_statuses(
 ) -> dict:
     """返回不含 Token/邮箱密码的套餐查询轻量状态快照。"""
     fields = (
-        "id", "email", "archived",
         "email_source",
         "plan_type", "current_plan_type", "plus_trial_eligible", "eligible_promo_campaigns",
         "plan_check_status", "plan_check_ok", "plan_check_error", "plan_check_http_status",
@@ -2274,7 +2267,6 @@ def list_account_plan_check_statuses(
     )
     with _LOCK:
         all_rows = _filtered_decorated_accounts(
-            archived=archived,
             email_source_filter=email_source_filter,
             plan_filter=plan_filter,
             q=q,
@@ -2342,7 +2334,6 @@ def list_account_plan_check_statuses(
 def list_accounts(
     limit: int = 500,
     offset: int = 0,
-    archived: str | bool | None = False,
     email_source_filter: str | None = None,
     plan_filter: str | None = None,
     q: str | None = None,
@@ -2355,7 +2346,6 @@ def list_accounts(
 ) -> list[dict]:
     with _LOCK:
         rows = _filtered_decorated_accounts(
-            archived=archived,
             email_source_filter=email_source_filter,
             plan_filter=plan_filter,
             q=q,
@@ -2372,7 +2362,6 @@ def list_accounts(
 def list_accounts_page(
     limit: int = 50,
     offset: int = 0,
-    archived: str | bool | None = False,
     email_source_filter: str | None = None,
     plan_filter: str | None = None,
     q: str | None = None,
@@ -2385,7 +2374,6 @@ def list_accounts_page(
 ) -> dict:
     with _LOCK:
         rows = _filtered_decorated_accounts(
-            archived=archived,
             email_source_filter=email_source_filter,
             plan_filter=plan_filter,
             q=q,
@@ -2601,44 +2589,6 @@ def update_accounts_note(account_ids: list[int] | None, note: str) -> tuple[list
     return updated, skipped
 
 
-def archive_account(acc_id: int, archived: bool = True) -> bool:
-    """归档/取消归档单个已注册账号。归档不会删除 token，只影响默认账号列表查询。"""
-    with _LOCK:
-        rows = _load_accounts()
-        row = next((r for r in rows if int(r.get("id") or 0) == int(acc_id)), None)
-        if row is None:
-            return False
-        now = _now()
-        row["archived"] = bool(archived)
-        row["archived_at"] = now if archived else None
-        row["updated_at"] = now
-        _save_accounts(rows)
-        return True
-
-
-def archive_accounts(account_ids: list[int] | None, archived: bool = True) -> tuple[list[dict], list[dict]]:
-    """批量归档/取消归档账号。返回 (updated, skipped)。"""
-    ids = {int(x) for x in (account_ids or []) if str(x).strip().lstrip("-").isdigit()}
-    updated: list[dict] = []
-    skipped: list[dict] = []
-    with _LOCK:
-        rows = _load_accounts()
-        seen_ids: set[int] = set()
-        now = _now()
-        for row in rows:
-            row_id = int(row.get("id") or 0)
-            if row_id not in ids:
-                continue
-            row["archived"] = bool(archived)
-            row["archived_at"] = now if archived else None
-            row["updated_at"] = now
-            updated.append({"id": row_id, "email": row.get("email"), "archived": bool(archived), "archived_at": row.get("archived_at")})
-            seen_ids.add(row_id)
-        for item in ids - seen_ids:
-            skipped.append({"id": item, "reason": "账号不存在"})
-        if updated:
-            _save_accounts(rows)
-    return updated, skipped
 
 
 def count_accounts() -> int:
@@ -3196,11 +3146,10 @@ def _save_codex_export_state(state: dict) -> None:
     _write_json(_CODEX_EXPORT_STATE, state)
 
 
-def list_codex_accounts(archived: str | bool | None = "0", date_from: str | None = None, date_to: str | None = None) -> list[dict]:
+def list_codex_accounts(date_from: str | None = None, date_to: str | None = None) -> list[dict]:
     """
     扫 codex_accounts/ 目录，每个 codex-*.json 是一条 CPA 兼容凭证。
     返回带元信息的列表（含导出状态、文件大小、token 预览等）。
-    archived: '0'=仅未归档（默认）/ 'only'=仅归档 / 'all'=全部；
     date_from/date_to 按文件修改时间（mtime）筛选（ISO 或 YYYY-MM-DD）。
     """
     with _LOCK:
@@ -3217,15 +3166,6 @@ def list_codex_accounts(archived: str | bool | None = "0", date_from: str | None
                 continue
             fname = path.name
             es = export_state.get(fname) or {}
-            rec_archived = bool(es.get("archived"))
-            if archived in (True, "1", "true", "yes", "only"):
-                if not rec_archived:
-                    continue
-            elif archived in ("all", "include"):
-                pass
-            else:
-                if rec_archived:
-                    continue
             mtime_dt = datetime.fromtimestamp(path.stat().st_mtime)
             if d_from and mtime_dt < d_from:
                 continue
@@ -3265,29 +3205,10 @@ def list_codex_accounts(archived: str | bool | None = "0", date_from: str | None
                 "mtime": mtime_dt.isoformat(timespec="seconds"),
                 "exported_at": es.get("exported_at"),
                 "exported_count": es.get("exported_count", 0),
-                "archived": rec_archived,
-                "archived_at": es.get("archived_at"),
             })
         return out
 
 
-def archive_codex(filename: str, archived: bool = True) -> dict | None:
-    """归档/取消归档一条 Codex 授权凭证（状态记录在导出状态文件）。不存在返回 None。"""
-    with _LOCK:
-        if not filename.startswith("codex-") or not filename.endswith(".json"):
-            raise ValueError(f"非法文件名: {filename}")
-        if "/" in filename or "\\" in filename or ".." in filename:
-            raise ValueError(f"非法文件名: {filename}")
-        path = _CODEX_DIR / filename
-        if not path.exists() or not path.is_file():
-            return None
-        state = _load_codex_export_state()
-        rec = state.get(filename) or {}
-        rec["archived"] = bool(archived)
-        rec["archived_at"] = _now() if archived else None
-        state[filename] = rec
-        _save_codex_export_state(state)
-        return rec
 
 
 def read_codex_credential(filename: str) -> tuple[str, str]:

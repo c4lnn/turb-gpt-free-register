@@ -1,18 +1,13 @@
 # -*- coding: utf-8 -*-
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
 from webui.app import create_app
 
 
-TEMPLATE_PATH = Path(__file__).parents[1] / "webui" / "templates" / "index.html"
 
 
 class AccountCopyFormatTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.template = TEMPLATE_PATH.read_text(encoding="utf-8")
 
     def setUp(self):
         self.client = create_app(auth_code="test-auth").test_client()
@@ -210,62 +205,6 @@ class AccountCopyFormatTests(unittest.TestCase):
         self.assertEqual(response.headers["Cache-Control"], "no-store, max-age=0")
         self.assertEqual(response.headers["Pragma"], "no-cache")
         self.assertNotIn("unknown", " ".join(str(call) for call in logger.mock_calls))
-
-    def test_account_template_unifies_format_driven_copy_and_download(self):
-        for option in (
-            '<option value="at" selected>AT</option>',
-            '<option value="email_at">邮箱----AT</option>',
-            '<option value="email_at_totp">邮箱----AT----2FA</option>',
-        ):
-            self.assertIn(option, self.template)
-
-        menu_start = self.template.index("function _accountsV2MoreMenu")
-        menu_end = self.template.index("function closeAccountsV2MoreMenus", menu_start)
-        account_menu = self.template[menu_start:menu_end]
-        self.assertIn('data-account-copy-format="true"', account_menu)
-        self.assertNotIn('data-account-copy-secret="copy_line"', account_menu)
-        self.assertNotIn("copy_line", account_menu)
-
-        format_start = self.template.index("function accountAtExportFormat")
-        format_end = self.template.index("async function fetchAccountAtExport", format_start)
-        format_block = self.template[format_start:format_end]
-        self.assertIn("email_access_token_totp", format_block)
-        self.assertIn("email_at_totp", format_block)
-
-        click_start = self.template.index("const copySecretBtn =")
-        click_end = self.template.index("const planBtn =", click_start)
-        click_block = self.template[click_start:click_end]
-        self.assertIn("data-account-copy-format", click_block)
-        self.assertIn("accountAtExportFormat()", click_block)
-        self.assertIn("fetchOneAccountSecret(id, field)", click_block)
-        self.assertIn("accountAtExportSkipReason", click_block)
-
-        for function_name in (
-            "async function copySelectedAccountLines()",
-            "async function downloadSelectedAccountTxt()",
-            "async function copyCurrentPageTokens()",
-        ):
-            start = self.template.index(function_name)
-            end = self.template.find("\nfunction ", start + 1)
-            if end < 0:
-                end = len(self.template)
-            self.assertIn("fetchAccountAtExport(ids)", self.template[start:end])
-
-        self.assertIn("OUTLOOK.map(r=>r.copy_line || r.email)", self.template)
-        self.assertIn("cbtn('复制整行', r.account_copy_line, 'good')", self.template)
-
-    def test_download_uses_same_lines_and_metadata_summary_as_bulk_copy(self):
-        bulk_start = self.template.index("async function copySelectedAccountLines()")
-        download_start = self.template.index("async function downloadSelectedAccountTxt()")
-        current_page_start = self.template.index("async function copyCurrentPageTokens()")
-        self.assertIn("result.lines.join('\\n')", self.template[bulk_start:download_start])
-        self.assertIn("result.lines.join('\\n')", self.template[download_start:current_page_start])
-        self.assertIn("accountAtExportResultMessage('已下载', result)", self.template[download_start:current_page_start])
-        helper_start = self.template.index("async function fetchAccountAtExport")
-        helper_end = self.template.index("async function copySelectedAccountLines", helper_start)
-        helper_block = self.template[helper_start:helper_end]
-        self.assertIn("fallbackCount", helper_block)
-        self.assertIn("skippedNoAt", helper_block)
 
 
 if __name__ == "__main__":

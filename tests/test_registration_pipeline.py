@@ -128,6 +128,16 @@ class RegistrationPipelineTests(unittest.TestCase):
         self.assertTrue(observed["saved"])
         self.assertFalse(observed["created"])
         self.assertTrue(session.closed)
+        batch = self.root / "batch"
+        self.assertEqual(
+            {path.name for path in batch.iterdir()},
+            {"注册成功的邮箱.txt", "注册成功的token.txt", "注册成功整行.txt", "注册成功账号.json"},
+        )
+        self.assertEqual((batch / "注册成功的邮箱.txt").read_text(encoding="utf-8").splitlines(), ["user@example.com"])
+        self.assertEqual((batch / "注册成功的token.txt").read_text(encoding="utf-8").splitlines(), ["test-access"])
+        archived = json.loads((batch / "注册成功账号.json").read_text(encoding="utf-8"))[0]
+        self.assertEqual(archived["email"], "user@example.com")
+        self.assertEqual(archived["access_token"], "test-access")
 
     def test_profile_branch_submits_once_after_validation_without_an_extra_navigation(self):
         with self._pipeline({

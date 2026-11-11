@@ -1,12 +1,26 @@
 # -*- coding: utf-8 -*-
 import unittest
+from contextlib import ExitStack
 from unittest.mock import patch
 
+from webui import app as web_app
 from webui.app import create_app
 
 
 class CodexExportFilterTests(unittest.TestCase):
     def setUp(self):
+        self.patches = ExitStack()
+        self.addCleanup(self.patches.close)
+        for name, value in (
+            ("validate_runtime_storage", None),
+            ("migrate_email_pool_statuses", {}),
+            ("migrate_account_status_contracts", {}),
+            ("recover_interrupted_codex_operations", 0),
+            ("recover_interrupted_plan_checks", 0),
+            ("recover_interrupted_live_checks", 0),
+            ("recover_interrupted_totp_setups", 0),
+        ):
+            self.patches.enter_context(patch.object(web_app.db, name, return_value=value))
         self.client = create_app(auth_code="test-auth").test_client()
         self.client.environ_base["HTTP_X_AUTH_CODE"] = "test-auth"
         self.rows = [
@@ -45,12 +59,6 @@ class CodexExportFilterTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("export_status 仅支持", response.get_json()["error"])
 
-    def test_account_page_exposes_export_filter(self):
-        response = self.client.get("/")
-
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(b'id="codexExportFilterV2"', response.data)
-        self.assertIn(b'data-codex-export-status="pending"', response.data)
 
 
 if __name__ == "__main__":

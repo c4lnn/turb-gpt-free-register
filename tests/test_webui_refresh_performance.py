@@ -210,19 +210,6 @@ class WebUiRefreshPerformanceTests(unittest.TestCase):
             }.issubset(response.get_json())
         )
 
-    def test_template_contains_refresh_guards_and_no_nested_summary_refresh(self):
-        template_path = Path(__file__).parents[1] / "webui" / "templates" / "index.html"
-        template = template_path.read_text(encoding="utf-8")
-        self.assertIn("let jobsRefreshPromise = null;", template)
-        self.assertIn("if (jobsRefreshPromise) return jobsRefreshPromise;", template)
-        self.assertIn("let summaryRefreshPromise = null;", template)
-        self.assertIn("if (summaryRefreshPromise) return summaryRefreshPromise;", template)
-
-        jobs_start = template.index("let jobsRefreshPromise = null;")
-        jobs_end = template.index("let modalScrollY", jobs_start)
-        self.assertNotIn("loadSummary();", template[jobs_start:jobs_end])
-        self.assertIn("jobsTimer = setInterval", template)
-        self.assertIn("setInterval(loadSummary, 5000)", template)
 
 
 if __name__ == "__main__":

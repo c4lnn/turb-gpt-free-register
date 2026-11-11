@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 import json
 import os
-import shutil
-import subprocess
 import tempfile
 import unittest
 from contextlib import ExitStack
@@ -356,70 +354,6 @@ class AccountPlanCheckDbTests(unittest.TestCase):
         second = db.list_account_plan_check_statuses()
         self.assertNotEqual(first["revision"], second["revision"])
 
-class AccountPlanCellTemplateTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.template = (
-            Path(__file__).parents[1] / "webui" / "templates" / "index.html"
-        ).read_text(encoding="utf-8")
-        start = cls.template.index("const ACCOUNT_STATUS_LABELS")
-        end = cls.template.index("function _planAction", start)
-        cls.renderer = cls.template[start:end]
-        cls.node = shutil.which("node")
-
-    def _render_plan_cells(self, rows):
-        if not self.node:
-            self.skipTest("需要 Node.js 执行内嵌的套餐渲染函数")
-        script = """
-function esc(value) {
-  return String(value ?? '').replace(/[&<>\\\"']/g, ch => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', "'": '&#39;'
-  }[ch]));
-}
-function _fmtPlanTime(value) { return String(value ?? ''); }
-__RENDERER__
-function _fmtPlanTime(value) { return String(value ?? ''); }
-const rows = __ROWS__;
-process.stdout.write(JSON.stringify(rows.map(_planCell)));
-""".replace("__RENDERER__", self.renderer).replace(
-            "__ROWS__", json.dumps(rows, ensure_ascii=False)
-        )
-        result = subprocess.run(
-            [self.node, "-e", script],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            check=False,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        return json.loads(result.stdout)
-
-    def test_success_label_uses_promo_for_free_and_currency_for_paid(self):
-        self.assertIn("const category = String(r.plan_category_code || '').toLowerCase();", self.renderer)
-        self.assertNotIn("r.plus_trial_eligible === false", self.renderer)
-        self.assertIn("无套餐优惠", self.renderer)
-        self.assertIn("[plan, planSuffix].filter(Boolean).join('|')", self.renderer)
-        self.assertNotIn("parts.join('/')", self.renderer)
-        self.assertIn("计费周期: ${billing}", self.renderer)
-        self.assertIn("折扣: ${discount}", self.renderer)
-
-    def test_status_meta_covers_all_states_and_reuses_subtext_style(self):
-        for status, label in (
-            ("queued", "查询排队中"),
-            ("running", "查询中"),
-            ("success", "查询成功"),
-            ("failed", "查询失败"),
-        ):
-            self.assertIn(f"{status}: '{label}'", self.renderer)
-        self.assertIn('r.plan_check_updated_at', self.renderer)
-        self.assertIn('class="acc-v2-sub"', self.renderer)
-        self.assertIn("if (!updated) return '';", self.renderer)
-
-    def test_each_primary_state_is_wrapped_with_status_meta(self):
-        self.assertIn("return wrap(`<span class=\"pill status-running\"", self.renderer)
-        self.assertIn("return wrap(`<span class=\"pill status-failed\"", self.renderer)
-        self.assertIn("return wrap(`<span class=\"pill ${cls}\"", self.renderer)
-        self.assertIn("${main}${_planStatusMeta(r)}", self.renderer)
 
 
 if __name__ == "__main__":

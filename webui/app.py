@@ -7,18 +7,20 @@ Flask 本地控制台。
     core.openai.register.registration_service  —— 线程池批量注册 + 任务日志
     webui.config_editor                        —— 安全读写 config/*.py
 
-所有接口返回 JSON；前端是单文件 templates/index.html（原生 JS + fetch）。
+所有业务接口返回 JSON；登录后的控制台由 Flask 同源提供 `frontend/dist` 中的 React 构建资源。
 默认绑定 127.0.0.1，仅本地访问。
 """
 import logging
 import binascii
 import json
+import mimetypes
 import re
 import threading
 import time
 import uuid
 
-from flask import Flask, Response, jsonify, render_template, request
+from pathlib import Path
+from flask import Flask, Response, abort, jsonify, request, send_from_directory
 import pyotp
 
 from core.openai.codex import codex_retry_service
@@ -36,6 +38,7 @@ from core.infra.contracts.email_source import VALID_EMAIL_SOURCES
 from webui import config_editor
 
 logger = logging.getLogger(__name__)
+FRONTEND_DIST = Path(__file__).parent / "frontend" / "dist"
 
 def _pool_source_arg(default: str = "outlook") -> str:
     src = (request.args.get("source") or "").strip()
@@ -197,7 +200,7 @@ def _compact_account_for_list(row: dict) -> dict:
 
     # 这些是列表固定列直接展示字段。
     for key in (
-        "user_name", "email_source", "note", "archived", "created_at",
+        "user_name", "email_source", "note", "created_at",
         "plan_type", "current_plan_type", "plus_trial_eligible", "eligible_promo_campaigns",
         "plan_check_status", "codex_status",
         "totp_setup_status",
@@ -401,7 +404,9 @@ def _enrich_job_rows(rows: list[dict], manual_otp_required: bool) -> None:
         row.update(svc.get_retry_info(row, account_snapshot=account_snapshot))
 
 def create_app(auth_code: str | None = None) -> Flask:
-    app = Flask(__name__, template_folder="templates")
+    frontend_dist = FRONTEND_DIST
+    mimetypes.add_type("text/javascript", ".js")
+    app = Flask(__name__, template_folder="templates", static_folder=str(frontend_dist), static_url_path="")
     _prepared_downloads: dict[str, dict] = {}
 
     def _put_prepared_download(content: bytes, filename: str, mimetype: str = "application/zip") -> str:
@@ -466,7 +471,9 @@ def create_app(auth_code: str | None = None) -> Flask:
     # ----------------------------------------------------------
     @app.get("/")
     def index():
-        return render_template("index.html")
+        if not (frontend_dist / "index.html").is_file():
+            return "前端资源尚未构建，请在 webui/frontend 执行 npm ci && npm run build。", 503, {"Content-Type": "text/plain; charset=utf-8"}
+        return send_from_directory(str(frontend_dist), "index.html")
 
     # ----------------------------------------------------------
     # 统计概览
@@ -512,7 +519,6 @@ def create_app(auth_code: str | None = None) -> Flask:
     @app.get("/api/accounts")
     def api_accounts():
         limit = request.args.get("limit", default=500, type=int)
-        archived = str(request.args.get("archived", default="0") or "0").lower()
         status_filters, filter_error = _account_status_filter_args()
         if filter_error:
             return jsonify({"ok": False, "error": filter_error}), 400
@@ -530,7 +536,6 @@ def create_app(auth_code: str | None = None) -> Flask:
             result = db.list_accounts_page(
                 limit=page_size,
                 offset=offset,
-                archived=archived,
                 **status_filters,
                 q=q,
                 date_from=date_from,
@@ -541,7 +546,6 @@ def create_app(auth_code: str | None = None) -> Flask:
             return jsonify(result)
         rows = db.list_accounts(
             limit=limit,
-            archived=archived,
             **status_filters,
             q=q,
             date_from=date_from,
@@ -553,7 +557,6 @@ def create_app(auth_code: str | None = None) -> Flask:
     def api_account_plan_check_status():
         """套餐查询轻量状态，不返回 Token、邮箱密码等敏感字段。"""
         limit = request.args.get("limit", default=5000, type=int)
-        archived = str(request.args.get("archived", default="0") or "0").lower()
         status_filters, filter_error = _account_status_filter_args()
         if filter_error:
             return jsonify({"ok": False, "error": filter_error}), 400
@@ -569,7 +572,6 @@ def create_app(auth_code: str | None = None) -> Flask:
             snapshot = db.list_account_plan_check_statuses(
                 limit=page_size,
                 offset=offset,
-                archived=archived,
                 **status_filters,
                 q=q,
                 date_from=date_from,
@@ -579,7 +581,6 @@ def create_app(auth_code: str | None = None) -> Flask:
         else:
             snapshot = db.list_account_plan_check_statuses(
                 limit=max(1, min(5000, limit)),
-                archived=archived,
                 **status_filters,
                 q=q,
                 date_from=date_from,
@@ -850,42 +851,6 @@ def create_app(auth_code: str | None = None) -> Flask:
             pass
         return jsonify({"ok": True, "log": content, "running": running})
 
-    @app.post("/api/accounts/<int:acc_id>/archive")
-    def api_account_archive(acc_id: int):
-        """归档/取消归档一个账号。Body {archived: true|false}。"""
-        data = request.get_json(silent=True) or {}
-        archived = bool(data.get("archived", True))
-        updated = db.archive_account(acc_id=acc_id, archived=archived)
-        if not updated:
-            return jsonify({"ok": False, "error": "账号不存在"}), 404
-        return jsonify({"ok": True, "updated": True, "id": acc_id, "archived": archived})
-
-    @app.post("/api/accounts/archive-bulk")
-    def api_accounts_archive_bulk():
-        """批量归档/取消归档账号。Body {account_ids:[...], archived:true|false}。"""
-        data = request.get_json(silent=True) or {}
-        ids = data.get("account_ids") or data.get("ids") or []
-        archived = bool(data.get("archived", True))
-        if not isinstance(ids, list) or not ids:
-            return jsonify({"ok": False, "error": "account_ids 必须是非空数组"}), 400
-        if len(ids) > 5000:
-            return jsonify({"ok": False, "error": "单次最多归档 5000 个账号"}), 400
-        account_ids = []
-        skipped = []
-        seen = set()
-        for raw in ids:
-            try:
-                acc_id = int(raw)
-            except (TypeError, ValueError):
-                skipped.append({"id": raw, "reason": "ID 非法"})
-                continue
-            if acc_id in seen:
-                continue
-            seen.add(acc_id)
-            account_ids.append(acc_id)
-        updated, db_skipped = db.archive_accounts(account_ids=account_ids, archived=archived)
-        skipped.extend(db_skipped)
-        return jsonify({"ok": True, "updated": updated, "updated_count": len(updated), "archived": archived, "skipped": skipped})
 
     @app.post("/api/accounts/<int:acc_id>/delete")
     def api_account_delete(acc_id: int):
@@ -1666,7 +1631,6 @@ def create_app(auth_code: str | None = None) -> Flask:
     @app.get("/api/codex")
     def api_codex_list():
         rows = db.list_codex_accounts(
-            archived=str(request.args.get("archived", default="0") or "0").lower(),
             date_from=str(request.args.get("date_from", default="") or "").strip() or None,
             date_to=str(request.args.get("date_to", default="") or "").strip() or None,
         )
@@ -1696,52 +1660,6 @@ def create_app(auth_code: str | None = None) -> Flask:
             "accounts": rows[:limit],
         })
 
-    @app.post("/api/codex/archive")
-    def api_codex_archive():
-        """归档/取消归档一条 Codex 授权凭证。Body {filename, archived}。"""
-        data = request.get_json(silent=True) or {}
-        filename = str(data.get("filename") or "").strip()
-        archived = bool(data.get("archived", True))
-        if not filename:
-            return jsonify({"ok": False, "error": "filename 必填"}), 400
-        try:
-            rec = db.archive_codex(filename=filename, archived=archived)
-        except ValueError as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
-        if rec is None:
-            return jsonify({"ok": False, "error": f"凭证不存在: {filename}"}), 404
-        return jsonify({"ok": True, "filename": filename, "archived": archived, "record": rec})
-
-    @app.post("/api/codex/archive-bulk")
-    def api_codex_archive_bulk():
-        """批量归档/取消归档 Codex 授权凭证。Body {filenames:[...], archived}。"""
-        data = request.get_json(silent=True) or {}
-        filenames = data.get("filenames") or []
-        archived = bool(data.get("archived", True))
-        if not isinstance(filenames, list) or not filenames:
-            return jsonify({"ok": False, "error": "filenames 必须是非空数组"}), 400
-        if len(filenames) > 1000:
-            return jsonify({"ok": False, "error": "单次最多 1000 个"}), 400
-        updated = []
-        skipped = []
-        seen = set()
-        for fname in filenames:
-            if not isinstance(fname, str) or not fname:
-                skipped.append({"filename": str(fname), "reason": "非法文件名"})
-                continue
-            if fname in seen:
-                continue
-            seen.add(fname)
-            try:
-                rec = db.archive_codex(filename=fname, archived=archived)
-            except ValueError as exc:
-                skipped.append({"filename": fname, "reason": str(exc)})
-                continue
-            if rec is None:
-                skipped.append({"filename": fname, "reason": "凭证不存在"})
-            else:
-                updated.append({"filename": fname, "archived": archived})
-        return jsonify({"ok": True, "updated": updated, "updated_count": len(updated), "archived": archived, "skipped": skipped})
 
     @app.get("/api/codex/download/<path:filename>")
     def api_codex_download(filename: str):
@@ -2663,5 +2581,8 @@ def create_app(auth_code: str | None = None) -> Flask:
                 else f"⚠️ 已写入文件但热加载失败（{reload_err}），需重启 Web 服务才能生效"
             ),
         })
+    @app.post("/api/<path:unmatched_api_path>")
+    def api_unmatched_post(unmatched_api_path: str):
+        abort(404)
 
     return app

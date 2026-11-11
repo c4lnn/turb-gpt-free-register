@@ -190,19 +190,6 @@ class SmsBowerConfigTests(unittest.TestCase):
         update_config.assert_called_once_with(updates)
         reload_all.assert_called_once()
 
-    def test_frontend_exposes_smsbower_provider_and_separate_section(self):
-        template_dir = Path(__file__).parents[1] / "webui" / "templates"
-        source = (template_dir / "index.html").read_text(encoding="utf-8")
-        self.assertIn("{value:'smsbower', label:'SMSBower'}", source)
-        self.assertIn("key.startsWith('SMSBOWER_')", source)
-        self.assertIn("'GrizzlySMS', 'SMSBower', 'H 接码'", source)
-        self.assertIn("/api/smsbower/metadata", source)
-        self.assertIn("SMSBOWER_SERVICE", source)
-        self.assertIn("SMSBOWER_COUNTRY", source)
-        self.assertIn("刷新选项", source)
-        self.assertIn("data-smsbower-search", source)
-        self.assertIn("搜索名称、代码或 ID", source)
-        self.assertIn("filterSmsbowerSelect", source)
 
     def test_metadata_endpoint_returns_dropdown_options(self):
         metadata = {

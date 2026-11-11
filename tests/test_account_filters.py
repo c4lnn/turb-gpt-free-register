@@ -139,6 +139,14 @@ class AccountFilterTests(unittest.TestCase):
             with ExitStack() as stack:
                 stack.enter_context(patch.object(web_app.db, "_ACCOUNTS_JSON", accounts_path))
                 stack.enter_context(patch.object(web_app.db, "_render_static_viewer"))
+                for name, value in (
+                    ("validate_runtime_storage", None),
+                    ("migrate_email_pool_statuses", {}),
+                    ("migrate_account_status_contracts", {}),
+                    ("recover_interrupted_codex_operations", 0),
+                    ("recover_interrupted_totp_setups", 0),
+                ):
+                    stack.enter_context(patch.object(web_app.db, name, return_value=value))
                 stack.enter_context(patch.object(web_app.db, "list_account_plan_check_statuses", return_value={
                     "items": [], "total": 0, "offset": 3, "limit": 3, "revision": "0",
                 }))
@@ -151,7 +159,7 @@ class AccountFilterTests(unittest.TestCase):
                 app = web_app.create_app(auth_code="test-auth")
                 client = app.test_client()
                 response = client.get(
-                    "/api/accounts/plan-check-status?page=2&page_size=3&archived=all"
+                    "/api/accounts/plan-check-status?page=2&page_size=3&archived=only"
                     "&email_source=icloud&plan=plus&codex_auth_status=failed"
                     "&codex_operation_status=running&live_check_status=live"
                     "&q=needle&date_from=2026-08-01&date_to=2026-08-02",
@@ -160,7 +168,7 @@ class AccountFilterTests(unittest.TestCase):
 
                 self.assertEqual(response.status_code, 200)
                 kwargs = web_app.db.list_account_plan_check_statuses.call_args.kwargs
-                self.assertEqual(kwargs["archived"], "all")
+                self.assertNotIn("archived", kwargs)
                 self.assertEqual(kwargs["email_source_filter"], "icloud")
                 self.assertEqual(kwargs["plan_filter"], "plus")
                 self.assertEqual(kwargs["codex_auth_status_filter"], "failed")

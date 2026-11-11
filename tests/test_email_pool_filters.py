@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
 from webui.app import create_app
@@ -94,36 +93,6 @@ class EmailPoolFilterApiTests(unittest.TestCase):
             mocked.assert_called_once_with(status="disabled", limit=1_000_000)
 
 
-class EmailPoolFilterTemplateTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.template = (
-            Path(__file__).parents[1] / "webui" / "templates" / "index.html"
-        ).read_text(encoding="utf-8")
-
-    def test_status_filter_exposes_all_supported_values(self):
-        self.assertIn('id="poolStatusV2Wrap"', self.template)
-        self.assertIn('id="poolStatusV2Btn"', self.template)
-        for value, label in (
-            ("all", "全部状态"),
-            ("available", "可用"),
-            ("registering", "注册中"),
-            ("used", "已用"),
-            ("failed", "失败"),
-            ("disabled", "已停用"),
-        ):
-            self.assertIn(f'data-value="{value}" role="option">{label}</button>', self.template)
-
-    def test_search_and_request_use_separate_query_parameters(self):
-        self.assertIn('placeholder="搜索邮箱"', self.template)
-        self.assertNotIn('placeholder="搜索邮箱、状态…"', self.template)
-        self.assertIn("const status = getPoolStatus();", self.template)
-        self.assertIn("&status=${encodeURIComponent(status)}&q=${encodeURIComponent(q)}`", self.template)
-
-    def test_filter_changes_reset_expected_state(self):
-        self.assertIn("function onPoolStatusChange() {", self.template)
-        self.assertIn("PAGERS.outlook.page = 1;\n  OUTLOOK_SELECTED.clear();\n  loadOutlook();", self.template)
-        self.assertIn("PAGERS.outlook.page = 1; loadOutlook();", self.template)
 
 
 if __name__ == "__main__":

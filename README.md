@@ -52,13 +52,25 @@ EMAIL_SOURCE = "outlook,generic_api"
 - 批量补跑 Codex，补跑线程数每次提交即时生效。
 - 管理账号、邮箱池、Codex 凭证；账号页支持复制全部/选中整行，邮箱池列表展示导入时间、已用时间和状态。
 - 配置页支持热加载，保存后无需重启。
+- WebUI 使用 React/Vite 单页控制台；生产通过 Flask 同源提供构建资源，账号与邮箱凭证仍遵守现有按需读取边界。
 
+前端构建与运行：
+
+```bash
+cd webui/frontend
+npm ci
+npm run build
+cd ../..
+python web.py --port 5000
+```
+
+测试实例使用 `python web.py --port 5100`。前端本地开发使用 `cd webui/frontend && npm run dev`；Vite 将 `/api`、`/login`、`/logout` 与 favicon 代理到测试 WebUI `5100`。发布部署前必须先构建，Flask 从 `webui/frontend/dist` 提供登录后的控制台和静态资源。
 ---
 
 ## 环境要求
 
 - Python 3.11+（`wreq==0.13.0` 要求；本轮实测 Python 3.12.15）
-- Node.js 18+，需具备 `node:vm`、WebCrypto 和可用的 Intl/IANA 时区数据；本轮实测 v22.19.0
+- Node.js `20.19+` 或 `22.12+`（Vite 8 要求；同时需具备 `node:vm`、WebCrypto 和可用的 Intl/IANA 时区数据；本轮实测 v22.19.0）
 - 可用代理、系统代理/VPN
 - 如启用 Codex 自动授权：需要接码平台配置
 
@@ -330,6 +342,25 @@ CPA_MANAGEMENT_KEY = "你的CPA管理密钥"
 ./webui.sh logs       # 查看实时日志
 ```
 
+React 控制台由 Flask 同源提供；首次部署或前端源码更新后，需先构建 `webui/frontend/dist`：
+
+```bash
+cd webui/frontend
+npm ci
+npm run build
+cd ../..
+```
+
+本地热更新开发时，先在项目根目录启动测试实例 `python web.py --port 5100`，再启动 Vite：
+
+```bash
+cd webui/frontend
+npm run dev -- --host 127.0.0.1 --port 5173
+```
+
+Vite 将 `/api/*`、`/login`、`/logout` 与 `/favicon.svg` 转发至 `5100`；访问 `http://127.0.0.1:5173/login` 登录后可在 Vite 地址使用热更新控制台。
+
+
 脚本默认启动 `http://127.0.0.1:5000`，日志写入 `logs/webui.log`，PID 写入 `run/webui.pid`。
 
 可通过环境变量调整：
@@ -371,8 +402,8 @@ WebUI 页面说明：
 | 页面 | 功能 |
 |---|---|
 | 注册 | 设置注册数量、线程数，启动批量注册，查看任务和日志 |
-| 账号 | 查看账号、复制 token、补跑 Codex、批量删除账号 |
-| Codex 授权 | 查看/下载/删除 `codex_accounts/` 凭证 |
+| 账号 | 查看保留账号、复制 token、补跑 Codex、批量删除账号 |
+| Codex 授权 | 查看、下载、删除 `codex_accounts/` 凭证及管理导出记录 |
 | 邮箱池 | 导入邮箱、筛选来源、标记可用/失败、删除邮箱 |
 | 配置 | 修改运行配置并热加载，含 Codex、邮箱、代理、人工节奏等 |
 
