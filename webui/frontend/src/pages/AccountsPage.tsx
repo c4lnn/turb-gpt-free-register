@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
-import { Copy, Download, MoreHorizontal, RefreshCw } from 'lucide-react'
+import { Copy, Download, Eye, EyeOff, MoreHorizontal, RefreshCw } from 'lucide-react'
 import { ConfirmAction } from '@/components/app/confirm-action'
 import { StatusBadge } from '@/components/app/status-badge'
 import { TableToolbar } from '@/components/app/table-toolbar'
@@ -50,6 +50,12 @@ const queryLabels: Record<string, string> = { pending: '待查询', queued: '查
 const categoryLabels: Record<string, string> = { free_trial_eligible: '有套餐优惠', free_no_trial: '无套餐优惠', paid: '付费套餐', unknown: '未知' }
 const formats: Record<string, string> = { access_token: 'AT', email_access_token: '邮箱----AT', email_access_token_totp: '邮箱----AT----2FA' }
 const skipLabels: Record<string, string> = { missing_access_token: '无 AT', missing_email: '无邮箱', empty: '值为空' }
+const PASSWORD_DISPLAY_LENGTH = 14
+const PASSWORD_MASK = '●'.repeat(PASSWORD_DISPLAY_LENGTH)
+
+function passwordPreview(password: string) {
+  return password.length <= PASSWORD_DISPLAY_LENGTH ? password : `${password.slice(0, 6)}...${password.slice(-5)}`
+}
 
 function post(body: unknown = {}) { return { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } }
 function errorText(error: unknown) { return error instanceof Error ? error.message : '请求失败' }
@@ -121,6 +127,7 @@ export default function AccountsPage() {
   const [logRunning, setLogRunning] = useState(false)
   const [promo, setPromo] = useState<Account | null>(null)
   const [totp, setTotp] = useState<{ id: number; email: string; code: string; expires: number } | null>(null)
+  const [visiblePasswords, setVisiblePasswords] = useState<Set<number>>(() => new Set())
   const [now, setNow] = useState(Date.now())
   const request = useRef<AbortController | null>(null)
   const revision = useRef<string | undefined>(undefined)
@@ -150,6 +157,7 @@ export default function AccountsPage() {
     request.current?.abort()
     const controller = new AbortController(); request.current = controller
     setLoading(true)
+    setVisiblePasswords(new Set())
     try {
       const result = await api<ListResult>(`/api/accounts?${query}`, { signal: controller.signal })
       if (controller.signal.aborted) return
@@ -300,7 +308,7 @@ export default function AccountsPage() {
   const canStop = selectedRows.some((account) => account.codex_capabilities?.can_stop === true)
 
   return <div className="flex min-w-0 max-w-full flex-col gap-4">
-    <div><h1 className="text-xl font-semibold">账号管理</h1><p className="text-sm text-muted-foreground">密码按现有账号列表字段显示；Token 和 TOTP 密钥仅在明确操作时读取，状态每 5 秒更新。</p></div>
+    <div><h1 className="text-xl font-semibold">账号管理</h1><p className="text-sm text-muted-foreground">密码默认脱敏，点击眼睛按需查看；Token 和 TOTP 密钥仅在明确操作时读取，状态每 5 秒更新。</p></div>
     {error && <Alert variant="destructive"><AlertTitle>账号加载失败</AlertTitle><AlertDescription>{error}</AlertDescription></Alert>}
     {notice && <Alert><AlertTitle>操作结果</AlertTitle><AlertDescription className="max-h-40 overflow-auto whitespace-pre-wrap break-words">{notice}</AlertDescription></Alert>}
     <Card className="min-w-0"><CardHeader><CardTitle>已注册账号</CardTitle><CardDescription>共 {total} 个 · 已选 {selected.length} 个；翻页保留选择，改变筛选清空选择。</CardDescription></CardHeader><CardContent className="flex min-w-0 flex-col gap-4">
@@ -350,19 +358,18 @@ export default function AccountsPage() {
         </div>
       </div>
       <p className="text-sm text-muted-foreground sm:hidden">可左右滑动表格，查看全部账号列。</p>
-      <div role="region" aria-label="账号表格，可横向滚动查看全部列" tabIndex={0} className="min-w-0 max-w-full overflow-x-auto rounded-md border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"><Table><TableHeader><TableRow>
+      <div role="region" aria-label="账号表格，可横向滚动查看全部列" tabIndex={0} className="min-w-0 max-w-full overflow-x-auto rounded-md border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"><Table className="w-max min-w-full table-fixed"><TableHeader><TableRow>
         <TableHead className="w-10"><Checkbox aria-label="选择当前页全部账号" disabled={!accounts.length} checked={allSelected} indeterminate={!allSelected && visibleIds.some((id) => selected.includes(id))} onCheckedChange={(checked) => { const shouldSelect = checked === true; accounts.forEach((a) => { if (shouldSelect) selectedAccounts.current.set(a.id, a); else selectedAccounts.current.delete(a.id) }); setSelected((ids) => shouldSelect ? [...new Set([...ids, ...visibleIds])] : ids.filter((id) => !visibleIds.includes(id))) }} /></TableHead>
-        <TableHead>ID</TableHead><TableHead>邮箱 / 用户名</TableHead><TableHead>来源</TableHead><TableHead>AT / 查活</TableHead><TableHead>密码</TableHead><TableHead>套餐</TableHead><TableHead>Codex</TableHead><TableHead>2FA</TableHead><TableHead>备注 / 时间</TableHead><TableHead>操作</TableHead>
-      </TableRow></TableHeader><TableBody>{!accounts.length ? <TableRow><TableCell colSpan={11} className="h-24 text-center text-muted-foreground">{loading ? '正在加载…' : '没有符合条件的账号'}</TableCell></TableRow> : accounts.map((a) => {
+        <TableHead>ID</TableHead><TableHead className="w-[22rem]">邮箱</TableHead><TableHead className="w-28">AT</TableHead><TableHead>密码</TableHead><TableHead>套餐</TableHead><TableHead>Codex</TableHead><TableHead>2FA</TableHead><TableHead>备注 / 时间</TableHead><TableHead>操作</TableHead>
+      </TableRow></TableHeader><TableBody>{!accounts.length ? <TableRow><TableCell colSpan={10} className="h-24 text-center text-muted-foreground">{loading ? '正在加载…' : '没有符合条件的账号'}</TableCell></TableRow> : accounts.map((a) => {
         const codexStatus = ['queued', 'running', 'canceled'].includes(a.codex_operation_status || '') ? a.codex_operation_status || 'unknown' : a.codex_auth_status || 'unknown'
         const codexLabel = ['queued', 'running', 'canceled'].includes(a.codex_operation_status || '') ? operationLabels[codexStatus] : authLabels[codexStatus]
         const setupBusy = ['queued', 'running'].includes(a.totp_setup_status || '')
         return <TableRow key={a.id} data-state={selected.includes(a.id) ? 'selected' : undefined}>
           <TableCell><Checkbox aria-label={`选择 ${a.email}`} checked={selected.includes(a.id)} onCheckedChange={(checked) => toggle(a, checked === true)} /></TableCell><TableCell className="font-mono text-xs">{a.id}</TableCell>
-          <TableCell><div className="flex max-w-64 flex-col items-start gap-1"><Button variant="link" size="sm" className="max-w-full" title={a.email} onClick={() => void copyPlain(a.email)}><span className="truncate">{a.email}</span></Button><span className="text-xs text-muted-foreground">{a.user_name || '—'}</span></div></TableCell>
-          <TableCell className="text-xs">{sources[a.email_source || 'unknown'] || a.email_source}</TableCell>
-          <TableCell><div className="flex flex-col items-start gap-1"><Button size="sm" variant="outline" disabled={busy || !a.has_access_token} onClick={() => void copySecret(a, 'access_token')}>{a.has_access_token ? '复制 AT' : '无 AT'}</Button><span title={[a.live_check_error, a.live_checked_at, a.live_check_fingerprint_text].filter(Boolean).join('\n')}><StatusBadge status={a.live_check_status} label={liveLabels[a.live_check_status || 'unknown']} /></span>{(a.token_expired || a.needs_live_check) && <span className="text-xs text-muted-foreground" title={a.token_expires_at}>需查活刷新</span>}</div></TableCell>
-          <TableCell><span className="max-w-36 truncate font-mono text-xs" title={a.password || undefined}>{a.password ? a.password.length > 18 ? `${a.password.slice(0, 18)}…` : a.password : '—'}</span></TableCell>
+          <TableCell className="w-[22rem] max-w-[22rem]"><div className="w-full max-w-[22rem] flex flex-col items-start gap-1"><Button variant="link" size="sm" className="h-7 w-full justify-start px-0" title={a.email} onClick={() => void copyPlain(a.email)}><span className="truncate">{a.email}</span></Button><span className="w-full truncate text-xs text-muted-foreground">{sources[a.email_source || 'unknown'] || a.email_source || '未知'}</span></div></TableCell>
+          <TableCell className="w-28"><div className="flex flex-col items-start gap-1"><Button size="sm" variant="outline" disabled={busy || !a.has_access_token} onClick={() => void copySecret(a, 'access_token')}>{a.has_access_token ? '复制 AT' : '无 AT'}</Button><span title={[a.live_check_error, a.live_checked_at, a.live_check_fingerprint_text].filter(Boolean).join('\n')}><StatusBadge status={a.live_check_status} label={liveLabels[a.live_check_status || 'unknown']} /></span>{(a.token_expired || a.needs_live_check) && <span className="text-xs text-muted-foreground" title={a.token_expires_at}>需查活刷新</span>}</div></TableCell>
+          <TableCell><div className="flex items-center gap-1">{a.password ? <>{visiblePasswords.has(a.id) ? <Button type="button" size="sm" variant="link" className="h-7 w-[14ch] shrink-0 justify-start px-0 font-mono text-xs" aria-label="复制密码" onClick={() => void copyPlain(a.password!, '已复制密码')}><span className="truncate">{passwordPreview(a.password)}</span></Button> : <span className="w-[14ch] shrink-0 whitespace-nowrap font-mono text-xs text-foreground">{PASSWORD_MASK}</span>}<Button type="button" size="icon-lg" variant="ghost" className="min-h-11 min-w-11" aria-label={visiblePasswords.has(a.id) ? '隐藏密码' : '显示密码'} onClick={() => setVisiblePasswords((current) => { const next = new Set(current); if (next.has(a.id)) next.delete(a.id); else next.add(a.id); return next })}>{visiblePasswords.has(a.id) ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}</Button></> : <span className="text-xs text-muted-foreground">未设置</span>}</div></TableCell>
           <TableCell><PlanCell account={a} onDetails={() => setPromo(a)} /></TableCell>
           <TableCell><span title={a.codex_error}><StatusBadge status={codexStatus} label={codexLabel || '未知'} /></span></TableCell>
           <TableCell><div className="flex flex-col items-start gap-1" title={[a.totp_setup_message, a.totp_setup_error, a.twofa_stage, a.twofa_error_code].filter(Boolean).join('\n')}>
