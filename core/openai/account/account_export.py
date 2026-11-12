@@ -242,7 +242,21 @@ def fetch_session(session: BrowserSession) -> dict:
     data = resp.json()
 
     if not data.get("accessToken"):
-        logger.error("[Session] 响应中没有 accessToken")
+        response_headers = getattr(resp, "headers", {}) or {}
+        content_type = response_headers.get("Content-Type") or response_headers.get("content-type") or "<missing>"
+        response_url = urlparse(str(getattr(resp, "url", "") or url))
+        response_target = f"{response_url.hostname or '<unknown>'}{response_url.path or '/'}"
+        user = data.get("user")
+        account = data.get("account")
+        payload_keys = ",".join(sorted(str(key) for key in data)) or "<empty>"
+        user_fields = ",".join(sorted(str(key) for key in user)) if isinstance(user, dict) else type(user).__name__
+        account_fields = ",".join(sorted(str(key) for key in account)) if isinstance(account, dict) else type(account).__name__
+        logger.error(
+            "[Session] 响应缺少 accessToken: status=%s url=%s content_type=%s "
+            "payload_type=%s payload_keys=%s user_fields=%s account_fields=%s expires_present=%s",
+            getattr(resp, "status_code", "<unknown>"), response_target, content_type,
+            type(data).__name__, payload_keys, user_fields, account_fields, bool(data.get("expires")),
+        )
         raise RuntimeError("未拿到 accessToken，登录态可能未建立")
 
     user = data.get("user") or {}

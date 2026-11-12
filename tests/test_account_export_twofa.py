@@ -97,6 +97,36 @@ class _ReauthSession(_CircuitSession):
         return response
 
 class AccountExportTwofaTests(unittest.TestCase):
+
+    def test_fetch_session_missing_access_token_logs_sanitized_response_shape(self):
+        session = Mock()
+        session.get_nextauth_headers.return_value = {}
+        response = Mock(
+            status_code=200,
+            url="https://chatgpt.com/api/auth/session?secret-query=do-not-log",
+            headers={"Content-Type": "application/json"},
+        )
+        response.json.return_value = {
+            "user": {"id": "private-user-id", "email": "private@example.test"},
+            "account": {"planType": "free"},
+        }
+        session.get.return_value = response
+
+        with self.assertLogs(account_export.logger, level="ERROR") as captured:
+            with self.assertRaisesRegex(RuntimeError, "未拿到 accessToken"):
+                account_export.fetch_session(session)
+
+        output = "\n".join(captured.output)
+        self.assertIn("status=200", output)
+        self.assertIn("url=chatgpt.com/api/auth/session", output)
+        self.assertIn("content_type=application/json", output)
+        self.assertIn("payload_keys=account,user", output)
+        self.assertIn("user_fields=email,id", output)
+        self.assertIn("account_fields=planType", output)
+        self.assertIn("expires_present=False", output)
+        self.assertNotIn("secret-query", output)
+        self.assertNotIn("private-user-id", output)
+        self.assertNotIn("private@example.test", output)
     def test_otp_temporary_403_reuses_same_code_session_and_backs_off(self):
         session = _OtpSession([_Response(403), _Response(403), _Response(200, {"continue_url": "https://chatgpt.com/callback"})])
         with patch("config.twofa.TWOFA_REAUTH_RETRY_DELAY", 2), \
