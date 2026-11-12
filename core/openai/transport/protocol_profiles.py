@@ -35,7 +35,7 @@ def align_browser_profile(profile, name):
                    send_client_hints=family in ('chrome', 'edge'),
                    navigator_vendor='Apple Computer, Inc.' if family == 'safari' else '' if family == 'firefox' else 'Google Inc.')
     if family in ('chrome', 'edge'):
-        # 默认 Chrome146 保持工程现有品牌顺序，其他版本仅同步基本版本信息。
+        # The selected protocol build is the single source for both version headers.
         profile.update(chrome_major=major, chrome_full_version=version,
                        safari_version='', safari_webkit_version='537.36')
         brand = 'Microsoft Edge' if family == 'edge' else 'Google Chrome'
@@ -46,7 +46,8 @@ def align_browser_profile(profile, name):
                                  + (f' Edg/{version}' if family == 'edge' else ''))
     else:
         profile.update(sec_ch_ua='', sec_ch_ua_full_version_list='', sec_ch_ua_mobile='?0',
-                       chrome_major='', chrome_full_version='')
+                       chrome_major='', chrome_full_version='', sec_ch_ua_platform_version='',
+                       sec_ch_ua_arch='', sec_ch_ua_bitness='', sec_ch_ua_model='')
         if family == 'safari':
             profile.update(safari_version=version, safari_webkit_version='605.1.15')
             profile['user_agent'] = ('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '

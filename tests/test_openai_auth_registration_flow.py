@@ -40,13 +40,19 @@ class _ProtocolSession:
     def __init__(self):
         self.device_id = "device-id"
         self.document_navigation_id = "document-1"
-        self.browser_profile = {"user_agent": "Test UA", "navigator_language": "ja-JP"}
+        self.browser_profile = {
+            "user_agent": "Test UA", "navigator_language": "ja-JP",
+            "chrome_full_version": "152.0.0.0", "send_client_hints": True,
+            "sec_ch_ua_full_version_list": '"Chromium";v="152.0.0.0"',
+            "sec_ch_ua_platform_version": '"15.0.0"', "sec_ch_ua_arch": '"x86"',
+            "sec_ch_ua_bitness": '"64"', "sec_ch_ua_model": '""',
+        }
         self.posts = []
         self.gets = []
         self.get_navigation_ids = []
 
-    def get_auth_headers(self, referer=""):
-        return {
+    def get_auth_headers(self, referer="", *, include_high_entropy=False):
+        headers = {
             "accept": "application/json",
             "content-type": "application/json",
             "sec-fetch-site": "same-origin",
@@ -57,9 +63,25 @@ class _ProtocolSession:
             "x-access-flow-invocation-id": str(uuid.uuid4()),
             "x-openai-document-navigation-id": self.document_navigation_id,
         }
+        if include_high_entropy:
+            headers.update(self._high_entropy_headers())
+        return headers
 
-    def get_auth_navigate_headers(self, referer="", **_kwargs):
-        return {"referer": referer}
+    def get_auth_navigate_headers(self, referer="", *, include_high_entropy=False, **_kwargs):
+        headers = {"referer": referer}
+        if include_high_entropy:
+            headers.update(self._high_entropy_headers())
+        return headers
+
+    def _high_entropy_headers(self):
+        return {
+            "sec-ch-ua-full-version": f'"{self.browser_profile["chrome_full_version"]}"',
+            "sec-ch-ua-full-version-list": self.browser_profile["sec_ch_ua_full_version_list"],
+            "sec-ch-ua-platform-version": self.browser_profile["sec_ch_ua_platform_version"],
+            "sec-ch-ua-arch": self.browser_profile["sec_ch_ua_arch"],
+            "sec-ch-ua-bitness": self.browser_profile["sec_ch_ua_bitness"],
+            "sec-ch-ua-model": self.browser_profile["sec_ch_ua_model"],
+        }
 
     def get_chatgpt_headers(self, referer=""):
         return {"referer": referer}
@@ -153,7 +175,42 @@ class OpenAIRegistrationFlowTests(unittest.TestCase):
             for _url, headers, _redirects in session.gets
         ))
 
-    def test_validate_and_create_account_reuse_otp_page_navigation_id(self):
+
+    def test_register_and_otp_navigation_default_omit_high_entropy_headers(self):
+        session = _ProtocolSession()
+
+        openai_auth.register_user(
+            session, "user@example.test", "password-placeholder", "sentinel-placeholder",
+        )
+        openai_auth.navigate_email_otp_send(session)
+
+        self.assertFalse(any(name.startswith("sec-ch-ua-") for name in session.posts[0][1]))
+        self.assertFalse(any(name.startswith("sec-ch-ua-") for name in session.gets[0][1]))
+
+    def test_auth_high_entropy_headers_are_opt_in_per_request(self):
+        positive = _ProtocolSession()
+        negative = _ProtocolSession()
+        expected = {
+            "sec-ch-ua-full-version", "sec-ch-ua-full-version-list",
+            "sec-ch-ua-platform-version", "sec-ch-ua-arch",
+            "sec-ch-ua-bitness", "sec-ch-ua-model",
+        }
+
+        openai_auth.navigate_email_otp_send(positive, include_high_entropy=True)
+        openai_auth.navigate_email_otp_send(negative)
+        positive_nav = positive.gets[0][1]
+        negative_nav = negative.gets[0][1]
+        self.assertTrue(expected.issubset(positive_nav))
+        self.assertTrue(expected.isdisjoint(negative_nav))
+
+        openai_auth.validate_email_otp(positive, "123456", include_high_entropy=True)
+        openai_auth.validate_email_otp(negative, "123456")
+        positive_validate = positive.posts[-1][1]
+        negative_validate = negative.posts[-1][1]
+        self.assertTrue(expected.issubset(positive_validate))
+        self.assertTrue(expected.isdisjoint(negative_validate))
+
+    def test_validate_and_create_account_default_omit_high_entropy_headers(self):
         session = _ProtocolSession()
         openai_auth.navigate_email_otp_send(session)
         navigation_id = session.document_navigation_id
@@ -166,6 +223,8 @@ class OpenAIRegistrationFlowTests(unittest.TestCase):
         self.assertEqual(validate_headers["x-openai-document-navigation-id"], navigation_id)
         self.assertEqual(validate_headers["referer"], "https://auth.openai.com/email-verification")
         self.assertEqual(create_headers["x-openai-document-navigation-id"], navigation_id)
+        self.assertNotIn("sec-ch-ua-full-version", validate_headers)
+        self.assertNotIn("sec-ch-ua-full-version", create_headers)
 
     def test_registration_auth_json_posts_use_root_referer_and_preserve_payloads(self):
         session = _ProtocolSession()
@@ -1126,6 +1185,7 @@ class OpenAIRegistrationFlowTests(unittest.TestCase):
         url, headers, allow_redirects = session.gets[0]
         self.assertEqual(url, "https://auth.openai.com/oauth/authorize?state=test")
         self.assertNotIn("sec-fetch-user", headers)
+        self.assertFalse(any(name.startswith("sec-ch-ua-") for name in headers))
         self.assertTrue(allow_redirects)
 
     def test_follow_authorize_default_keeps_user_initiated_header(self):

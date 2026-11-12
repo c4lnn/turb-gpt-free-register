@@ -52,7 +52,11 @@ class RegistrationPipelineTests(unittest.TestCase):
     @contextmanager
     def _pipeline(self, otp_result, kind="new_password", step="password"):
         session = _Session()
-        observed = {"created": False, "saved": False, "flows": []}
+        observed = {
+            "created": False, "saved": False, "flows": [],
+            "register_high_entropy": [], "navigate_high_entropy": [],
+            "validate_high_entropy": [],
+        }
 
         def request_sentinel(_session, flow):
             observed["flows"].append(flow)
@@ -66,6 +70,17 @@ class RegistrationPipelineTests(unittest.TestCase):
                 "_sentinel_so_header": None,
             }
 
+
+        def register_user(*_args, **kwargs):
+            observed["register_high_entropy"].append(kwargs.get("include_high_entropy", False))
+            return {"continue_url": "/api/accounts/email-otp/send"}
+
+        def navigate_email_otp_send(*_args, **kwargs):
+            observed["navigate_high_entropy"].append(kwargs.get("include_high_entropy", False))
+
+        def validate_email_otp(*_args, **kwargs):
+            observed["validate_high_entropy"].append(kwargs.get("include_high_entropy", False))
+            return otp_result
         def create_account(*_args):
             observed["created"] = True
             return {"continue_url": "https://chatgpt.com/api/auth/callback/openai"}
@@ -92,9 +107,6 @@ class RegistrationPipelineTests(unittest.TestCase):
                     else "https://auth.openai.com/create-account/password"},
                 "navigate_create_account_password": None,
                 "generate_registration_password": "Test-only-password!",
-                "register_user": {"continue_url": "/api/accounts/email-otp/send"},
-                "navigate_email_otp_send": None,
-                "validate_email_otp": otp_result,
                 "_finalize_registration_session": ({
                     "user": {"id": "test-user", "email": "user@example.com"},
                     "account": {"planType": "free"}, "expires": "2030-01-01T00:00:00Z",
@@ -103,6 +115,9 @@ class RegistrationPipelineTests(unittest.TestCase):
                 "release_email_if_unconsumed": False,
             }.items():
                 stack.enter_context(patch.object(registration, name, return_value=value))
+            stack.enter_context(patch.object(registration, "register_user", side_effect=register_user))
+            stack.enter_context(patch.object(registration, "validate_email_otp", side_effect=validate_email_otp))
+            stack.enter_context(patch.object(registration, "navigate_email_otp_send", side_effect=navigate_email_otp_send))
             stack.enter_context(patch.object(registration, "request_sentinel_token", side_effect=request_sentinel))
             stack.enter_context(patch.object(registration, "create_account", side_effect=create_account))
             stack.enter_context(patch.object(registration, "save_account_data", side_effect=save_account))
@@ -116,6 +131,20 @@ class RegistrationPipelineTests(unittest.TestCase):
             stack.enter_context(patch.object(email_provider, "resolve_email_source", return_value="manual"))
             yield session, observed
 
+
+    def test_registration_defaults_do_not_enable_auth_high_entropy_hints(self):
+        otp_result = {"page": {"type": "about_you"}, "continue_url": "/about-you"}
+        for kind in ("new_passwordless", "new_password"):
+            with self.subTest(kind=kind), self._pipeline(otp_result, kind=kind) as (session, observed), patch.object(
+                registration, "wait_for_otp", return_value="123456",
+            ):
+                result = registration.run_registration(
+                    "user@example.com", "Test User", "1995-01-01", otp_code="123456",
+                )
+            self.assertTrue(result["success"], msg=result)
+            self.assertEqual(observed["register_high_entropy"], [False])
+            self.assertEqual(observed["navigate_high_entropy"], [False])
+            self.assertEqual(observed["validate_high_entropy"], [False])
     def test_direct_callback_does_not_submit_profile_or_request_its_proof(self):
         with self._pipeline({
             "page": {"type": "external_url"},
@@ -348,7 +377,7 @@ class RegistrationPipelineTests(unittest.TestCase):
         )
 
     def test_password_is_logged_before_submission_and_survives_later_otp_failure(self):
-        def submit(*args):
+        def submit(*args, **_kwargs):
             self.assertIn("Test-only-password!", "\n".join(captured.output))
             return {"continue_url": "/api/accounts/email-otp/send"}
 

@@ -112,17 +112,69 @@ class SessionNavigationHeaderTests(unittest.TestCase):
         self.assertNotIn("referer", headers)
         self.assertNotIn("cache-control", headers)
 
-    def test_chrome146_client_hints_match_transport_profile(self):
-        # 传输后端已固定为 wreq，指纹取自 WREQ_EMULATION；此用例锁住头与指纹一致。
+    def test_browser_session_uses_chrome152_for_both_device_id_modes(self):
+        sessions = [
+            BrowserSession(proxy="", detect_exit_geo=False, server_device_id=False),
+            BrowserSession(proxy="", detect_exit_geo=False, server_device_id=True),
+        ]
+        try:
+            for session in sessions:
+                self.assertEqual(session.impersonate, "chrome152")
+                self.assertIn("Chrome/152.0.0.0", session.browser_profile["user_agent"])
+                headers = session.get_chatgpt_navigate_headers(referer="")
+                self.assertIn('v="152"', headers["sec-ch-ua"])
+                self.assertEqual(headers["sec-ch-ua-platform"], '"macOS"')
+                self.assertEqual(headers["sec-ch-ua-mobile"], "?0")
+            self.assertFalse(sessions[0].server_device_id)
+            self.assertTrue(sessions[1].server_device_id)
+        finally:
+            for session in sessions:
+                session.close()
+
+    def test_auth_high_entropy_headers_are_opt_in_as_one_complete_set(self):
         session = BrowserSession(proxy="", detect_exit_geo=False)
         try:
-            headers = session.get_chatgpt_navigate_headers(referer="")
-            self.assertEqual(
-                headers["sec-ch-ua"],
-                '"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"',
-            )
-            self.assertEqual(headers["sec-ch-ua-platform"], '"macOS"')
-            self.assertEqual(headers["sec-ch-ua-mobile"], "?0")
+            auth_default = session.get_auth_headers()
+            nav_default = session.get_auth_navigate_headers(referer="")
+            auth_enabled = session.get_auth_headers(include_high_entropy=True)
+            nav_enabled = session.get_auth_navigate_headers(referer="", include_high_entropy=True)
+            high_entropy = {
+                "sec-ch-ua-full-version": "chrome_full_version",
+                "sec-ch-ua-full-version-list": "sec_ch_ua_full_version_list",
+                "sec-ch-ua-platform-version": "sec_ch_ua_platform_version",
+                "sec-ch-ua-arch": "sec_ch_ua_arch",
+                "sec-ch-ua-bitness": "sec_ch_ua_bitness",
+                "sec-ch-ua-model": "sec_ch_ua_model",
+            }
+            expected = {
+                header: str(session.browser_profile[key])
+                for header, key in high_entropy.items()
+            }
+            non_auth = (session.get_sentinel_headers(), session.get_chatgpt_headers())
+        finally:
+            session.close()
+
+        for headers in (auth_default, nav_default, *non_auth):
+            self.assertTrue(set(expected).isdisjoint(headers))
+        for headers in (auth_enabled, nav_enabled):
+            self.assertEqual({name: headers[name] for name in expected}, expected)
+        self.assertEqual(auth_default["sec-ch-ua"], auth_enabled["sec-ch-ua"])
+        self.assertEqual(auth_default["sec-ch-ua-mobile"], auth_enabled["sec-ch-ua-mobile"])
+        self.assertEqual(auth_default["sec-ch-ua-platform"], auth_enabled["sec-ch-ua-platform"])
+
+    def test_auth_high_entropy_opt_in_rejects_incomplete_or_non_chromium_profile(self):
+        session = BrowserSession(proxy="", detect_exit_geo=False)
+        try:
+            session.browser_profile = {
+                "send_client_hints": True,
+                "chrome_full_version": "152.0.0.0",
+            }
+            with self.assertRaisesRegex(ValueError, "缺少高熵 Client Hints"):
+                session.get_auth_headers(include_high_entropy=True)
+
+            session.browser_profile = {"send_client_hints": False}
+            with self.assertRaisesRegex(ValueError, "仅支持 Chromium"):
+                session.get_auth_navigate_headers(include_high_entropy=True)
         finally:
             session.close()
 

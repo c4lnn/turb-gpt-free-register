@@ -30,7 +30,7 @@ class _AuthApiSession:
         self.auth_document_navigation_id = navigation_id
         self.calls = []
 
-    def get_auth_headers(self, referer):
+    def get_auth_headers(self, referer, *, include_high_entropy=False):
         return {"content-type": "application/json", "referer": referer}
 
     def attach_auth_document_navigation_header(self, headers):

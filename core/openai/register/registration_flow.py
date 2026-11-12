@@ -144,7 +144,7 @@ def _safe_registration_error_message(exc: Exception) -> str:
     return str(exc)
 
 
-def _validate_registration_otp(session, email, otp_after_ts, otp_code, state):
+def _validate_registration_otp(session, email, otp_after_ts, otp_code, state, *, include_high_entropy=False):
     current_otp = otp_code
     for attempt in range(1, 4):
         if current_otp is None:
@@ -160,6 +160,7 @@ def _validate_registration_otp(session, email, otp_after_ts, otp_code, state):
             return validate_email_otp(
                 session, current_otp, header, so_header,
                 referer="https://auth.openai.com/",
+                include_high_entropy=include_high_entropy,
             )
         except EmailOtpInvalidError:
             if attempt == 3:
@@ -390,7 +391,9 @@ def run_registration(
             human_delay("challenge")
             progress["password_state"] = "submission_unknown"
             try:
-                state = register_user(session, email, candidate, header, so_header)
+                state = register_user(
+                    session, email, candidate, header, so_header,
+                )
             except PasswordRegistrationRejectedError as exc:
                 progress["password_state"] = "rejected"
                 if kind != "new_passwordless":
@@ -444,7 +447,9 @@ def run_registration(
                 )
             visited.add(step)
             if step == "otp":
-                state = _validate_registration_otp(session, email, otp_after_ts, otp_code, state)
+                state = _validate_registration_otp(
+                    session, email, otp_after_ts, otp_code, state,
+                )
                 callback_referer = "https://auth.openai.com/email-verification"
             elif step == "totp":
                 state = verify_login_totp(session, state, totp_secret)

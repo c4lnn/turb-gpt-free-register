@@ -49,5 +49,37 @@ class BrowserLocaleFallbackTests(unittest.TestCase):
         self.assertEqual(profile["timezone_name"], fallback["timezone_name"])
 
 
+    def test_chromium_profile_unifies_full_versions_and_accepts_empty_model(self):
+        from core.openai.transport.protocol_profiles import align_browser_profile
+
+        profile = align_browser_profile(browser.build_browser_environment(base_profile={}), "chrome152")
+
+        self.assertEqual(profile["chrome_full_version"], "152.0.0.0")
+        self.assertIn('v="152.0.0.0"', profile["sec_ch_ua_full_version_list"])
+        self.assertEqual(profile["sec_ch_ua_model"], '""')
+        self.assertEqual(browser.validate_browser_profile(profile), [])
+
+    def test_non_chromium_profile_has_no_high_entropy_chromium_values(self):
+        from core.openai.transport.protocol_profiles import align_browser_profile
+
+        profile = align_browser_profile(browser.build_browser_environment(base_profile={}), "firefox140")
+
+        self.assertFalse(profile["send_client_hints"])
+        self.assertEqual(profile["chrome_full_version"], "")
+        self.assertEqual(profile["sec_ch_ua_full_version_list"], "")
+        self.assertEqual(profile["sec_ch_ua_platform_version"], "")
+        self.assertEqual(profile["sec_ch_ua_arch"], "")
+        self.assertEqual(profile["sec_ch_ua_bitness"], "")
+        self.assertEqual(profile["sec_ch_ua_model"], "")
+
+    def test_incomplete_chromium_profile_is_reported(self):
+        profile = browser.build_browser_environment(base_profile={})
+        del profile["sec_ch_ua_arch"]
+
+        issues = browser.validate_browser_profile(profile)
+
+        self.assertTrue(any("sec_ch_ua_arch" in issue for issue in issues))
+
+
 if __name__ == "__main__":
     unittest.main()

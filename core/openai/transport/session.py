@@ -198,11 +198,9 @@ class BrowserSession:
                 self.react_container_key = "__reactContainer$" + uuid.uuid4().hex[:11]
             self.react_resources_key = "__reactResources$" + self.react_container_key.split("$", 1)[1]
 
-            # 传输后端固定为 wreq；Web 配置热更新只影响后续新会话的指纹版本。
-            from config import browser as browser_cfg
+            # 所有 OpenAI 协议会话固定使用 Chrome 152；设备 ID 模式只控制身份初始化。
             from core.openai.transport.protocol_profiles import validate_protocol_profile, align_browser_profile
-            self.impersonate = "chrome152" if self.server_device_id else browser_cfg.WREQ_EMULATION
-            self.impersonate = validate_protocol_profile("wreq", str(self.impersonate).strip())
+            self.impersonate = validate_protocol_profile("wreq", "chrome152")
             from core.infra.wreq_session import WreqSession
             self.session = WreqSession(impersonate=self.impersonate, default_headers=False)
             logger.info("[协议会话] 后端=wreq 指纹=%s 实际实现=%s.%s",
@@ -528,7 +526,7 @@ class BrowserSession:
             "org": data.get("org") or data.get("isp") or data.get("connection", {}).get("org"),
         }
 
-    def _get_common_headers(self) -> dict:
+    def _get_common_headers(self, *, include_high_entropy: bool | None = None) -> dict:
         """获取通用请求头，优先使用本 BrowserSession 的稳定画像。"""
         profile = getattr(self, "browser_profile", {}) or {}
         headers = {
@@ -545,7 +543,8 @@ class BrowserSession:
                 headers["sec-ch-ua-mobile"] = str(profile.get("sec_ch_ua_mobile") or SEC_CH_UA_MOBILE)
             if profile.get("sec_ch_ua_platform") or SEC_CH_UA_PLATFORM:
                 headers["sec-ch-ua-platform"] = str(profile.get("sec_ch_ua_platform") or SEC_CH_UA_PLATFORM)
-            if SEND_HIGH_ENTROPY_CLIENT_HINTS:
+            use_high_entropy = SEND_HIGH_ENTROPY_CLIENT_HINTS if include_high_entropy is None else include_high_entropy
+            if use_high_entropy:
                 headers.update({
                     "sec-ch-ua-full-version-list": str(profile.get("sec_ch_ua_full_version_list") or SEC_CH_UA_FULL_VERSION_LIST),
                     "sec-ch-ua-platform-version": str(profile.get("sec_ch_ua_platform_version") or SEC_CH_UA_PLATFORM_VERSION),
@@ -681,12 +680,9 @@ class BrowserSession:
         })
         return self._attach_frontend_api_headers(headers)
 
-    def get_auth_headers(self, referer: str = "https://auth.openai.com/create-account/password") -> dict:
-        """
-        获取 auth.openai.com 域名的请求头。
-        用于步骤7、10、12。
-        """
-        headers = self._get_common_headers()
+    def get_auth_headers(self, referer: str = "https://auth.openai.com/create-account/password", *, include_high_entropy: bool = False) -> dict:
+        """获取 auth.openai.com 域名的请求头。"""
+        headers = self._get_common_headers(include_high_entropy=False)
         headers.update({
             "accept": "application/json",
             "content-type": "application/json",
@@ -697,14 +693,32 @@ class BrowserSession:
             "priority": "u=1, i",
             "origin": "https://auth.openai.com",
         })
-        return self._attach_auth_rum_headers(headers)
+        headers = self._attach_auth_rum_headers(headers)
+        return self._attach_auth_high_entropy_client_hints(headers, include_high_entropy)
 
-    def get_auth_navigate_headers(self, referer: str = "https://chatgpt.com/", user_initiated: bool = True, target_origin: str = "https://auth.openai.com") -> dict:
-        """
-        获取 auth.openai.com 导航请求头（用于GET页面请求）。
-        用于步骤4、5、8。
-        """
-        headers = self._get_common_headers()
+    def _attach_auth_high_entropy_client_hints(self, headers: dict, include: bool) -> dict:
+        if not include:
+            return headers
+        profile = getattr(self, "browser_profile", {}) or {}
+        if not profile.get("send_client_hints"):
+            raise ValueError("Auth 高熵 Client Hints 仅支持 Chromium fingerprint")
+        values = {
+            "sec-ch-ua-full-version": profile.get("chrome_full_version"),
+            "sec-ch-ua-full-version-list": profile.get("sec_ch_ua_full_version_list"),
+            "sec-ch-ua-platform-version": profile.get("sec_ch_ua_platform_version"),
+            "sec-ch-ua-arch": profile.get("sec_ch_ua_arch"),
+            "sec-ch-ua-bitness": profile.get("sec_ch_ua_bitness"),
+            "sec-ch-ua-model": profile.get("sec_ch_ua_model"),
+        }
+        missing = [name for name, value in values.items() if not isinstance(value, str) or not value.strip()]
+        if missing:
+            raise ValueError(f"Auth fingerprint 缺少高熵 Client Hints: {', '.join(missing)}")
+        headers.update(values)
+        return headers
+
+    def get_auth_navigate_headers(self, referer: str = "https://chatgpt.com/", user_initiated: bool = True, target_origin: str = "https://auth.openai.com", *, include_high_entropy: bool = False) -> dict:
+        """获取 auth.openai.com 导航请求头（用于 GET 页面请求）。"""
+        headers = self._get_common_headers(include_high_entropy=False)
         headers.update({
             "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
             "sec-fetch-site": self._sec_fetch_site_for(target_origin, referer),
@@ -717,9 +731,8 @@ class BrowserSession:
             headers["referer"] = referer
         if user_initiated:
             headers["sec-fetch-user"] = "?1"
-        # document 导航由浏览器网络栈发出，不携带 fetch/XHR 使用的
-        # x-datadog-* 自定义头；跨站 OAuth 导航尤其需要保持原生头集合。
-        return headers
+        # document 导航由浏览器网络栈发出，不携带 fetch/XHR 使用的自定义头。
+        return self._attach_auth_high_entropy_client_hints(headers, include_high_entropy)
 
     def get_chatgpt_navigate_headers(self, referer: str = "https://chatgpt.com/", user_initiated: bool = True) -> dict:
         """获取 chatgpt.com 页面导航请求头，用于预热登录页 / 回到应用页。"""

@@ -357,6 +357,27 @@ def validate_browser_profile(profile: dict) -> list[str]:
             issues.append("Firefox UA / Client Hints 不一致")
     elif f"Chrome/{profile.get('chrome_full_version')}" not in ua:
         issues.append("UA 与 chrome_full_version 不一致")
+    if family in ("chrome", "edge"):
+        required = (
+            "chrome_full_version", "sec_ch_ua_full_version_list",
+            "sec_ch_ua_platform_version", "sec_ch_ua_arch",
+            "sec_ch_ua_bitness", "sec_ch_ua_model",
+        )
+        missing = [key for key in required if key not in profile]
+        if missing:
+            issues.append(f"Chromium 高熵 Client Hints 缺少字段: {', '.join(missing)}")
+        elif any(not str(profile[key]).strip() for key in required[:-1]):
+            issues.append("Chromium 高熵 Client Hints 存在空字段")
+        else:
+            version = str(profile["chrome_full_version"]).strip()
+            if not re.search(rf'v="{re.escape(version)}"', str(profile["sec_ch_ua_full_version_list"])):
+                issues.append("Full-Version 与 Full-Version-List 版本不一致")
+    elif any(profile.get(key) for key in (
+        "chrome_full_version", "sec_ch_ua_full_version_list",
+        "sec_ch_ua_platform_version", "sec_ch_ua_arch",
+        "sec_ch_ua_bitness", "sec_ch_ua_model",
+    )):
+        issues.append("非 Chromium 画像不得提供 Chromium 高熵 Client Hints")
     if profile.get("browser_os") == "macOS":
         if "Macintosh; Intel Mac OS X" not in ua:
             issues.append("macOS 画像但 UA 不是 Macintosh")

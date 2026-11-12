@@ -4,12 +4,27 @@
 
 本文以流程分支为主线；每个分支内按 HAR 实际捕获顺序逐端点对照 HAR、本地、OSS 与两组差异。本次提供的最新 HAR 是已捕获原生浏览器行为的参考，本地实现是主要对齐对象，目标是逐分支尽量贴近原生浏览器访问；OSS 是辅助实现参考。两份捕获独立，不把不同账号、session 或分支拼成一条链。本地代码是当前工作区，OSS 是 `../turb-gpt-free-register-oss-20260928/` 固定快照；文中 OSS `协议/...` 路径相对于该快照的 `vendor/gpt-register-tool/`。
 
-- HAR A: `har/11.4-passwordless2about-you.har`,2026-11-03 21:38:57-21:40:32 UTC,339 entries。此前的 `har/passwordless2about-you.har` 是独立旧捕获，不与本次请求链合并。本次捕获记录 OAuth authorize 重定向、passwordless 发码、注册、email OTP 导航与验证；未捕获 profile、callback/session 或注册后 2FA。
+- 最新 HAR：`har/chatgpt.com.har`，2026-11-12 09:32:02.730Z–09:33:37.079Z，568 entries。本次 Auth 注册捕获包含 authorize、user/register、email-otp/send、email-otp/validate 与 create_account；HAR A `har/11.4-passwordless2about-you.har` 与 HAR B 均为独立历史捕获，不与最新 HAR 拼接。
 - HAR B：`har/11.1-密码注册-快路径设置2fa.har`，2026-11-01 16:22:53–16:24:26 UTC，815 entries。从 `GET /create-account` 开始，捕获注册、OTP、profile、callback/session 和 MFA 快路径；未捕获进入该 HAR 前的 signin。
 - 表格只列注册 / OTP / Sentinel / session / MFA 相关请求；响应仅列流程判断所需字段，结论限于各自 HAR 捕获范围。
 - 比较只对 HAR 实际捕获内容作结论；区分 HAR 未记录、源码未显式构造、条件性请求未触发和没有对应实现。HAR 未记录或源码未显式构造均不证明最终网络报文绝对不存在；静态头构造不等于最终 wire headers。
 - 同一端点的重复调用可合并在一行，HAR 序号按实际请求顺序升序列出；合并行按首次出现的位置排列，不表示重复调用彼此连续。
 - Cookie、Bearer、Sentinel token、OTP、邮箱、密码、session ID、设备 ID、TOTP secret 和动态 query 值均不复述。响应只列与流程判断相关的字段。
+
+## Chrome 152 与 Auth Client Hints 对照
+
+本地所有 OpenAI `BrowserSession` 统一使用 `chrome152`；`server_device_id` 仅控制服务端设备 ID 绑定和 cookie 初始化。UA 与低熵 Client Hints 由 `core/openai/transport/session.py:201-235,529-554`、`core/openai/transport/protocol_profiles.py:23-50` 提供。Auth JSON 与导航头构造默认省略六项高熵字段；请求显式启用时，六项从同一 fingerprint 一次性投影。`sec-ch-ua-model: ""` 是有效值。当前注册 authorize、user/register、email-otp/send、email-otp/validate 与 create_account 均使用默认策略。
+
+| 请求类型 | 最新 HAR 捕获 | 当前本地策略 | 源码 |
+| --- | --- | --- | --- |
+| Auth OAuth authorize 导航 | #6 有；只记录低熵 `sec-ch-ua` / `sec-ch-ua-mobile` / `sec-ch-ua-platform` | 默认不附加六项高熵字段 | `core/openai/auth/openai_auth.py:345-361`、`core/openai/transport/session.py:719-735` |
+| `user/register` | #133 有；只记录低熵三项 | 默认不附加六项高熵字段 | `core/openai/auth/openai_auth.py:549-581` |
+| `email-otp/send` 文档导航 | #137 有；只记录低熵三项 | 默认不附加六项高熵字段；同源重定向跟随时继承请求头 | `core/openai/auth/openai_auth.py:583-606`、`core/openai/transport/session.py:719-735` |
+| `email-otp/validate` | #237 有；只记录低熵三项 | 默认不附加六项高熵字段 | `core/openai/auth/openai_auth.py:630-694` |
+| `create_account` | #275 有；只记录低熵三项 | 默认不附加六项高熵字段 | `core/openai/auth/openai_auth.py:696-746` |
+| Sentinel challenge | 本次相关捕获按 HAR 实际字段核对；不继承 Auth opt-in | 使用独立 Sentinel header builder，不受 Auth 策略影响 | `core/openai/auth/openai_auth.py:410-429`、`core/openai/transport/session.py:710-723,741-760` |
+
+最新 HAR 捕获边界为 #0–#567；本文只在实际捕获范围内说明请求字段。六个高熵字段在上述 Auth 请求中均未记录；该观察不外推到其他捕获或服务端接受性。旧 HAR A #204/#205/#305 曾记录六项字段，作为独立历史捕获保留，不覆盖最新 HAR 的行为结论。显式 opt-in 能力只代表本地构造完整字段组，不代表目标服务端接受性。
 
 ## 分支 A：passwordless OTP 注册至 about-you（HAR A）
 
@@ -20,6 +35,10 @@ HAR A 覆盖 #0-#338；注册分支主线从 #61 登录入口文档开始，经 
 本地对照须检查认证状态分类及 `new_passwordless` 分支；但 HAR A 未提供足够证据证明本地会选择同一状态。当前 `new_passwordless` 路径仍先走密码页和 `user/register`，只有服务端明确拒绝密码注册才回退到登录 OTP；因此 HAR A 的 `passwordless/send-otp` 不是可直接一一配对的请求。`main.py:446-464`、`core/openai_auth.py:666-695`。
 
 OSS 的 passwordless 发码实现是条件性路径；密码注册常规链路走 `user/register` 后再请求 `email-otp/send`，不能把两者视为同一端点或必经步骤。`协议/auth_flow.py:2725-2790,2823-2844,2870-2913`。
+
+### 用户确认的非对齐决策
+
+用户明确决定：本地不发 HAR A `#149 POST /api/accounts/passwordless/send-otp`，也不将 `#61 GET /auth/login_with` 和 `#62 GET /api/auth/providers` 补齐到本地注册主链。这三项属于已确认的非对齐范围，不列为待同步差异；该决定不代表 HAR A 的其他差异也已关闭。
 
 ### HAR A 捕获请求与实现对照
 
@@ -38,6 +57,12 @@ OSS 的 passwordless 发码实现是条件性路径；密码注册常规链路�
 | `GET auth.openai.com/email-verification` `#205` | #204的302后文档导航，200；GET无body。<br>请求：GET无body/query；200文档。请求头：HTTP/2伪头、Accept*、Cookie、Priority、Referer、Sec-CH-UA*、Sec-Fetch-{dest,mode,site,user}、Upgrade-Insecure-Requests、User-Agent。 | 跟随email OTP send响应重定向，不单独构造固定页请求。源码：`core/openai_auth.py:698-712`。 | OTP API验证流程为主，无对应固定文档导航实现。源码：`协议/auth_flow.py:2792-2821,3034-3105`。 | 差异摘要：HAR捕获OTP send的重定向目标；本地跟随Location。<br>八维判定：<br>端点/方法｜一致：同端点与方法<br>请求顺序｜条件性对应：按前序认证步骤和响应顺序触发<br>触发条件｜条件性对应：仅在相应认证分支触发<br>请求头｜证据不足：静态构造不等同最终wire headers<br>请求体/query｜一致：请求字段语义对应；动态值脱敏<br>响应/状态转换｜条件性对应：依响应字段或重定向继续流程<br>跨请求状态依赖/副作用｜条件性对应：仅按捕获或源码可证关系说明，不凭邻接推断<br>执行/传输行为｜证据不足：缺少最终客户端传输观测 | 差异摘要：HAR捕获验证页文档；OSS以API OTP流程为主，无对应固定导航。<br>八维判定：<br>端点/方法｜存在差异：HAR有捕获而实现无对应请求<br>请求顺序｜存在差异：HAR有该步骤，实现主链没有<br>触发条件｜存在差异：HAR触发，实现不触发<br>请求头｜不适用：无对应侧请求<br>请求体/query｜不适用：无对应侧请求<br>响应/状态转换｜不适用：无对应侧响应<br>跨请求状态依赖/副作用｜不适用：无对应状态可比<br>执行/传输行为｜存在差异：HAR执行请求，实现不执行 |
 | `POST sentinel.openai.com/backend-api/sentinel/req` `#302` (flow=email_otp_validate) | 200 challenge响应；主token内容匹配 `#305 POST /api/accounts/email-otp/validate`。未据SO字段推断SO token关系。<br>请求：POST text/plain;charset=UTF-8，JSON字段 p、id、flow=email_otp_validate；无query；200响应键 persona、token、expire_after、expire_at、turnstile、proofofwork、so。请求头：HTTP/2伪头、Accept*、Content-Length、Content-Type、Cookie、Origin、Priority、Referer、Sec-CH-UA{,-mobile,-platform}、Sec-Fetch-*、User-Agent。challenge主token内容匹配#305。 | 本地验证OTP前按email_otp_validate获取challenge。源码：`core/openai_auth.py:525-572,733-795`。 | OSS验证OTP前按email_otp_validate刷新challenge。源码：`协议/auth_flow.py:3034-3105`。 | 差异摘要：本HAR内容匹配确认#302 → #305；不将SO metadata当作SO token来源。<br>八维判定：<br>端点/方法｜一致：同端点与方法<br>请求顺序｜条件性对应：按前序认证步骤和响应顺序触发<br>触发条件｜条件性对应：仅在相应认证分支触发<br>请求头｜证据不足：静态构造不等同最终wire headers<br>请求体/query｜一致：请求字段语义对应；动态值脱敏<br>响应/状态转换｜条件性对应：依响应字段或重定向继续流程<br>跨请求状态依赖/副作用｜条件性对应：仅按捕获或源码可证关系说明，不凭邻接推断<br>执行/传输行为｜证据不足：缺少最终客户端传输观测 | 差异摘要：本HAR内容匹配确认#302 → #305；OSS在OTP验证前获取对应challenge。<br>八维判定：<br>端点/方法｜一致：同端点与方法<br>请求顺序｜条件性对应：按前序认证步骤和响应顺序触发<br>触发条件｜条件性对应：仅在相应认证分支触发<br>请求头｜证据不足：静态构造不等同最终wire headers<br>请求体/query｜一致：请求字段语义对应；动态值脱敏<br>响应/状态转换｜条件性对应：依响应字段或重定向继续流程<br>跨请求状态依赖/副作用｜条件性对应：仅按捕获或源码可证关系说明，不凭邻接推断<br>执行/传输行为｜证据不足：缺少最终客户端传输观测 |
 | `POST auth.openai.com/api/accounts/email-otp/validate` `#305` | JSON body含验证码（值不复述）；200响应page为about-you。主token与#302匹配；另有SO头但HAR未证实其来源。<br>请求：JSON字段 code（值脱敏），无query；200响应键 continue_url、method、page、oai-client-auth-session，page=about-you。请求头：HTTP/2伪头、Accept*、Content-Length、JSON Content-Type、Cookie、openai-sentinel-token、openai-sentinel-so-token、Origin、Priority、Referer、Sec-CH-UA*、Sec-Fetch-*、traceparent、tracestate、x-access-flow-invocation-id、x-datadog-*、x-openai-document-navigation-id、User-Agent；token值不复述。 | `validate_email_otp()` 提交OTP；SO是否发送由当前challenge响应决定。源码：`core/openai_auth.py:733-795`、`main.py:208-225,510-512`。 | `verify_otp()` POST同端点，Referer指向email-verification。源码：`协议/auth_flow.py:3034-3182`。 | 差异摘要：HAR成功进入about-you；主token映射#302 → #305；SO来源未证实。<br>八维判定：<br>端点/方法｜一致：同为POST /api/accounts/email-otp/validate<br>请求顺序｜条件性对应：email OTP验证码提交后验证<br>触发条件｜条件性对应：仅进入邮箱OTP状态且提交验证码时执行<br>请求头｜证据不足：HAR有SO头，但其与challenge响应SO元数据的消费关系未证实；最终wire头亦未知<br>请求体/query｜一致：两侧均提交验证码JSON，无query；动态值不复述<br>响应/状态转换｜一致：HAR响应page=about-you；实现按验证结果继续<br>跨请求状态依赖/副作用｜条件性对应：主token已匹配#302；SO来源未证实<br>执行/传输行为｜证据不足：缺少最终客户端传输证据 | 差异摘要：HAR与OSS均POST验证码；OSS Referer指向email-verification，HAR Referer为auth根路径。<br>八维判定：<br>端点/方法｜一致：同端点与方法<br>请求顺序｜条件性对应：OTP状态后提交验证码<br>触发条件｜条件性对应：进入验证步骤后执行<br>请求头｜存在差异：OSS显式Referer为email-verification；HAR Referer为auth根路径。HAR的SO头来源未证实<br>请求体/query｜一致：均为验证码JSON，无query<br>响应/状态转换｜条件性对应：依验证响应决定后续；HAR成功到about-you<br>跨请求状态依赖/副作用｜条件性对应：主token对应#302；不凭so.required归因SO token<br>执行/传输行为｜证据不足：缺少OSS实际传输观测|
+
+**历史 HAR A 高熵字段端点核对（独立捕获 #204/#205/#302/#305）：**
+
+- **#204 `GET /api/accounts/email-otp/send` 与 #205 `GET /email-verification`**：该历史 HAR 记录六项高熵字段；当前本地默认策略已改为 Auth 不发送六项，只有调用方显式启用 `include_high_entropy` 才从 fingerprint 整组构造。`tests/test_wreq_session.py:53-103` 验证显式 opt-in 下本地 HTTP 302 会跟随并保留六项头，不证明服务端接受性。源码：`core/openai/auth/openai_auth.py:583-606`、`core/openai/transport/session.py:699-735`。
+- **#302 `POST sentinel/req`**：该历史 HAR 只记录低熵 `sec-ch-ua`、`sec-ch-ua-mobile`、`sec-ch-ua-platform`，没有六项高熵字段。Sentinel 继续使用独立 header builder，不受 Auth opt-in 影响。来源：`core/openai/auth/openai_auth.py:410-429`、`core/openai/transport/session.py:710-723,741-760`。
+- **#305 `POST /api/accounts/email-otp/validate`**：该历史 HAR 记录六项字段；当前调用默认不发送，显式 opt-in 时六项均取自统一会话 fingerprint。来源：`core/openai/auth/openai_auth.py:630-694`、`core/openai/transport/session.py:699-717`。
 
 ## 分支 B：密码注册、OTP、profile、session 与注册后 TOTP（HAR B）
 

@@ -3,6 +3,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from core.infra.wreq_session import WreqSession
+from core.openai.transport.session import BrowserSession
 
 
 class WreqCookieOriginTests(unittest.TestCase):
@@ -48,6 +49,58 @@ class WreqCookieOriginTests(unittest.TestCase):
             thread.join(timeout=5)
 
 
+
+class WreqRedirectHeaderTests(unittest.TestCase):
+    def test_same_origin_auth_redirect_preserves_high_entropy_client_hints(self):
+        seen = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                seen.append((self.path, {name.lower(): value for name, value in self.headers.items()}))
+                if self.path == "/api/accounts/email-otp/send":
+                    self.send_response(302)
+                    self.send_header("Location", "/email-verification")
+                else:
+                    self.send_response(200)
+                self.end_headers()
+
+            def log_message(self, *_args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        session = BrowserSession(proxy="", detect_exit_geo=False)
+        try:
+            origin = f"http://127.0.0.1:{server.server_port}"
+            headers = session.get_auth_navigate_headers(
+                referer=origin + "/", target_origin=origin,
+                include_high_entropy=True,
+            )
+            response = session.get(
+                origin + "/api/accounts/email-otp/send",
+                headers=headers, allow_redirects=True,
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual([path for path, _headers in seen], [
+                "/api/accounts/email-otp/send", "/email-verification",
+            ])
+            expected = {
+                "sec-ch-ua-arch", "sec-ch-ua-bitness", "sec-ch-ua-full-version",
+                "sec-ch-ua-full-version-list", "sec-ch-ua-model",
+                "sec-ch-ua-platform-version",
+            }
+            for _path, sent_headers in seen:
+                self.assertTrue(expected.issubset(sent_headers))
+            self.assertEqual(
+                seen[1][1]["sec-ch-ua-full-version"],
+                session.browser_profile["chrome_full_version"],
+            )
+        finally:
+            session.close()
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
 class WreqDefaultHeaderTests(unittest.TestCase):
     """锁住"抑制传输层默认头"的效果，防止把它挪回 Client 构造参数。
 

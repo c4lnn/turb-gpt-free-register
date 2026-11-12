@@ -551,10 +551,14 @@ def register_user(
     password: str,
     sentinel_header: str,
     so_header: str | None = None,
+    *,
+    include_high_entropy: bool = False,
 ) -> dict:
     """按成功样本提交邮箱和密码，返回 OTP 发送导航地址。"""
     url = "https://auth.openai.com/api/accounts/user/register"
-    headers = session.get_auth_headers(referer="https://auth.openai.com/")
+    headers = session.get_auth_headers(
+        referer="https://auth.openai.com/", include_high_entropy=include_high_entropy,
+    )
     headers["openai-sentinel-token"] = sentinel_header
     if so_header:
         headers["openai-sentinel-so-token"] = so_header
@@ -577,12 +581,20 @@ def register_user(
     return data
 
 
-def navigate_email_otp_send(session: BrowserSession, continue_url: str | None = None) -> str:
+def navigate_email_otp_send(
+    session: BrowserSession,
+    continue_url: str | None = None,
+    *,
+    include_high_entropy: bool = False,
+) -> str:
     """跟随 user/register 返回地址发送 OTP，并建立新的验证页 document 状态。"""
     url = str(continue_url or "https://auth.openai.com/api/accounts/email-otp/send")
     if url.startswith("/"):
         url = "https://auth.openai.com" + url
-    headers = session.get_auth_navigate_headers(referer="https://auth.openai.com/create-account/password")
+    headers = session.get_auth_navigate_headers(
+        referer="https://auth.openai.com/create-account/password",
+        include_high_entropy=include_high_entropy,
+    )
     headers["sec-fetch-site"] = "same-origin"
     headers["sec-fetch-user"] = "?1"
     _rotate_document_navigation_id(session)
@@ -619,6 +631,7 @@ def validate_email_otp(
     so_header: str | None = None,
     *,
     referer: str = "https://auth.openai.com/email-verification",
+    include_high_entropy: bool = False,
 ) -> dict:
     """
     步骤10: 提交邮箱验证码验证。
@@ -639,7 +652,7 @@ def validate_email_otp(
     """
     url = "https://auth.openai.com/api/accounts/email-otp/validate"
 
-    headers = session.get_auth_headers(referer=referer)
+    headers = session.get_auth_headers(referer=referer, include_high_entropy=include_high_entropy)
     if sentinel_header:
         headers["openai-sentinel-token"] = sentinel_header
     if so_header:
@@ -677,7 +690,15 @@ def validate_email_otp(
     return data
 
 
-def create_account(session: BrowserSession, name: str, birthday: str, sentinel_header: str, so_header: str = None) -> dict:
+def create_account(
+    session: BrowserSession,
+    name: str,
+    birthday: str,
+    sentinel_header: str,
+    so_header: str = None,
+    *,
+    include_high_entropy: bool = False,
+) -> dict:
     """
     步骤12: 提交用户信息，完成注册。
     POST https://auth.openai.com/api/accounts/create_account
@@ -694,7 +715,9 @@ def create_account(session: BrowserSession, name: str, birthday: str, sentinel_h
     """
     url = "https://auth.openai.com/api/accounts/create_account"
 
-    headers = session.get_auth_headers(referer="https://auth.openai.com/")
+    headers = session.get_auth_headers(
+        referer="https://auth.openai.com/", include_high_entropy=include_high_entropy,
+    )
     headers["openai-sentinel-token"] = sentinel_header
     if so_header:
         headers["openai-sentinel-so-token"] = so_header
