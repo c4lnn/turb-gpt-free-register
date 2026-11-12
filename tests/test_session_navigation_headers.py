@@ -86,6 +86,14 @@ class SessionNavigationHeaderTests(unittest.TestCase):
         self.assertNotIn("origin", headers)
         self.assertFalse(any(key.startswith("x-datadog-") for key in headers))
 
+    def test_auth_navigation_can_omit_user_initiated_header(self):
+        headers = self._session_stub().get_auth_navigate_headers(
+            referer="https://chatgpt.com/", user_initiated=False,
+        )
+
+        self.assertEqual(headers["sec-fetch-site"], "cross-site")
+        self.assertNotIn("sec-fetch-user", headers)
+
     def test_external_oauth_navigation_has_no_fake_referer(self):
         headers = self._session_stub().get_auth_navigate_headers(referer="")
 

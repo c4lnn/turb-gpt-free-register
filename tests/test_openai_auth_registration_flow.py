@@ -1100,6 +1100,52 @@ class OpenAIRegistrationFlowTests(unittest.TestCase):
             len(sessions),
         )
 
+    def test_registration_follow_authorize_omits_user_header_and_auto_follows(self):
+        class Session(_ProtocolSession):
+            def get_auth_navigate_headers(self, referer="", user_initiated=True, **_kwargs):
+                headers = {"referer": referer}
+                if user_initiated:
+                    headers["sec-fetch-user"] = "?1"
+                return headers
+
+            def get(self, url, *, headers, allow_redirects=True):
+                self.gets.append((url, dict(headers), allow_redirects))
+                self.get_navigation_ids.append(self.document_navigation_id)
+                return _Response(url="https://auth.openai.com/email-verification")
+
+        session = Session()
+        with patch.object(openai_auth, "_proxy_retry_config", return_value=(1, 0)):
+            final_url = openai_auth.follow_authorize(
+                session,
+                "https://auth.openai.com/oauth/authorize?state=test",
+                user_initiated=False,
+            )
+
+        self.assertEqual(final_url, "https://auth.openai.com/email-verification")
+        self.assertEqual(len(session.gets), 1)
+        url, headers, allow_redirects = session.gets[0]
+        self.assertEqual(url, "https://auth.openai.com/oauth/authorize?state=test")
+        self.assertNotIn("sec-fetch-user", headers)
+        self.assertTrue(allow_redirects)
+
+    def test_follow_authorize_default_keeps_user_initiated_header(self):
+        class Session(_ProtocolSession):
+            def get_auth_navigate_headers(self, referer="", user_initiated=True, **_kwargs):
+                headers = {"referer": referer}
+                if user_initiated:
+                    headers["sec-fetch-user"] = "?1"
+                return headers
+
+        session = Session()
+        with patch.object(openai_auth, "_proxy_retry_config", return_value=(1, 0)):
+            openai_auth.follow_authorize(
+                session, "https://auth.openai.com/oauth/authorize?state=test",
+            )
+
+        self.assertEqual(len(session.gets), 1)
+        self.assertTrue(session.gets[0][2])
+        self.assertEqual(session.gets[0][1]["sec-fetch-user"], "?1")
+
     def _probe_registration_navigation_id(self, session):
         with patch.object(
             openai_auth, "request_sentinel_token", return_value={"token": "challenge"}

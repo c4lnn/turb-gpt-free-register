@@ -303,7 +303,9 @@ def run_registration(
         # 步骤4: 跟随 authorize URL（建立 auth.openai.com 的 cookies）
         progress["auth_step"] = "authorize"
         otp_after_ts = time.time()
-        authorize_final_url = follow_authorize(session, authorize_url)
+        authorize_final_url = follow_authorize(
+            session, authorize_url, user_initiated=False,
+        )
         human_delay("navigate")
 
         state = get_registration_state(session, authorize_final_url, intent="signup")

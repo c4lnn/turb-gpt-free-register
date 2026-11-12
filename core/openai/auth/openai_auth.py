@@ -342,25 +342,21 @@ def network_preflight(session: BrowserSession) -> None:
         seed()
 
 
-def follow_authorize(session: BrowserSession, authorize_url: str) -> str:
-    """
-    步骤4: 跟随 authorize URL 重定向。
-    GET auth.openai.com/api/accounts/authorize?...
-
-    这个请求会产生一系列重定向，建立 auth.openai.com 的 session cookies。
-    遇到临时性网络错误（代理抽风 / TLS 握手失败 等）会自动重试。
-
-    Args:
-        session: 浏览器会话
-        authorize_url: 从步骤3获取的 authorize URL
-    """
-    headers = session.get_auth_navigate_headers(referer="https://chatgpt.com/")
-
+def follow_authorize(
+    session: BrowserSession,
+    authorize_url: str,
+    *,
+    user_initiated: bool = True,
+) -> str:
+    """跟随 authorize URL 重定向；允许注册导航省略 user-initiated 请求头。"""
     max_attempts, retry_delay = _proxy_retry_config()
     last_exc: Exception | None = None
     for attempt in range(1, max_attempts + 1):
         try:
             logger.info(f"[步骤4] 跟随 authorize URL 重定向 (尝试 {attempt}/{max_attempts})...")
+            headers = session.get_auth_navigate_headers(
+                referer="https://chatgpt.com/", user_initiated=user_initiated,
+            )
             resp = session.get(authorize_url, headers=headers, allow_redirects=True)
             _rotate_document_navigation_id(session)
             resp.raise_for_status()
@@ -394,12 +390,11 @@ def follow_authorize(session: BrowserSession, authorize_url: str) -> str:
                 time.sleep(backoff)
                 continue
             if not _is_retryable_authorize_error(exc):
-                # 非临时性错误（比如 4xx 业务错误）直接抛出，不重试
+                # 非临时性错误（比如 4xx 业务错误）直接抛出
                 raise
             if attempt >= max_attempts:
                 break
-            # 首次 403 常会同时刷新 __cf_bm；保留同一个 BrowserSession/Cookie
-            # Jar，只清掉本地熔断后重试，不能重建会话丢掉该 Cookie。
+            # 保留同一个 BrowserSession/Cookie Jar，只清掉本地熔断后重试。
             reset_retryable_circuit(session)
             backoff = retry_delay * (2 ** (attempt - 1))
             logger.warning(
@@ -408,7 +403,6 @@ def follow_authorize(session: BrowserSession, authorize_url: str) -> str:
             )
             time.sleep(backoff)
 
-    # 三次都失败：抛出最后一次异常
     raise last_exc if last_exc else RuntimeError("步骤4 重试耗尽但无异常记录")
 
 
