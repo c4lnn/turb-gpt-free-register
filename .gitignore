@@ -68,9 +68,6 @@ sentinel/sentinel.config.json
 # 意外生成的本地目录
 -/
 
-# OpenSpec 仅用于本地规划，不上传到 Git
-/openspec/
-
 # 本地代码分析与 Codex 工具状态
 /.codegraph/
 /.agents/
