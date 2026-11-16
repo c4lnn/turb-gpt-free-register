@@ -31,9 +31,11 @@ function SelectTrigger({
   className,
   size = "default",
   children,
+  widthItems,
   ...props
 }: SelectPrimitive.Trigger.Props & {
   size?: "sm" | "default"
+  widthItems?: readonly { label: React.ReactNode }[]
 }) {
   return (
     <SelectPrimitive.Trigger
@@ -45,7 +47,14 @@ function SelectTrigger({
       )}
       {...props}
     >
-      {children}
+      {widthItems ? (
+        <span className="grid min-w-0 flex-1 text-left">
+          <span className="col-start-1 row-start-1 min-w-0 overflow-hidden">{children}</span>
+          {widthItems.map((item, index) => (
+            <span key={index} aria-hidden="true" className="invisible col-start-1 row-start-1 whitespace-nowrap">{item.label}</span>
+          ))}
+        </span>
+      ) : children}
       <SelectPrimitive.Icon
         render={
           <ChevronDownIcon className="pointer-events-none size-4 text-muted-foreground" />

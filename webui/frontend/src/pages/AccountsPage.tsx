@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
+import { Field, FieldLabel } from '@/components/ui/field'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { toast } from '@/components/ui/toast'
@@ -53,10 +53,6 @@ const skipLabels: Record<string, string> = { missing_access_token: '无 AT', mis
 const PASSWORD_DISPLAY_LENGTH = 14
 const PASSWORD_MASK = '●'.repeat(PASSWORD_DISPLAY_LENGTH)
 
-function passwordPreview(password: string) {
-  return password.length <= PASSWORD_DISPLAY_LENGTH ? password : `${password.slice(0, 6)}...${password.slice(-5)}`
-}
-
 function post(body: unknown = {}) { return { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } }
 function errorText(error: unknown) { return error instanceof Error ? error.message : '请求失败' }
 function notify(title: string, type: 'success' | 'error' = 'success') { toast.add({ title, type }) }
@@ -73,17 +69,17 @@ async function clipboard(value: string) {
   document.body.appendChild(input); input.select()
   try { if (!document.execCommand('copy')) throw new Error('浏览器拒绝复制，请使用 HTTPS 或 localhost') } finally { input.remove() }
 }
-function Choice({ label, value, options, onChange }: { label: string; value: string; options: Record<string, string>; onChange: (value: string) => void }) {
+function Choice({ label, value, options, onChange, orientation = 'vertical' }: { label: string; value: string; options: Record<string, string>; onChange: (value: string) => void; orientation?: 'vertical' | 'horizontal' }) {
   const id = useId()
   const entries = Object.entries(options)
-  const emptyOption = entries[0]?.[0] === ''
+  const emptyOption = entries.some(([key]) => key === '')
   const allValue = '__all__'
   const items = entries.map(([key, text]) => ({ value: key === '' ? allValue : key, label: text }))
   return (
-    <Field className="w-fit min-w-0 gap-1">
+    <Field orientation={orientation} className={orientation === 'horizontal' ? 'w-fit min-w-0 gap-2' : 'w-fit min-w-0 gap-1'}>
       <FieldLabel htmlFor={id} className="text-xs">{label}</FieldLabel>
       <Select items={items} value={emptyOption && !value ? allValue : value} onValueChange={(next) => onChange(next === allValue ? '' : next ?? '')}>
-        <SelectTrigger id={id} size="sm" className="max-w-full">
+        <SelectTrigger id={id} size="sm" className="max-w-full" widthItems={items}>
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -105,8 +101,6 @@ function PlanCell({ account: a, onDetails }: { account: Account; onDetails: () =
 
 export default function AccountsPage() {
   const [filters, setFilters] = useState(initialFilters)
-  const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false)
-  const advancedFiltersId = useId()
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
@@ -137,7 +131,6 @@ export default function AccountsPage() {
   const visibleIds = accounts.map((a) => a.id)
   const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selected.includes(id))
   const workers = Math.max(1, Math.min(16, Number.parseInt(workersInput, 10) || 3))
-  const activeAdvancedFilterCount = Number(Boolean(filters.codex_operation_status)) + Number(Boolean(filters.live_check_status)) + Number(Boolean(filters.plan)) + Number(Boolean(filters.date_from && filters.date_to))
   const params = new URLSearchParams({ paged: '1', page: String(page), page_size: String(pageSize) })
   for (const key of ['email_source', 'codex_auth_status', 'codex_operation_status', 'live_check_status', 'q'] as const) if (filters[key]) params.set(key, filters[key])
   if (filters.date_from && filters.date_to) { params.set('date_from', filters.date_from); params.set('date_to', filters.date_to) }
@@ -308,49 +301,39 @@ export default function AccountsPage() {
   const canStop = selectedRows.some((account) => account.codex_capabilities?.can_stop === true)
 
   return <div className="flex min-w-0 max-w-full flex-col gap-4">
-    <div><h1 className="text-xl font-semibold">账号管理</h1><p className="text-sm text-muted-foreground">密码默认脱敏，点击眼睛按需查看；Token 和 TOTP 密钥仅在明确操作时读取，状态每 5 秒更新。</p></div>
     {error && <Alert variant="destructive"><AlertTitle>账号加载失败</AlertTitle><AlertDescription>{error}</AlertDescription></Alert>}
     {notice && <Alert><AlertTitle>操作结果</AlertTitle><AlertDescription className="max-h-40 overflow-auto whitespace-pre-wrap break-words">{notice}</AlertDescription></Alert>}
     <Card className="min-w-0"><CardHeader><CardTitle>已注册账号</CardTitle><CardDescription>共 {total} 个 · 已选 {selected.length} 个；翻页保留选择，改变筛选清空选择。</CardDescription></CardHeader><CardContent className="flex min-w-0 flex-col gap-4">
-      <TableToolbar search={search} onSearchChange={setSearch} searchLabel="搜索邮箱、用户名、备注" filters={<>
+      <TableToolbar inlineFilters search={search} onSearchChange={setSearch} searchLabel="搜索邮箱、用户名、备注" filters={<>
         <Choice label="邮箱来源" value={filters.email_source} options={{ '': '全部邮箱来源', ...sources }} onChange={(v) => changeFilter('email_source', v)} />
         <Choice label="Codex 授权状态" value={filters.codex_auth_status} options={{ '': '全部 Codex 授权', ...authLabels }} onChange={(v) => changeFilter('codex_auth_status', v)} />
-        <div className="basis-full">
-          <Button size="sm" variant="outline" aria-expanded={advancedFiltersOpen} aria-controls={advancedFiltersId} onClick={() => setAdvancedFiltersOpen((open) => !open)}>
-            高级筛选{activeAdvancedFilterCount > 0 && `（已选 ${activeAdvancedFilterCount} 项）`}
-          </Button>
-        </div>
-        <div id={advancedFiltersId} className={advancedFiltersOpen ? 'basis-full flex flex-wrap items-end gap-2' : 'hidden'}>
-          <Choice label="Codex 操作状态" value={filters.codex_operation_status} options={{ '': '全部 Codex 操作', ...operationLabels }} onChange={(v) => changeFilter('codex_operation_status', v)} />
-          <Choice label="查活状态" value={filters.live_check_status} options={{ '': '全部查活状态', ...liveLabels }} onChange={(v) => changeFilter('live_check_status', v)} />
-          <Choice label="套餐筛选" value={filters.plan} options={{ '': '全部套餐', plus: '已开通套餐', plus_trial: 'Free 可试用套餐', promo: '有套餐优惠', free_no_trial: 'Free 不可试用套餐' }} onChange={(v) => changeFilter('plan', v)} />
-          {filters.plan === 'promo' && <><Choice label="优惠套餐类型" value={filters.promoType} options={{ '': '全部优惠类型', plus: 'Plus', pro: 'Pro', go: 'Go', team: 'Team', business: 'Business' }} onChange={(v) => changeFilter('promoType', v)} /><Choice label="优惠力度" value={filters.promoDiscount} options={{ '': '全部优惠力度', '100': '100%优惠', '50': '50%优惠', other: '其他优惠' }} onChange={(v) => changeFilter('promoDiscount', v)} /></>}
-          <FieldGroup className="flex flex-row flex-wrap items-end gap-2">
-            <Field className="w-fit">
-              <FieldLabel htmlFor="account-date-from">起始日期</FieldLabel>
-              <Input id="account-date-from" type="date" aria-label="账号注册起始日期" className="w-36" value={filters.date_from} onChange={(e) => changeFilter('date_from', e.currentTarget.value)} />
-            </Field>
-            <Field className="w-fit">
-              <FieldLabel htmlFor="account-date-to">结束日期</FieldLabel>
-              <Input id="account-date-to" type="date" aria-label="账号注册结束日期" className="w-36" value={filters.date_to} onChange={(e) => changeFilter('date_to', e.currentTarget.value)} />
-            </Field>
-          </FieldGroup>
-        </div>
+        <Choice label="Codex 操作状态" value={filters.codex_operation_status} options={{ '': '全部 Codex 操作', ...operationLabels }} onChange={(v) => changeFilter('codex_operation_status', v)} />
+        <Choice label="查活状态" value={filters.live_check_status} options={{ '': '全部查活状态', ...liveLabels }} onChange={(v) => changeFilter('live_check_status', v)} />
+        <Choice label="套餐筛选" value={filters.plan} options={{ '': '全部套餐', plus: '已开通套餐', plus_trial: 'Free 可试用套餐', promo: '有套餐优惠', free_no_trial: 'Free 不可试用套餐' }} onChange={(v) => changeFilter('plan', v)} />
+        {filters.plan === 'promo' && <><Choice label="优惠套餐类型" value={filters.promoType} options={{ '': '全部优惠类型', plus: 'Plus', pro: 'Pro', go: 'Go', team: 'Team', business: 'Business' }} onChange={(v) => changeFilter('promoType', v)} /><Choice label="优惠力度" value={filters.promoDiscount} options={{ '': '全部优惠力度', '100': '100%优惠', '50': '50%优惠', other: '其他优惠' }} onChange={(v) => changeFilter('promoDiscount', v)} /></>}
+        <Field className="w-fit gap-1">
+          <FieldLabel htmlFor="account-date-from" className="text-xs">起始日期</FieldLabel>
+          <Input id="account-date-from" type="date" aria-label="账号注册起始日期" className="h-7 w-36 rounded-[min(var(--radius-md),10px)]" value={filters.date_from} onChange={(e) => changeFilter('date_from', e.currentTarget.value)} />
+        </Field>
+        <Field className="w-fit gap-1">
+          <FieldLabel htmlFor="account-date-to" className="text-xs">结束日期</FieldLabel>
+          <Input id="account-date-to" type="date" aria-label="账号注册结束日期" className="h-7 w-36 rounded-[min(var(--radius-md),10px)]" value={filters.date_to} onChange={(e) => changeFilter('date_to', e.currentTarget.value)} />
+        </Field>
       </>} actions={<><Button size="sm" variant="outline" disabled={loading} onClick={() => void loadAccounts()}><RefreshCw data-icon="inline-start" />刷新</Button><Button size="sm" variant="ghost" onClick={() => { setFilters(initialFilters); setSearch(''); setPage(1); setSelected([]); selectedAccounts.current.clear(); revision.current = undefined }}>清空筛选</Button><Button size="sm" variant="ghost" disabled={!selected.length} onClick={() => { setSelected([]); selectedAccounts.current.clear() }}>清空选择</Button></>} />
-      <div className="space-y-2">
+      <div className="flex flex-col gap-2">
         <p className="text-sm font-medium">批量操作</p>
-        <div className="grid w-full grid-cols-[repeat(auto-fit,minmax(min(100%,9rem),1fr))] justify-items-start gap-3" role="group" aria-label="账号批量操作">
-          <Field orientation="horizontal" className="w-fit items-center gap-2"><FieldLabel htmlFor="account-workers">并发线程</FieldLabel><Input id="account-workers" type="number" min={1} max={16} value={workersInput} onChange={(e) => setWorkersInput(e.currentTarget.value)} onBlur={() => setWorkersInput(String(workers))} className="w-20" /></Field>
+        <div className="flex flex-wrap items-center gap-2" role="group" aria-label="账号批量操作">
+          <Field orientation="horizontal" className="w-fit items-center gap-2"><FieldLabel htmlFor="account-workers" className="text-xs">并发线程</FieldLabel><Input id="account-workers" type="number" min={1} max={16} value={workersInput} onChange={(e) => setWorkersInput(e.currentTarget.value)} onBlur={() => setWorkersInput(String(workers))} className="h-7 w-16 rounded-[min(var(--radius-md),10px)]" /></Field>
           <Button size="sm" variant="outline" disabled={none || !canLive} onClick={() => bulk('live')}>查活刷新 AT</Button>
           <Button size="sm" variant="outline" disabled={none || !canPlan} onClick={() => { if (selected.length > 500) { notify('单次最多查询 500 个账号', 'error'); return } void run('/api/accounts/check-plan-bulk', { account_ids: selected, workers }) }}>查套餐</Button>
           <Button size="sm" variant="outline" disabled={none || !canRetry} onClick={() => bulk('retry')}>补跑 Codex</Button><Button size="sm" variant="outline" disabled={none || !canStop} onClick={() => bulk('stop')}>停止补跑</Button>
           <Button size="sm" variant="outline" disabled={none} onClick={() => bulk('totp')}>开启 2FA</Button><Button size="sm" variant="outline" disabled={none} onClick={() => editNote([...selected])}>统一备注</Button><Button size="sm" variant="destructive" disabled={none} onClick={() => bulk('delete')}>删除选中</Button>
         </div>
       </div>
-      <div className="space-y-2">
+      <div className="flex flex-col gap-2">
         <p className="text-sm font-medium">复制与导出</p>
-        <div className="grid w-full grid-cols-[repeat(auto-fit,minmax(min(100%,9rem),1fr))] justify-items-start gap-3" role="group" aria-label="账号复制与导出">
-          <Choice label="AT 导出格式" value={format} options={formats} onChange={setFormat} />
+        <div className="flex flex-wrap items-center gap-2" role="group" aria-label="账号复制与导出">
+          <Choice label="AT 导出格式" orientation="horizontal" value={format} options={formats} onChange={setFormat} />
           <Button size="sm" variant="outline" disabled={none} onClick={() => void copyPlain(selected.map((id) => selectedAccounts.current.get(id)?.email).filter(Boolean).join('\n'), '已复制选中邮箱')}><Copy data-icon="inline-start" />复制邮箱</Button>
           <Button size="sm" variant="outline" disabled={none} onClick={() => void exportAccounts(selected, format)}>复制选中整行</Button><Button size="sm" variant="outline" disabled={none} onClick={() => void exportAccounts(selected, 'access_token')}>复制选中 AT</Button>
           <Button size="sm" variant="outline" disabled={busy || !accounts.length} onClick={() => void exportAccounts(visibleIds, format)}>复制本页</Button><Button size="sm" variant="outline" disabled={none} onClick={() => void exportAccounts(selected, format, true)}><Download data-icon="inline-start" />下载 TXT</Button>
@@ -358,9 +341,9 @@ export default function AccountsPage() {
         </div>
       </div>
       <p className="text-sm text-muted-foreground sm:hidden">可左右滑动表格，查看全部账号列。</p>
-      <div role="region" aria-label="账号表格，可横向滚动查看全部列" tabIndex={0} className="min-w-0 max-w-full overflow-x-auto rounded-md border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"><Table className="w-max min-w-full table-fixed"><TableHeader><TableRow>
+      <div role="region" aria-label="账号表格，可横向滚动查看全部列" tabIndex={0} className="min-w-0 max-w-full overflow-x-auto rounded-md border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"><Table className="w-max min-w-full table-fixed [&_tr>*:not(:last-child)]:border-r [&_tr>*:not(:last-child)]:border-border"><TableHeader><TableRow>
         <TableHead className="w-10"><Checkbox aria-label="选择当前页全部账号" disabled={!accounts.length} checked={allSelected} indeterminate={!allSelected && visibleIds.some((id) => selected.includes(id))} onCheckedChange={(checked) => { const shouldSelect = checked === true; accounts.forEach((a) => { if (shouldSelect) selectedAccounts.current.set(a.id, a); else selectedAccounts.current.delete(a.id) }); setSelected((ids) => shouldSelect ? [...new Set([...ids, ...visibleIds])] : ids.filter((id) => !visibleIds.includes(id))) }} /></TableHead>
-        <TableHead>ID</TableHead><TableHead className="w-[22rem]">邮箱</TableHead><TableHead className="w-28">AT</TableHead><TableHead>密码</TableHead><TableHead>套餐</TableHead><TableHead>Codex</TableHead><TableHead>2FA</TableHead><TableHead>备注 / 时间</TableHead><TableHead>操作</TableHead>
+        <TableHead>ID</TableHead><TableHead className="w-[22rem]">邮箱</TableHead><TableHead>密码</TableHead><TableHead>2FA</TableHead><TableHead className="w-28">AT</TableHead><TableHead>Codex</TableHead><TableHead>套餐</TableHead><TableHead>备注 / 时间</TableHead><TableHead>操作</TableHead>
       </TableRow></TableHeader><TableBody>{!accounts.length ? <TableRow><TableCell colSpan={10} className="h-24 text-center text-muted-foreground">{loading ? '正在加载…' : '没有符合条件的账号'}</TableCell></TableRow> : accounts.map((a) => {
         const codexStatus = ['queued', 'running', 'canceled'].includes(a.codex_operation_status || '') ? a.codex_operation_status || 'unknown' : a.codex_auth_status || 'unknown'
         const codexLabel = ['queued', 'running', 'canceled'].includes(a.codex_operation_status || '') ? operationLabels[codexStatus] : authLabels[codexStatus]
@@ -368,14 +351,24 @@ export default function AccountsPage() {
         return <TableRow key={a.id} data-state={selected.includes(a.id) ? 'selected' : undefined}>
           <TableCell><Checkbox aria-label={`选择 ${a.email}`} checked={selected.includes(a.id)} onCheckedChange={(checked) => toggle(a, checked === true)} /></TableCell><TableCell className="font-mono text-xs">{a.id}</TableCell>
           <TableCell className="w-[22rem] max-w-[22rem]"><div className="w-full max-w-[22rem] flex flex-col items-start gap-1"><Button variant="link" size="sm" className="h-7 w-full justify-start px-0" title={a.email} onClick={() => void copyPlain(a.email)}><span className="truncate">{a.email}</span></Button><span className="w-full truncate text-xs text-muted-foreground">{sources[a.email_source || 'unknown'] || a.email_source || '未知'}</span></div></TableCell>
-          <TableCell className="w-28"><div className="flex flex-col items-start gap-1"><Button size="sm" variant="outline" disabled={busy || !a.has_access_token} onClick={() => void copySecret(a, 'access_token')}>{a.has_access_token ? '复制 AT' : '无 AT'}</Button><span title={[a.live_check_error, a.live_checked_at, a.live_check_fingerprint_text].filter(Boolean).join('\n')}><StatusBadge status={a.live_check_status} label={liveLabels[a.live_check_status || 'unknown']} /></span>{(a.token_expired || a.needs_live_check) && <span className="text-xs text-muted-foreground" title={a.token_expires_at}>需查活刷新</span>}</div></TableCell>
-          <TableCell><div className="flex items-center gap-1">{a.password ? <>{visiblePasswords.has(a.id) ? <Button type="button" size="sm" variant="link" className="h-7 w-[14ch] shrink-0 justify-start px-0 font-mono text-xs" aria-label="复制密码" onClick={() => void copyPlain(a.password!, '已复制密码')}><span className="truncate">{passwordPreview(a.password)}</span></Button> : <span className="w-[14ch] shrink-0 whitespace-nowrap font-mono text-xs text-foreground">{PASSWORD_MASK}</span>}<Button type="button" size="icon-lg" variant="ghost" className="min-h-11 min-w-11" aria-label={visiblePasswords.has(a.id) ? '隐藏密码' : '显示密码'} onClick={() => setVisiblePasswords((current) => { const next = new Set(current); if (next.has(a.id)) next.delete(a.id); else next.add(a.id); return next })}>{visiblePasswords.has(a.id) ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}</Button></> : <span className="text-xs text-muted-foreground">未设置</span>}</div></TableCell>
-          <TableCell><PlanCell account={a} onDetails={() => setPromo(a)} /></TableCell>
-          <TableCell><span title={a.codex_error}><StatusBadge status={codexStatus} label={codexLabel || '未知'} /></span></TableCell>
+          <TableCell>
+            <div className="flex items-center gap-1">
+              {a.password ? <>
+                <div className="grid shrink-0 items-center">
+                  <Button type="button" size="sm" variant="link" className="col-start-1 row-start-1 h-7 min-w-[14ch] justify-start px-0 font-mono text-xs transition-none data-[hidden=true]:invisible" data-hidden={!visiblePasswords.has(a.id)} aria-hidden={!visiblePasswords.has(a.id)} tabIndex={visiblePasswords.has(a.id) ? 0 : -1} aria-label="复制密码" onClick={() => void copyPlain(a.password!, '已复制密码')}>{a.password}</Button>
+                  {!visiblePasswords.has(a.id) && <span className="col-start-1 row-start-1 w-[14ch] whitespace-nowrap font-mono text-xs text-foreground">{PASSWORD_MASK}</span>}
+                </div>
+                <Button type="button" size="icon-lg" variant="ghost" className="min-h-11 min-w-11" aria-label={visiblePasswords.has(a.id) ? '隐藏密码' : '显示密码'} onClick={() => setVisiblePasswords((current) => { const next = new Set(current); if (next.has(a.id)) next.delete(a.id); else next.add(a.id); return next })}>{visiblePasswords.has(a.id) ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}</Button>
+              </> : <span className="text-xs text-muted-foreground">未设置</span>}
+            </div>
+          </TableCell>
           <TableCell><div className="flex flex-col items-start gap-1" title={[a.totp_setup_message, a.totp_setup_error, a.twofa_stage, a.twofa_error_code].filter(Boolean).join('\n')}>
             {a.totp_enabled ? <Button size="sm" variant="outline" disabled={busy} onClick={() => void getTotp(a)}>生成验证码</Button> : setupBusy ? <StatusBadge status={a.totp_setup_status} label={a.totp_setup_status === 'queued' ? '排队中' : '开启中'} /> : a.twofa_status === 'already_enabled' ? <span className="text-xs" title="远端已启用 TOTP，但本地未保存 Secret">远端已存在</span> : <Button size="sm" variant="outline" disabled={busy || !a.has_access_token} onClick={() => confirm({ title: `为 ${a.email} 开启 2FA？`, description: '成功后 TOTP 密钥会写回账号信息。', url: `/api/accounts/${a.id}/totp-setup`, body: {}, log: { kind: 'totp', email: a.email } })}>{a.has_access_token ? '开启 2FA' : '无 Token'}</Button>}
             {!a.totp_enabled && ['failed', 'failed_transient', 'failed_permanent'].includes(a.twofa_status || a.totp_setup_status || '') && <StatusBadge status="failed" label="设置失败" />}
           </div></TableCell>
+          <TableCell className="w-28"><div className="flex flex-col items-start gap-1"><Button size="sm" variant="outline" disabled={busy || !a.has_access_token} onClick={() => void copySecret(a, 'access_token')}>{a.has_access_token ? '复制 AT' : '无 AT'}</Button><span title={[a.live_check_error, a.live_checked_at, a.live_check_fingerprint_text].filter(Boolean).join('\n')}><StatusBadge status={a.live_check_status} label={liveLabels[a.live_check_status || 'unknown']} /></span>{(a.token_expired || a.needs_live_check) && <span className="text-xs text-muted-foreground" title={a.token_expires_at}>需查活刷新</span>}</div></TableCell>
+          <TableCell><span title={a.codex_error}><StatusBadge status={codexStatus} label={codexLabel || '未知'} /></span></TableCell>
+          <TableCell><PlanCell account={a} onDetails={() => setPromo(a)} /></TableCell>
           <TableCell><div className="flex max-w-48 flex-col gap-1"><span className="truncate text-xs" title={a.note}>{a.note || '—'}</span><span className="text-xs text-muted-foreground">{a.created_at || '—'}</span></div></TableCell>
           <TableCell><DropdownMenu><DropdownMenuTrigger render={<Button size="icon-sm" variant="ghost" aria-label={`${a.email} 的操作`} />}><MoreHorizontal /></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuGroup>
             <DropdownMenuItem disabled={busy} onClick={() => void copySecret(a, format)}>复制整行（当前格式）</DropdownMenuItem><DropdownMenuItem disabled={busy} onClick={() => void copySecret(a, 'login_credentials')}>复制邮箱 / 密码 / 2FA</DropdownMenuItem><DropdownMenuItem disabled={busy} onClick={() => editNote([a.id], a)}>设置备注</DropdownMenuItem>

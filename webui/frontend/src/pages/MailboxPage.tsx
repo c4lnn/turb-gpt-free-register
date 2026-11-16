@@ -460,7 +460,7 @@ export default function MailboxPage() {
                 <Field className="w-fit min-w-0 gap-1">
                   <FieldLabel htmlFor="mailbox-source-filter" className="text-xs">邮箱来源</FieldLabel>
                   <Select items={sourceItems} value={source} onValueChange={(value) => { if (value !== null) chooseSource(value) }}>
-                    <SelectTrigger id="mailbox-source-filter" className="max-w-full">
+                    <SelectTrigger id="mailbox-source-filter" className="max-w-full" widthItems={sourceItems}>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -473,7 +473,7 @@ export default function MailboxPage() {
                 <Field className="w-fit min-w-0 gap-1">
                   <FieldLabel htmlFor="mailbox-status-filter" className="text-xs">邮箱状态</FieldLabel>
                   <Select items={statusItems} value={status} onValueChange={(value) => { if (value !== null) chooseStatus(value) }}>
-                    <SelectTrigger id="mailbox-status-filter" className="max-w-full">
+                    <SelectTrigger id="mailbox-status-filter" className="max-w-full" widthItems={statusItems}>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -651,7 +651,7 @@ export default function MailboxPage() {
               <Field>
                 <FieldLabel htmlFor="mailbox-import-source">导入类型</FieldLabel>
                 <Select items={importSourceItems} value={importSource} onValueChange={(value) => { if (value !== null) setImportSource(value) }}>
-                  <SelectTrigger id="mailbox-import-source"><SelectValue /></SelectTrigger>
+                  <SelectTrigger id="mailbox-import-source" widthItems={importSourceItems}><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
                       {importSourceItems.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}

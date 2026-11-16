@@ -197,6 +197,7 @@ function App() {
                     return (
                       <SidebarMenuItem key={item.id}>
                         <SidebarMenuButton
+                          className="h-10"
                           isActive={activeTab === item.id}
                           closeOnMobile
                           onClick={() => setActiveTab(item.id)}
@@ -204,7 +205,7 @@ function App() {
                           tooltip={item.label}
                         >
                           <Icon data-icon="inline-start" aria-hidden="true" />
-                          <span>{item.label}</span>
+                          <span className="text-base">{item.label}</span>
                         </SidebarMenuButton>
                       </SidebarMenuItem>
                     )
@@ -260,7 +261,7 @@ function App() {
                   <h1 className="text-2xl font-semibold tracking-tight">{activePage.title}</h1>
                   <Badge variant="outline">控制台</Badge>
                 </div>
-                <p className="text-sm text-muted-foreground">{activePage.description}</p>
+                {activeTab !== 'accounts' && <p className="text-sm text-muted-foreground">{activePage.description}</p>}
               </div>
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <span>自动刷新</span>
@@ -276,6 +277,7 @@ function App() {
               </Alert>
             )}
 
+            {activeTab !== 'accounts' && (
             <section aria-label="资源概览" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               {summaryCards.map((item) => {
                 const Icon = item.icon
@@ -295,6 +297,7 @@ function App() {
                 )
               })}
             </section>
+            )}
 
             <Suspense fallback={<div className="flex flex-col gap-4" role="status" aria-busy="true" aria-label="正在加载模块"><span className="sr-only">正在加载模块</span><Skeleton className="h-8 w-48" /><Skeleton className="h-64 w-full" /></div>}>
               {activeTab === 'register' ? <RegisterPage />
