@@ -143,7 +143,7 @@ class OpenAIRegistrationFlowTests(unittest.TestCase):
 
         url, headers, redirects = session.gets[-1]
         self.assertEqual(url, "https://auth.openai.com/api/accounts/email-otp/send")
-        self.assertEqual(headers["referer"], "https://auth.openai.com/create-account/password")
+        self.assertEqual(headers["referer"], "https://auth.openai.com/")
         self.assertEqual(headers["sec-fetch-site"], "same-origin")
         self.assertEqual(headers["sec-fetch-user"], "?1")
         self.assertNotIn("x-openai-document-navigation-id", headers)

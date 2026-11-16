@@ -16,9 +16,10 @@ import time
 from datetime import datetime
 from pathlib import Path
 import threading
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode, urljoin, urlparse
 
 import pyotp
+from requests.exceptions import TooManyRedirects
 
 from core.openai.transport.session import BrowserSession
 from core.infra.humanize import delay as human_delay
@@ -189,7 +190,10 @@ def _append_batch_archive(
     return folder
 
 
-def follow_oauth_callback(session: BrowserSession, continue_url: str, referer: str = "https://auth.openai.com/about-you") -> str:
+def follow_oauth_callback(
+    session: BrowserSession, continue_url: str, referer: str = "https://auth.openai.com/about-you",
+    *, user_initiated: bool = True,
+) -> str:
     """
     步骤12.5: 跟随 create_account 返回的 continue_url，完成 OAuth 回调。
 
@@ -206,16 +210,23 @@ def follow_oauth_callback(session: BrowserSession, continue_url: str, referer: s
     if not continue_url:
         raise ValueError("continue_url 为空，无法完成 OAuth 回调")
 
-    # continue_url 通常是 auth.openai.com/authorize/continue；
-    # OTP 后 external_url 分支也可能直接给 chatgpt.com 回调地址。
-    # 按目标域名选择导航头，避免 auth step 正确但请求头语义不一致。
-    if str(continue_url).startswith("https://chatgpt.com"):
-        headers = session.get_chatgpt_navigate_headers(referer=referer)
-    else:
-        headers = session.get_auth_navigate_headers(referer=referer)
-
-    logger.info(f"[OAuth回调] 跟随 continue_url 完成 OAuth 回调...")
-    resp = session.get(continue_url, headers=headers, allow_redirects=True)
+    logger.info("[OAuth回调] 跟随 continue_url 完成 OAuth 回调...")
+    current_url = continue_url
+    for redirect_count in range(31):
+        # 注册收尾按每跳目标重建 Fetch Site；其他调用保留自动重定向语义。
+        if str(current_url).startswith("https://chatgpt.com"):
+            headers = session.get_chatgpt_navigate_headers(referer=referer, user_initiated=user_initiated)
+        else:
+            headers = session.get_auth_navigate_headers(referer=referer, user_initiated=user_initiated)
+        resp = session.get(current_url, headers=headers, allow_redirects=user_initiated)
+        if user_initiated or resp.status_code not in (301, 302, 303, 307, 308):
+            break
+        location = resp.headers.get("location")
+        if not location:
+            break
+        if redirect_count == 30:
+            raise TooManyRedirects("OAuth callback 重定向超过 30 次")
+        current_url = urljoin(current_url, location)
     landing = urlparse(str(resp.url or ""))
     logger.info("[OAuth回调] 完成, 最终落点: %s%s", landing.netloc, landing.path)
     return resp.url

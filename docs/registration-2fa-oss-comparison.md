@@ -6,7 +6,7 @@
 
 对比对象：
 
-- 当前仓库：`main.py`、`core/openai_auth.py`、`core/chatgpt_auth.py`、`core/account_export.py`、`core/session.py`、`core/twofa_service.py`。
+- 当前仓库：`main.py`、`core/openai/register/registration_flow.py`、`core/openai/auth/openai_auth.py`、`core/openai/auth/chatgpt_auth.py`、`core/openai/account/account_export.py`、`core/openai/transport/session.py`、`core/openai/account/twofa_service.py`。
 - OSS：`vendor/gpt-register-tool/协议/auth_flow.py`、`协议/webui/two_factor.py`、`协议/webui/registrar.py`、`协议/_turb_bridge.py`。
 
 结论：两边主链路相似，但不是逐请求等价。主要差异如下：
@@ -23,39 +23,53 @@
 
 ### 2.1 当前仓库
 
-当前 `main.run_registration()` 的典型顺序：
+当前 `core.openai.register.registration_flow.run_registration()` 的典型顺序；`main.py` 只负责 CLI 参数和批量循环，并调用同一入口：
 
 ```text
-创建 BrowserSession(server_device_id=True)；如会话提供重置方法则重置 Auth 导航上下文
-  +-- cloudflare.com/cdn-cgi/trace
-  +-- chatgpt.com/api/auth/csrf       # 注册 warmup，绑定服务端 oai-did，可能重试
-  +-- chatgpt.com/api/auth/csrf       # get_csrf_token
+[准备] 未传入邮箱时先领取
+  +-- 已领取条目校验状态（registering/used）；used 仅允许后续分类为已有账号
+  +-- 创建 BrowserSession(server_device_id=True)
+  +-- 检查 reset_auth_document_navigation_context；当前 BrowserSession 未实现该方法，实际不执行
+  |
+[预检] registration_preflight(session)
+  +-- cloudflare.com/cdn-cgi/trace       # 冻结出口/画像
+  +-- chatgpt.com/api/auth/csrf         # 注册 warmup，绑定服务端 oai-did，可能重试
+  |
+[ChatGPT 认证]
+  +-- chatgpt.com/api/auth/csrf         # get_csrf_token
   +-- POST chatgpt.com/api/auth/signin/openai
   +-- GET signin 返回的 authorize URL，跟随重定向
   |
+[分类]
   +-- 按 authorize 落地 URL 分类；未知时才探测
   |     +-- Sentinel/req(authorize_continue)
   |         -> POST /api/accounts/authorize/continue（只发主 token）
+  |     +-- 探测后仍未知时按 new_password 继续
   |
-  +-- 新账号（包括探测识别为 passwordless_signup）
-  |     +-- 必要时 GET /create-account/password
-  |     +-- Sentinel/req(username_password_create)
-  |     +-- POST /api/accounts/user/register
-  |     +-- 成功后先持久化密码；返回 OTP 状态时再导航发码
-  |     +-- passwordless_signup 被明确拒绝时，按响应支持情况请求登录 OTP
+[新账号（包括探测识别为 passwordless_signup）]
+  +-- 必要时 GET /create-account/password
+  +-- Sentinel/req(username_password_create)
+  +-- POST /api/accounts/user/register
+  +-- 成功后先持久化密码；返回 OTP 状态时再导航发码
+  +-- passwordless_signup 被明确拒绝时，按响应支持情况请求登录 OTP
   |
-  +-- 已有账号：按状态发码；密码步骤优先使用本地密码验证，缺失或明确拒绝时请求登录 OTP
+[已有账号]
+  +-- 按状态发码；密码步骤优先使用本地密码验证，缺失或明确拒绝时请求登录 OTP
   |
-  +-- 后续状态循环：otp / totp / profile / callback（未知、冲突或重复则停止）
-        +-- otp：可选 Sentinel/req(email_otp_validate) -> POST email-otp/validate
-        +-- totp：POST mfa/issue_challenge -> Sentinel/req(verify_mfa) -> POST mfa/verify
-        +-- profile：仅新账号可 Sentinel/req(oauth_create_account) -> POST create_account
-        +-- callback：GET continue_url 跟随重定向 -> GET chatgpt.com/api/auth/session
-  +-- 可选：查询并绑定 TOTP 2FA
-  +-- 保存账号
+[后续状态循环：otp / totp / profile / callback（未知、冲突或重复则停止）]
+  +-- otp：可选 Sentinel/req(email_otp_validate) -> POST email-otp/validate
+  +-- totp：POST mfa/issue_challenge -> Sentinel/req(verify_mfa) -> POST mfa/verify
+  +-- profile：仅新账号可 Sentinel/req(oauth_create_account) -> POST create_account
+  +-- callback：GET continue_url 跟随重定向
+  |     新号手动逐跳；已有账号自动跟随
+  |     -> GET chatgpt.com/api/auth/session（失败时外层最多重试 5 次）
+  |
+[2FA] 可选：查询服务端状态并绑定 TOTP；已启用时只恢复本地 secret
+[落库] 保存账号
+[后置] 触发 flow（结果只记录，不影响账号保存）
 ```
 
-关键实现位置：`main.py:209-229,267-302,308-596`、`core/openai_auth.py:342-522,525-612,641-831,904-1037,1065-1224` 和 `core/account_export.py:192-254`。
+关键实现位置：`core/openai/register/registration_flow.py:252-637`（编排、状态循环、2FA 收尾与落库）、`core/openai/register/registration_preflight.py:24-104`（注册预检）、`core/openai/auth/openai_auth.py:345-521,523-1173`（authorize、Sentinel、密码/OTP 原语、状态分类、MFA 与登录 OTP）、`core/openai/auth/chatgpt_auth.py:88-186`（CSRF/signin）和 `core/openai/account/account_export.py:193-281`（OAuth 回调、session、2FA 快/慢路径）。`main.py:85-187` 只保留 CLI 入口、批量循环与对同一入口的调用。
 
 当前注册的特点：
 
@@ -132,7 +146,7 @@ signup()
 | 设置密码 | POST `/api/accounts/user/register`，成功后先持久化 | 相同；通过回调尽早保存 | 请求头、Sentinel fallback 和持久化失败处理不同。 |
 | 密码后发码 | 成功后只有返回 OTP 状态才导航服务端继续地址 | 新号路径主动 GET `/email-otp/send` | 当前依赖状态解析；OSS 新号路径更固定。 |
 | OTP 验证后 | 按响应状态继续，可能进入 TOTP、profile 或 callback | 新号先 GET `client_auth_session_dump`，再 `create_account()` | OSS 新号多一个尽力而为的 dump 请求，且建号顺序固定。 |
-| callback | `follow_oauth_callback()` 自动跟随重定向 | `follow_redirect_chain()` 手动逐跳并捕获 callback | OSS 可以保留 callback code，后续再显式消费。 |
+| callback | 新号 `follow_oauth_callback(user_initiated=False)` 手动逐跳；已有账号自动跟随 | `follow_redirect_chain()` 手动逐跳并捕获 callback | 当前新号虽也手动逐跳，但不捕获 callback code；OSS 可以保留 callback code，后续再显式消费。 |
 | session | callback 后 GET `/api/auth/session`；若慢速 2FA 重认证到达 callback/session 才再取，注册回退受第 7.1 节的设备限制 | 常规非 refresh-only 下有 callback 才消费，再 GET session；有 callback 或 continue URL 时收尾再次 GET | OSS 收尾可多一次，即使未发生可选 exchange。 |
 
 ## 3. 跳转来源与 Referer
@@ -152,21 +166,21 @@ signup()
 |---|---|
 | 注册预检 CSRF warmup | 无 Referer；这是初始化设备 cookie 的 CORS 请求，不是登录页导航。 |
 | `get_csrf_token()` | `https://chatgpt.com/auth/login`。 |
-| 注册 signin | `https://chatgpt.com/auth/login_with`，query 动态包含 `callback_path`、`screen_hint`、`login_hint`、`auth_session_logging_id`、`ext-oai-did`；另有 `Origin: https://chatgpt.com`；form 的 `callbackUrl=https://chatgpt.com/`，查活共享同一 signin。 |
+| 注册 signin | 查询参数为 `prompt=login`、`auth_session_logging_id`、`screen_hint=login_or_signup`、`login_hint`；Referer 为 `https://chatgpt.com/auth/login_with`，其 query 动态包含 `callback_path`、`screen_hint`、`login_hint`、`auth_session_logging_id`、`ext-oai-did`；另有 `Origin: https://chatgpt.com`；form 的 `callbackUrl=https://chatgpt.com/`，查活共享同一 signin。 |
 | authorize | `https://chatgpt.com/`。 |
 | `/create-account/password` | 当前落点若以 `https://auth.openai.com/` 开头则使用该 URL，否则使用 `https://auth.openai.com/`。 |
 | `/api/accounts/authorize/continue` 状态探测 | 注册为 `https://auth.openai.com/`，body 额外携带 `screen_hint=signup`；2FA 重认证保留 `/create-account` Referer，不发送 screen hint。 |
 | `/api/accounts/user/register` | `https://auth.openai.com/`。 |
-| `/api/accounts/email-otp/send` | 注册密码后导航及已有账号首次发码为 `https://auth.openai.com/create-account/password`；登录 follow-send 用 `/log-in/password`，重发导航默认用 `/email-verification`。 |
+| `/api/accounts/email-otp/send` | 注册密码后导航用 `https://auth.openai.com/`；已有账号首次发码用 `https://auth.openai.com/create-account/password`；查活/默认重发用 `/email-verification`；登录 follow-send 用 `/log-in/password`。 |
 | `/api/accounts/email-otp/resend` | `https://auth.openai.com/email-verification`。 |
 | `/api/accounts/email-otp/validate` | 注册调用为 `https://auth.openai.com/`；查活调用保留 `https://auth.openai.com/email-verification`。 |
 | `/api/accounts/create_account` | `https://auth.openai.com/`。 |
-| 注册 callback | 初始使用分类落点；经历 OTP、TOTP、profile 后分别更新为 email-verification、mfa、about-you。`follow_oauth_callback()` 的默认值是 about-you。 |
+| 注册 callback | 新号固定使用 `https://auth.openai.com/`；已有账号初始使用分类落点，并在 OTP、TOTP 后分别更新为 email-verification、mfa。`follow_oauth_callback()` 的默认值是 about-you，但注册流程始终显式传入 referer。 |
 | `/api/auth/session` | `https://chatgpt.com/`。 |
 
-依据：`core/chatgpt_auth.py:77-97,114-171`、`core/session.py:785-871`、`core/openai_auth.py:342-418,455-467,641-808,1004-1018,1136-1160`、`main.py:422-525`、`core/account_export.py:192-240,403-427`。慢速 2FA 的 reauth signin 使用根路径 Referer 和 ChatGPT Origin，不套用注册 signin 的 `/auth/login_with` Referer。
+依据：`core/openai/auth/chatgpt_auth.py:21-56,88-186`、`core/openai/transport/session.py:652-780`、`core/openai/auth/openai_auth.py:345-408,459-496,627-841,1004-1024,1149-1173`、`core/openai/register/registration_flow.py:252-479`、`core/openai/account/account_export.py:193-234,401-427`。慢速 2FA 的 reauth signin 使用根路径 Referer 和 ChatGPT Origin，不套用注册 signin 的 `/auth/login_with` Referer。
 
-注册 callback 根据 `continue_url` 的前缀选择头：以 `https://chatgpt.com` 开头时使用 ChatGPT 导航头，否则使用 Auth 导航头；后续跳转由 HTTP client 自动跟随。见 `core/account_export.py:209-218`。
+注册 callback 每跳按目标 URL 前缀选择头：以 `https://chatgpt.com` 开头时使用 ChatGPT 导航头，否则使用 Auth 导航头。新号把 `user_initiated` 设为 `False`，由 `follow_oauth_callback()` 手动逐跳（最多 31 跳）；已有账号为 `True`，交给 HTTP client 自动跟随。见 `core/openai/account/account_export.py:193-234` 与 `core/openai/register/registration_flow.py:475-479`。
 
 ### 3.2 OSS
 
@@ -182,7 +196,7 @@ OSS 普通注册的后续来源部分对应当前实现，但 signin 不同，�
 
 依据：OSS `协议/auth_flow.py:2291-2346,2377-2389,2701-2723,3034-3068,3138-3162,3346-3433,3570-3624`。
 
-重要差异：OSS `send_otp()` 代码虽然注释记录真实文档导航不应携带 Sentinel，但实现仍从实例字段添加 `_last_sentinel_token` 和 `_last_sentinel_so_token`；当前 `navigate_email_otp_send()` 使用纯导航头，不携带 Sentinel。见 OSS `协议/auth_flow.py:2792-2821` 与当前 `core/openai_auth.py:698-712`。
+重要差异：OSS `send_otp()` 代码虽然注释记录真实文档导航不应携带 Sentinel，但实现仍从实例字段添加 `_last_sentinel_token` 和 `_last_sentinel_so_token`；当前 `navigate_email_otp_send()` 使用纯导航头，不携带 Sentinel。见 OSS `协议/auth_flow.py:2792-2821` 与当前 `core/openai/auth/openai_auth.py:584-611`。
 
 ## 4. 请求头差异
 
@@ -199,16 +213,33 @@ OSS 普通注册的后续来源部分对应当前实现，但 signin 不同，�
 - `x-openai-document-navigation-id`
 - `x-datadog-*`
 
-见 `core/session.py:723-735, 816-832`。
+见 `core/openai/transport/session.py:590-599,683-718`。
 
 OSS 将 Auth JSON 头拆成 `_auth_json_headers()`，每次调用生成新的 `x-access-flow-invocation-id`，并挂当前 `x-openai-document-navigation-id`；`_common_headers()` 本身不带这两个一次性头。见 OSS `协议/auth_flow.py:1704-1840`。
+
+OSS 的 `_auth_json_headers()` 只用于注册 / 登录链的 Auth JSON POST：`authorize/continue`、`user/register`、`passwordless/send-otp`、`email-otp/resend`、`email-otp/validate`、`create_account`（`协议/auth_flow.py:2510,2755,2827,2851,3065,3142`）。`email-otp/send`（`send_otp()`，`2793-2822`）改用 `_common_headers()`；已有账号的 `password/verify`（`login_password_verify()`，`2978-3001`）与 `mfa/verify`（`submit_mfa_totp()`，`3002-3033`）也改用 `_common_headers()` 并手动补 JSON Content-Type，因此不带上述两个一次性头。
+
+本地没有这层二分，而是按用途拆 builder：
+
+| 请求类型 | OSS | 本地 |
+|---|---|---|
+| 注册 / 登录链 Auth JSON POST | `_auth_json_headers()` | `get_auth_headers()`（本地未实现 `passwordless/send-otp` 端点） |
+| `password/verify`、`mfa/verify` | `_common_headers()` + 手动 JSON Content-Type，无一次性头 | `get_auth_headers()`，含一次性头 |
+| `email-otp/send`（GET） | `_common_headers()`，XHR 形态 | `get_auth_navigate_headers()`，文档导航形态 |
+| NextAuth csrf / signin | `_common_headers()` | `get_nextauth_headers()` |
+| ChatGPT backend / Sentinel | `_common_headers()` / SDK 专用头 | `get_chatgpt_headers()` / `get_sentinel_headers()` |
+| 文档导航 | `_navigation_headers()` | `get_auth_navigate_headers()` / `get_chatgpt_navigate_headers()` |
+
+本地 `get_auth_headers()` 的调用点覆盖所有 Auth JSON POST，包括 `password/verify`、`mfa/issue_challenge`、`mfa/verify`、2FA 重认证 OTP 与 Codex 登录提交（`core/openai/auth/openai_auth.py:559,655,718,929,988,1008,1032,1061`、`core/openai/account/account_export.py:561`、`core/openai/codex/codex_oauth.py:729`）。这些请求比 OSS 多带一次性头；`mfa/issue_challenge` 在 OSS 中没有同构 JSON POST，其状态由 `mfa-challenge` 页面 GET 表达。
+
+本次 HAR 捕获的注册链 Auth JSON POST（`authorize/continue`、`user/register`、`email-otp/validate`、`create_account`）均有 `Origin`、JSON Accept/Content-Type、根路径 Referer、低熵 CH，未记录 `oai-device-id` / `oai-client-*`，与本地一致；`email-otp/send` 的 HAR 记录未包含 Accept / Fetch Metadata，无法验证本地导航头与 OSS `_common_headers()` 的形态差异；OSS 自述该处与真机导航形态不同，属已知偏差。已有账号 `password/verify` 与 `mfa/verify` 未被本次 HAR 捕获，本地与 OSS 的一次性头差异无法据此判定，需另抓包。Origin 与 device-id 的取舍见 4.2 / 4.3。
 
 ### 4.2 Origin
 
 - 当前 `get_auth_headers()` 对 Auth JSON 请求固定添加同源 `Origin: https://auth.openai.com`。注册 `signin_openai()` 使用 NextAuth 头并显式设置 `Origin: https://chatgpt.com`；慢速 2FA 的 reauth signin 也显式设置同一 Origin。
 - OSS `_common_headers()` 只有提供的 `target_url` 与 Referer 跨源时才添加 Origin，未提供目标时视为同源；其 signin 未传 `target_url`，不显式添加 Origin。
 
-这是源码层的明确差异，不能仅由 Referer 推断为等价，也不能将当前注册 signin 的行为推广到其他 NextAuth 请求。依据：`core/chatgpt_auth.py:138-160`、`core/account_export.py:415-436`、`core/session.py:785-797,816-832`；OSS `协议/auth_flow.py:1704-1762,2291-2326`。
+这是源码层的明确差异，不能仅由 Referer 推断为等价，也不能将当前注册 signin 的行为推广到其他 NextAuth 请求。依据：`core/openai/auth/chatgpt_auth.py:151-172`、`core/openai/account/account_export.py:433-466`、`core/openai/transport/session.py:652-718`；OSS `协议/auth_flow.py:1704-1762,2291-2326`。
 
 ### 4.3 `oai-device-id`
 
@@ -216,7 +247,7 @@ OSS 将 Auth JSON 头拆成 `_auth_json_headers()`，每次调用生成新的 `x
 - 当前对 `chatgpt.com/backend-api/*`、`backend-anon/*` 和 `ces/*` 自动添加 target path/route 诊断头。
 - OSS `_common_headers()` 仅在传入的 `target_url` 为 ChatGPT backend 端点时添加 `oai-device-id`；未提供目标 URL 时不添加。其 2FA 协议 helper 未传目标 URL，不能仅因目标实际是 backend API 就推断该头存在。
 
-依据：当前 `core/session.py:748-783,909-931`、`core/openai_auth.py:1227-1237`；OSS `协议/auth_flow.py:1704-1808`、`协议/webui/two_factor.py:74-93`。
+依据：当前 `core/openai/transport/session.py:610-622,666-681,790-812,925-937`、`core/openai/auth/openai_auth.py:1149-1173`；OSS `协议/auth_flow.py:1704-1808`、`协议/webui/two_factor.py:74-93`。
 
 ### 4.4 Client hints 与 trace
 
@@ -245,11 +276,11 @@ OSS 将 Auth JSON 头拆成 `_auth_json_headers()`，每次调用生成新的 `x
 
 `request_sentinel_token()` 在同一 SDK 上下文中完成 requirements、challenge 和 solve；`build_sentinel_header()` 始终校验主凭据的 flow、device ID、challenge token 及所需 proof，不接受不同 flow 的主头混用。默认 `consume_so=True` 时，会校验已有 SO 与上下文的匹配，并在服务端要求而 SO 缺失时失败；密码和 MFA verify 进一步只在本次 challenge 声明 required 时发送 SO。唯独 `probe_registration_state()` 显式使用 `consume_so=False`，注册分类和慢速 2FA 的严格探测共享此例外，不因 SO 缺失或无效而在构造业务头时失败，也不发送 SO；这不等于其他操作可忽略 SO 或 SDK/主凭据失败可继续。
 
-注册 OTP 的 `SEND_SENTINEL_ON_EMAIL_OTP_VALIDATE` 默认是 `True`；关闭时 `main.py` 的 OTP 验证可不带 Sentinel。2FA 慢路径若到达邮箱 OTP 验证，则独立获取 `email_otp_validate` 凭据，不受该注册开关控制；其有限重试会复用当前凭据和验证码。注册回退当前未必能到达此步骤，独立 2FA 不直接套用该设备限制。独立 Codex 路径使用 `authorize_continue` flow 时仍按默认策略消费并校验 SO，不受状态探测的例外影响。
+注册 OTP 的 `SEND_SENTINEL_ON_EMAIL_OTP_VALIDATE` 默认是 `True`；关闭时 `registration_flow.py` 的 OTP 验证（`_validate_registration_otp`）可不带 Sentinel。2FA 慢路径若到达邮箱 OTP 验证，则独立获取 `email_otp_validate` 凭据，不受该注册开关控制；其有限重试会复用当前凭据和验证码。注册回退当前未必能到达此步骤，独立 2FA 不直接套用该设备限制。独立 Codex 路径使用 `authorize_continue` flow 时仍按默认策略消费并校验 SO，不受状态探测的例外影响。
 
 密码验证、MFA challenge 和 MFA verify 均使用 Auth JSON 的根路径 Referer、`Origin: https://auth.openai.com`、JSON `Content-Type`、同源 CORS `Sec-Fetch-*` 和独立 `x-access-flow-invocation-id`，并复用当前认证文档的 `x-openai-document-navigation-id`。challenge 的 `Accept` 为 `*/*`，密码验证和 MFA verify 为 `application/json`。Auth Sentinel runner 仅允许受控的 Auth flow；verify MFA 不回退到 `password_verify` 或 `authorize_continue`。
 
-依据：`core/openai_auth.py:525-612,666-678,733-757,791-811,1004-1018,1065-1119`、`main.py:209-222`、`core/account_export.py:499-524,801-823`、`core/codex_oauth.py:823-849`、`core/openai/auth/sentinel_runner.py:71-79,190-227`、`config/openai_protocol.py:44-45`。
+依据：`core/openai/auth/openai_auth.py:523-626,627-692,693-752,987-1024,1025-1131`、`core/openai/register/registration_flow.py:252-296`、`core/openai/account/account_export.py:505-552,801-849`、`core/openai/codex/codex_oauth.py:823-846`、`core/openai/auth/sentinel_runner.py:71-79,190-227`、`config/openai_protocol.py:44-45`。
 
 ### OSS
 
@@ -288,7 +319,7 @@ OSS 主要轮换点：
 
 authorize 响应边界一致不消除密码页分支差异：当前落点已是密码页时会跳过密码页 GET，而 OSS 仍会尝试该 GET，因此这类分支的总轮换次数及 `user/register` 使用的 ID 仍可能不同。
 
-依据：当前 `core/session.py:167-169,734-736`、`core/openai_auth.py:467-476,641-658,698-726,1136-1160`；OSS `协议/auth_flow.py:2384-2395,2695-2723,2792-2817`。
+依据：当前 `core/openai/transport/session.py:155-156,601-603`、`core/openai/auth/openai_auth.py:25-29,361,540,600,619,1081`；OSS `协议/auth_flow.py:2384-2395,2695-2723,2792-2817`。
 
 ### 慢速 2FA 重认证
 
@@ -301,7 +332,7 @@ authorize 响应边界一致不消除密码页分支差异：当前落点已是�
 
 这与 OSS `auth_oauth_init()` 在 authorize 响应后的轮换时点一致；源码和对应离线测试的断言只能说明客户端预期，不能证明服务端只接受该序列，尚未用同一账号、同一出口的实时 HTTP trace 验证线上接受结果。
 
-依据：当前 `core/account_export.py:336-400,444-456,751-758`、`core/openai_auth.py:24-27,1004-1018`、`core/account_liveness.py:333-416`；OSS `协议/auth_flow.py:2351-2437`。
+依据：当前 `core/openai/account/account_export.py:361-400,428-482`、`core/openai/auth/openai_auth.py:25-29,1004-1024`、`core/openai/account/account_liveness.py:333-418`；OSS `协议/auth_flow.py:2351-2437`。
 
 ## 7. 2FA 绑定流程
 
@@ -309,7 +340,7 @@ authorize 响应边界一致不消除密码页分支差异：当前落点已是�
 
 当 `ENABLE_2FA=False` 时跳过整个注册后 2FA；默认值见 `config/twofa.py:15`。
 
-开启后，`main.py` 的主要分支如下；慢路径的后续步骤是 `setup_2fa()` 的条件性控制流，当前注册回退到探测时的限制见图后说明：
+开启后，`core/openai/register/registration_flow.py:484-529` 的主要分支如下；慢路径的后续步骤是 `setup_2fa()` 的条件性控制流，当前注册回退到探测时的限制见图后说明：
 
 ```text
 已有 access_token
@@ -337,7 +368,7 @@ authorize 响应边界一致不消除密码页分支差异：当前落点已是�
 
 慢路径如果取得新 token，会在 enroll 前调用 `on_access_token`：注册回退只更新当前 `run_registration()` 中的变量，最终保存账号时写入；独立后台任务的回调则立即更新数据库。普通绑定失败后注册路径仍尝试保存已取得的登录态；要求启用 2FA 而未满足时任务不报告成功。
 
-依据：`main.py:267-302,527-596,633-640`、`core/session.py:147-157,1048-1060`、`core/openai_auth.py:342-420,525-530,1004-1018`、`core/account_export.py:403-456,629-666,669-856`、`core/twofa_service.py:144-174`。
+依据：`core/openai/register/registration_flow.py:214-251,484-529,632-637`、`core/openai/transport/session.py:147-174,925-937`、`core/openai/auth/openai_auth.py:316-408,523-530,1004-1024`、`core/openai/account/account_export.py:401-484,624-667,669-882`、`core/openai/account/twofa_service.py:118-216`。
 
 ### 7.2 OSS 2FA
 
@@ -369,7 +400,7 @@ OSS 的浏览器引擎另有 `_bind_2fa_via_api()`，直接使用 Playwright API
 | activate 成功后 | `_verify_mfa_after_activation()` 查询状态，只作诊断 | 等待后查询状态，复核结果不改变已成功的绑定返回 |
 | activate 非 200 | 快路径抛错，不先做同一会话复核；普通异常可回落慢路径，只有重认证到达复核才再查询，注册回退另受设备限制 | 等待后复核 `mfa_info`，factor ID 匹配时可接受已生效的绑定 |
 
-当前实现：`main.py:267-302,527-566`、`core/account_export.py:573-666,832-855`、`core/openai_auth.py:1227-1251`、`core/session.py:748-783,909-931`。
+当前实现：`core/openai/register/registration_flow.py:484-566`、`core/openai/account/account_export.py:581-667,832-855`、`core/openai/auth/openai_auth.py:1149-1173`、`core/openai/transport/session.py:790-812,925-937`。
 
 OSS 实现：`协议/webui/two_factor.py:74-199`。
 
@@ -379,7 +410,7 @@ OSS 实现：`协议/webui/two_factor.py:74-199`。
 
 OSS `login_password_verify()` 与 `submit_mfa_totp()` 使用实例缓存的 Sentinel/SO；TOTP 路径直接请求 `/api/accounts/mfa/verify`，没有对应的 `issue_challenge` 请求。
 
-依据：当前 `core/openai_auth.py:1063-1129, 1216-1224`、`core/account_liveness.py:475-480, 746-749`、`main.py` 已有账号认证异常收尾；OSS `协议/auth_flow.py:2978-3023`。本文记录客户端实现与已提供抓包对照，不把离线测试等同于线上服务接受证明。
+依据：当前 `core/openai/auth/openai_auth.py:1025-1131,1149-1173`、`core/openai/account/account_liveness.py:468-481,746-749`、`core/openai/register/registration_flow.py:604-631` 已有账号认证异常收尾；OSS `协议/auth_flow.py:2978-3023`。本文记录客户端实现与已提供抓包对照，不把离线测试等同于线上服务接受证明。
 
 ## 8. Session 与 token 刷新时机
 
@@ -390,7 +421,7 @@ OSS `login_password_verify()` 与 `submit_mfa_totp()` 使用实例缓存的 Sent
 3. 注册回退的 `on_access_token` 更新内存中的 token，账号保存时才写入；独立 2FA 后台入口的回调在 enroll 前立即更新数据库。
 4. 注册账号最终保存当前 `access_token`。
 
-依据：`main.py:96-135,556-584`、`core/account_export.py:192-254,556-570,832-837`、`core/twofa_service.py:155-174`。
+依据：`core/openai/register/registration_flow.py:67-118,475-479,534-552,599-602`、`core/openai/account/account_export.py:193-281,581-597,832-848`、`core/openai/account/twofa_service.py:155-174`。
 
 ### OSS
 
@@ -428,17 +459,20 @@ OSS `login_password_verify()` 与 `submit_mfa_totp()` 使用实例缓存的 Sent
 
 ### 当前仓库
 
-- `main.py:96-135,209-229,267-302,308-645`：callback/session 重试、注册 OTP、状态循环和注册后 2FA。
-- `core/chatgpt_auth.py:77-97,114-171`：CSRF、signin 和 authorize 上下文。
-- `core/openai_auth.py:342-522`：注册预检、authorize 导航。
-- `core/openai_auth.py:525-612,641-831`：Sentinel、密码注册、OTP、create_account。
-- `core/openai_auth.py:904-1037,1065-1251`：认证状态分类、登录 OTP、MFA challenge、MFA 状态查询。
+- `main.py:85-187`：CLI 入口、批量循环与 `run_registration()` 调用。
+- `core/openai/register/registration_flow.py:252-637`：注册编排、状态循环、OTP/TOTP、2FA 收尾与落库。
+- `core/openai/register/registration_preflight.py:24-104`：注册预检与设备 cookie warmup。
+- `core/openai/auth/chatgpt_auth.py:21-56,88-186`：login referer、CSRF、signin 和 authorize 上下文。
+- `core/openai/auth/openai_auth.py:345-521`：authorize 导航与 Sentinel。
+- `core/openai/auth/openai_auth.py:523-1173`：密码注册、OTP、create_account、状态分类、MFA 与登录 OTP。
 - `core/openai/auth/sentinel_runner.py:71-79,190-227`：受控 flow 与同一 challenge 主凭据校验。
-- `core/session.py:147-168,663-871`：设备与 document ID、通用头、NextAuth、ChatGPT/Auth 导航头。
-- `core/session.py:909-931,1048-1060`：target headers 和 GET/POST 封装。
-- `core/account_export.py:192-254,336-456`：OAuth callback、session 和重认证导航。
-- `core/account_export.py:499-570,573-856`：重认证 OTP、2FA 快/慢路径。
-- `core/twofa_service.py:118-205`：独立 2FA 后台任务。
+- `core/openai/transport/session.py:147-174,601-603`：设备、auth session logging 与 document-navigation ID。
+- `core/openai/transport/session.py:590-780`：通用头、NextAuth、ChatGPT/Auth 导航头与 target headers。
+- `core/openai/transport/session.py:790-812,925-937`：backend target headers 和 GET/POST 封装。
+- `core/openai/account/account_export.py:193-281,401-484`：OAuth callback、session 和重认证导航。
+- `core/openai/account/account_export.py:505-882`：重认证 OTP、2FA 快/慢路径。
+- `core/openai/account/twofa_service.py:118-216`：独立 2FA 后台任务。
+- `core/openai/codex/codex_oauth.py:823-846`：Codex 登录邮箱/OTP 提交。
 - `config/twofa.py:5-42`：2FA 默认配置和重认证参数。
 - `config/openai_protocol.py:44-62`：OTP Sentinel、bootstrap 和网络重试配置。
 

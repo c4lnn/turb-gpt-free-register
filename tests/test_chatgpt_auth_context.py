@@ -2,7 +2,9 @@
 import unittest
 from urllib.parse import parse_qs, urlparse
 
-from core.openai.auth.chatgpt_auth import _ensure_authorize_context, signin_openai
+from core.openai.auth.chatgpt_auth import (
+    _ensure_authorize_context, build_login_referer, get_csrf_token, signin_openai,
+)
 
 
 class _Session:
@@ -43,14 +45,19 @@ class ChatgptAuthContextTests(unittest.TestCase):
                 pass
 
             def json(self):
-                return {"url": "https://auth.openai.com/oauth/authorize?state=opaque"}
+                return {"url": "https://auth.openai.com/oauth/authorize?state=opaque", "csrfToken": "formal-csrf"}
 
         class SigninSession(_Session):
             def __init__(self):
                 self.posts = []
+                self.gets = []
 
             def get_nextauth_headers(self, referer):
                 return {"accept": "*/*", "content-type": "application/json", "referer": referer}
+
+            def get(self, url, *, headers):
+                self.gets.append((url, dict(headers)))
+                return Response()
 
             def post(self, url, *, headers, data):
                 self.posts.append((url, dict(headers), data))
@@ -59,10 +66,19 @@ class ChatgptAuthContextTests(unittest.TestCase):
         session = SigninSession()
         email = "test+tag@example.test"
 
-        authorize_url = signin_openai(session, "csrf-placeholder", email)
+        login_referer = build_login_referer(session, email)
+        csrf = get_csrf_token(session, login_referer=login_referer)
+        authorize_url = signin_openai(session, csrf, email, login_referer=login_referer)
 
         request_url, headers, body = session.posts[0]
         referer = urlparse(headers["referer"])
+        csrf_url, csrf_headers = session.gets[0]
+        self.assertEqual(csrf_url, "https://chatgpt.com/api/auth/csrf")
+        self.assertEqual(csrf_headers["referer"], headers["referer"])
+        self.assertNotIn("content-type", csrf_headers)
+        for request_headers in (csrf_headers, headers):
+            self.assertEqual(request_headers["cache-control"], "no-cache")
+            self.assertEqual(request_headers["pragma"], "no-cache")
         referer_query = parse_qs(referer.query, keep_blank_values=True)
         self.assertEqual(referer.scheme, "https")
         self.assertEqual(referer.netloc, "chatgpt.com")
@@ -86,12 +102,43 @@ class ChatgptAuthContextTests(unittest.TestCase):
         })
         self.assertEqual(parse_qs(body, keep_blank_values=True), {
             "callbackUrl": ["https://chatgpt.com/"],
-            "csrfToken": ["csrf-placeholder"],
+            "csrfToken": ["formal-csrf"],
             "json": ["true"],
         })
         authorize_query = parse_qs(urlparse(authorize_url).query, keep_blank_values=True)
         self.assertEqual(authorize_query["state"], ["opaque"])
         self.assertEqual(authorize_query["device_id"], [session.device_id])
         self.assertEqual(authorize_query["login_hint"], [email])
+
+    def test_nonregistration_auth_retains_its_request_semantics(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        from core.openai.transport.session import BrowserSession
+
+        session = BrowserSession.__new__(BrowserSession)
+        session.browser_profile = {}
+        session.device_id = "test-device"
+        session.auth_session_logging_id = "test-logging"
+        session.get = Mock(return_value=SimpleNamespace(
+            raise_for_status=lambda: None, json=lambda: {"csrfToken": "login-csrf"},
+        ))
+        session.post = Mock(return_value=SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"url": "https://auth.openai.com/oauth/authorize?state=test"},
+        ))
+
+        csrf = get_csrf_token(session, login_referer=None)
+        signin_openai(session, csrf, "test+login@example.test", login_referer=None)
+
+        csrf_headers = session.get.call_args.kwargs["headers"]
+        self.assertEqual(csrf_headers["referer"], "https://chatgpt.com/auth/login")
+        self.assertEqual(csrf_headers["content-type"], "application/json")
+        signin_headers = session.post.call_args.kwargs["headers"]
+        self.assertEqual(parse_qs(urlparse(signin_headers["referer"]).query)["login_hint"],
+                         ["test+login@example.test"])
+        for headers in (csrf_headers, signin_headers):
+            self.assertNotIn("cache-control", headers)
+            self.assertNotIn("pragma", headers)
+
 if __name__ == "__main__":
     unittest.main()

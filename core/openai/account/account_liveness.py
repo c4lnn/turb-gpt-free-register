@@ -185,10 +185,10 @@ def _network_preflight_with_retry(
         logger.info("[查活] 指纹摘要：%s", session.fingerprint_summary_text())
         try:
             _warm_login_fingerprint_context(session)
-            csrf = get_csrf_token(session)
+            csrf = get_csrf_token(session, login_referer=None)
             # 成功 Web 样本在 signin 前会再次确认匿名 NextAuth session。
             probe_auth_session(session)
-            authorize_url = signin_openai(session, csrf, email)
+            authorize_url = signin_openai(session, csrf, email, login_referer=None)
             return session, authorize_url
         except Exception as exc:
             last_exc = exc
@@ -242,7 +242,7 @@ def _follow_continue_and_fetch(session: BrowserSession, continue_url: str, *, re
     max_attempts = 3
     for attempt in range(1, max_attempts + 1):
         try:
-            follow_oauth_callback(session, continue_url, referer=referer)
+            follow_oauth_callback(session, continue_url, referer=referer, user_initiated=True)
             break
         except Exception as exc:
             if attempt >= max_attempts or not _is_retryable_network_error(exc):

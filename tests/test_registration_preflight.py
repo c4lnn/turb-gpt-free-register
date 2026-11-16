@@ -6,12 +6,15 @@
 手动国家覆盖已知实际国家，未知探测国家即使手动已选也不可救活。
 """
 from contextlib import contextmanager
+from types import SimpleNamespace
+from urllib.parse import parse_qs
 import unittest
 from unittest.mock import Mock, patch
 
 from requests.cookies import RequestsCookieJar
 from config import browser as browser_cfg
 from core.openai.auth import openai_auth
+from core.openai.auth.chatgpt_auth import build_login_referer, get_csrf_token, signin_openai
 from core.infra import job_context
 from core.infra.job_context import StopRequested
 from core.openai.register.registration_geo import RegistrationGeoError, validate_session_geo
@@ -131,6 +134,47 @@ class RegistrationPreflightTests(unittest.TestCase):
             registration_preflight(session)
             self.assertEqual(session.device_id, "server-device")
             self.assertEqual(session.get_server_device_id(), session.device_id)
+
+    def test_signin_consumes_formal_csrf_not_the_device_warmup_token(self):
+        with _session(_cookie) as (session, transports):
+            raw = transports[0]
+            original_get = raw.get
+            csrf_requests = []
+
+            def get(url, **kwargs):
+                if url.endswith("/api/auth/csrf"):
+                    csrf_requests.append((url, kwargs))
+                    if len(csrf_requests) == 1:
+                        response = original_get(url, **kwargs)
+                        response.json = lambda: {"csrfToken": "warmup-only-token"}
+                        return response
+                    return SimpleNamespace(
+                        status_code=200, raise_for_status=lambda: None,
+                        json=lambda: {"csrfToken": "formal-only-token"},
+                    )
+                return original_get(url, **kwargs)
+
+            response = SimpleNamespace(
+                status_code=200, raise_for_status=lambda: None,
+                json=lambda: {"url": "https://auth.openai.com/oauth/authorize?state=test"},
+            )
+            with patch.object(raw, "get", side_effect=get), patch.object(
+                raw, "post", create=True, return_value=response,
+            ) as post:
+                registration_preflight(session)
+                referer = build_login_referer(session, "test+tag@example.test")
+                token = get_csrf_token(session, login_referer=referer)
+                signin_openai(session, token, "test+tag@example.test", login_referer=referer)
+
+            self.assertEqual([url for url, _ in csrf_requests], ["https://chatgpt.com/api/auth/csrf"] * 2)
+            warmup, formal = [kwargs for _, kwargs in csrf_requests]
+            self.assertNotIn("referer", warmup["headers"])
+            for kwargs in (warmup, formal):
+                self.assertNotIn("data", kwargs)
+                self.assertNotIn("params", kwargs)
+            self.assertEqual(formal["headers"]["referer"], post.call_args.kwargs["headers"]["referer"])
+            self.assertEqual(parse_qs(post.call_args.kwargs["data"])["csrfToken"], ["formal-only-token"])
+            self.assertEqual(session.device_id, "server-device")
 
     def test_missing_wrong_domain_and_ambiguous_cookie_exhaust_without_identity(self):
         def ambiguous(raw):

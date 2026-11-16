@@ -27,7 +27,7 @@ from core.openai.account.account_export import (
     setup_2fa,
     setup_2fa_inline,
 )
-from core.openai.auth.chatgpt_auth import get_csrf_token, signin_openai
+from core.openai.auth.chatgpt_auth import build_login_referer, get_csrf_token, signin_openai
 from core.openai.auth.openai_auth import (
     AccountUnusableError,
     EmailOtpInvalidError,
@@ -69,6 +69,8 @@ def _finalize_registration_session(
     continue_url: str,
     email: str,
     callback_referer: str = "https://auth.openai.com/about-you",
+    *,
+    callback_user_initiated: bool = True,
 ) -> tuple[dict, str]:
     """
     完成 OAuth 回调并拉取 accessToken。
@@ -86,7 +88,10 @@ def _finalize_registration_session(
                 f"[登录态] 完成 OAuth 回调并拉取 Token：{email} "
                 f"(尝试 {attempt}/{_FINALIZE_SESSION_MAX_ATTEMPTS})"
             )
-            follow_oauth_callback(session, continue_url, referer=callback_referer)
+            follow_oauth_callback(
+                session, continue_url, referer=callback_referer,
+                user_initiated=callback_user_initiated,
+            )
             human_delay("post_auth")
             session_info = fetch_session(session)
             access_token = session_info.get("accessToken")
@@ -293,11 +298,12 @@ def run_registration(
 
         # ==================== 阶段1: ChatGPT 认证 ====================
         # 步骤2: 获取 CSRF token
-        csrf_token = get_csrf_token(session)
+        login_referer = build_login_referer(session, email)
+        csrf_token = get_csrf_token(session, login_referer=login_referer)
         human_delay("api")
 
         # 步骤3: 发起 OAuth signin
-        authorize_url = signin_openai(session, csrf_token, email)
+        authorize_url = signin_openai(session, csrf_token, email, login_referer=login_referer)
         human_delay("api")
 
         # ==================== 阶段2: OpenAI Auth ====================
@@ -467,7 +473,9 @@ def run_registration(
                 callback_referer = "https://auth.openai.com/about-you"
             else:
                 session_info, access_token = _finalize_registration_session(
-                    session, get_auth_continue_url(state), email, callback_referer=callback_referer,
+                    session, get_auth_continue_url(state), email,
+                    callback_referer=callback_referer if kind == "existing" else "https://auth.openai.com/",
+                    callback_user_initiated=kind == "existing",
                 )
                 progress["authenticated"] = True
                 break

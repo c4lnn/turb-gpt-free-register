@@ -14,13 +14,15 @@ from core.infra import db, job_context
 from core.mail import email_provider
 from core.link import flow_trigger
 from core.openai.register import registration_flow as registration
+from core.openai.transport.session import BrowserSession
 from core.openai.register import registration_service
 from config import register as register_config
 
 
-class _Session:
+class _Session(BrowserSession):
     proxy = ""
     device_id = "device-for-test"
+    auth_session_logging_id = "logging-for-test"
     browser_profile = {}
 
     def __init__(self):
@@ -179,6 +181,42 @@ class RegistrationPipelineTests(unittest.TestCase):
         self.assertTrue(observed["created"])
         self.assertTrue(observed["saved"])
         self.assertTrue(session.closed)
+
+    def test_new_registration_callback_headers_do_not_change_existing_account_navigation(self):
+        finalize = registration._finalize_registration_session
+        session_info = {
+            "accessToken": "test-access", "user": {"id": "test-user", "email": "user@example.com"},
+            "account": {"planType": "free"}, "expires": "2030-01-01T00:00:00Z",
+        }
+        for kind in ("new_password", "existing"):
+            otp_result = ({"page": {"type": "about_you"}, "continue_url": "/about-you"}
+                          if kind == "new_password" else
+                          {"continue_url": "https://chatgpt.com/api/auth/callback/openai"})
+            with self.subTest(kind=kind), self._pipeline(
+                otp_result, kind=kind, step="password" if kind == "new_password" else "otp",
+            ) as (session, _), patch.object(
+                registration, "_finalize_registration_session", finalize,
+            ), patch.object(registration, "fetch_session", return_value=session_info) as fetch, patch.object(
+                registration, "get_registration_state", return_value={
+                    "kind": kind, "step": "password" if kind == "new_password" else "otp",
+                    "page": {"type": "signup_password" if kind == "new_password" else "email_otp"},
+                    "continue_url": "https://auth.openai.com/create-account/password" if kind == "new_password"
+                    else "https://auth.openai.com/email-verification",
+                },
+            ), patch.object(
+                session, "get", return_value=SimpleNamespace(url="https://chatgpt.com/", status_code=200, headers={}),
+            ) as navigate:
+                result = self._run()
+
+            self.assertTrue(result["success"], msg=result)
+            headers = navigate.call_args.kwargs["headers"]
+            self.assertEqual(headers["referer"], "https://auth.openai.com/" if kind == "new_password"
+                             else "https://auth.openai.com/email-verification")
+            self.assertEqual(headers.get("sec-fetch-user"), None if kind == "new_password" else "?1")
+            self.assertEqual(headers["sec-fetch-site"], "cross-site")
+            fetch.assert_called_once_with(session)
+            saved = db.get_account_by_email("user@example.com")
+            self.assertEqual(saved["access_token"], session_info["accessToken"])
 
     def test_sdk_failure_preserves_its_stage_and_prevents_password_submission(self):
         from core.openai.auth.sentinel_runner import SentinelSDKError

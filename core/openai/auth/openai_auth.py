@@ -592,7 +592,7 @@ def navigate_email_otp_send(
     if url.startswith("/"):
         url = "https://auth.openai.com" + url
     headers = session.get_auth_navigate_headers(
-        referer="https://auth.openai.com/create-account/password",
+        referer="https://auth.openai.com/",
         include_high_entropy=include_high_entropy,
     )
     headers["sec-fetch-site"] = "same-origin"

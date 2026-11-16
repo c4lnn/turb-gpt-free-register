@@ -98,6 +98,78 @@ class _ReauthSession(_CircuitSession):
 
 class AccountExportTwofaTests(unittest.TestCase):
 
+    def test_callback_user_activation_is_explicit_and_defaults_are_preserved(self):
+        from types import SimpleNamespace
+        from core.openai.transport.session import BrowserSession
+
+        for target in ("https://chatgpt.com/api/auth/callback/openai",
+                       "https://auth.openai.com/authorize/continue"):
+            for user_initiated in (False, True):
+                with self.subTest(target=target, user_initiated=user_initiated):
+                    session = BrowserSession.__new__(BrowserSession)
+                    session.browser_profile = {}
+                    session.get = Mock(return_value=SimpleNamespace(
+                        url="https://chatgpt.com/", status_code=200, headers={},
+                    ))
+                    account_export.follow_oauth_callback(
+                        session, target, referer="https://auth.openai.com/",
+                        user_initiated=user_initiated,
+                    )
+                    headers = session.get.call_args.kwargs["headers"]
+                    self.assertEqual(headers["referer"], "https://auth.openai.com/")
+                    self.assertEqual(headers["sec-fetch-dest"], "document")
+                    self.assertEqual(headers["sec-fetch-mode"], "navigate")
+                    self.assertEqual(headers.get("sec-fetch-user"), "?1" if user_initiated else None)
+                    self.assertEqual(headers["sec-fetch-site"],
+                                     "cross-site" if target.startswith("https://chatgpt.com") else "same-origin")
+
+        account_export.follow_oauth_callback(session, "https://chatgpt.com/api/auth/callback/openai")
+        headers = session.get.call_args.kwargs["headers"]
+        self.assertEqual(headers["referer"], "https://auth.openai.com/about-you")
+        self.assertEqual(headers["sec-fetch-user"], "?1")
+
+    def test_registration_callback_updates_fetch_site_after_auth_redirect(self):
+        from types import SimpleNamespace
+        from requests.structures import CaseInsensitiveDict
+        from core.openai.transport.session import BrowserSession
+
+        session = BrowserSession.__new__(BrowserSession)
+        session.browser_profile = {}
+        auth_url = "https://auth.openai.com/authorize/continue?state=test"
+        callback_url = "https://chatgpt.com/api/auth/callback/openai?code=test"
+        session.get = Mock(side_effect=[
+            SimpleNamespace(status_code=302, headers=CaseInsensitiveDict({"Location": callback_url})),
+            SimpleNamespace(status_code=302, headers=CaseInsensitiveDict({"Location": "/"})),
+            SimpleNamespace(status_code=200, headers={}, url="https://chatgpt.com/"),
+        ])
+
+        landing = account_export.follow_oauth_callback(
+            session, auth_url, referer="https://auth.openai.com/", user_initiated=False,
+        )
+
+        self.assertEqual(landing, "https://chatgpt.com/")
+        calls = session.get.call_args_list
+        self.assertEqual([call.args[0] for call in calls], [auth_url, callback_url, "https://chatgpt.com/"])
+        self.assertEqual([call.kwargs["headers"]["sec-fetch-site"] for call in calls],
+                         ["same-origin", "cross-site", "cross-site"])
+        for call in calls:
+            self.assertEqual(call.kwargs["headers"]["referer"], "https://auth.openai.com/")
+            self.assertNotIn("sec-fetch-user", call.kwargs["headers"])
+
+    def test_registration_callback_retains_redirect_limit(self):
+        from types import SimpleNamespace
+        from requests.exceptions import TooManyRedirects
+        from core.openai.transport.session import BrowserSession
+
+        session = BrowserSession.__new__(BrowserSession)
+        session.browser_profile = {}
+        session.get = Mock(return_value=SimpleNamespace(status_code=302, headers={"location": "/loop"}))
+        with self.assertRaises(TooManyRedirects):
+            account_export.follow_oauth_callback(
+                session, "https://chatgpt.com/loop", referer="https://auth.openai.com/", user_initiated=False,
+            )
+        self.assertEqual(session.get.call_count, 31)
+
     def test_fetch_session_missing_access_token_logs_sanitized_response_shape(self):
         session = Mock()
         session.get_nextauth_headers.return_value = {}
