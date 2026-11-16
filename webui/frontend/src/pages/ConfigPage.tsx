@@ -236,6 +236,7 @@ function configFieldMatches(field: ConfigField, query: string) {
 }
 
 function getFieldChoices(field: ConfigField, currentValue: unknown, metadata: MetadataState): ConfigOption[] {
+  if (field.type === 'list_str_multiline') return []
   let choices: ConfigOption[] = []
   if (field.key === 'PLAN_CHECK_PROXY_MODE') {
     choices = [
