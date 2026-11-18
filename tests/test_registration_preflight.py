@@ -169,6 +169,30 @@ class RegistrationPreflightTests(unittest.TestCase):
             self.assertEqual([url for url, _ in csrf_requests], ["https://chatgpt.com/api/auth/csrf"] * 2)
             warmup, formal = [kwargs for _, kwargs in csrf_requests]
             self.assertNotIn("referer", warmup["headers"])
+            self.assertEqual(warmup["headers"]["accept"], "application/json")
+            self.assertEqual(warmup["headers"]["priority"], "u=0, i")
+            self.assertEqual(warmup["headers"]["sec-fetch-site"], "same-origin")
+            self.assertEqual(warmup["headers"]["sec-fetch-mode"], "cors")
+            self.assertEqual(warmup["headers"]["sec-fetch-dest"], "empty")
+            for field in ("content-type", "origin", "cache-control", "pragma", "sec-fetch-user",
+                          "upgrade-insecure-requests", "sec-ch-ua-full-version",
+                          "sec-ch-ua-full-version-list", "sec-ch-ua-platform-version",
+                          "sec-ch-ua-arch", "sec-ch-ua-bitness", "sec-ch-ua-model"):
+                self.assertNotIn(field, warmup["headers"])
+            signin = post.call_args.kwargs["headers"]
+            for headers in (formal["headers"], signin):
+                self.assertEqual(headers["priority"], "u=1, i")
+                self.assertEqual(headers["cache-control"], "no-cache")
+                self.assertEqual(headers["pragma"], "no-cache")
+                self.assertEqual(headers["accept"], "*/*")
+                for field in ("sec-ch-ua-full-version", "sec-ch-ua-full-version-list",
+                              "sec-ch-ua-platform-version", "sec-ch-ua-arch",
+                              "sec-ch-ua-bitness", "sec-ch-ua-model"):
+                    self.assertNotIn(field, headers)
+            self.assertNotIn("content-type", formal["headers"])
+            self.assertNotIn("origin", formal["headers"])
+            self.assertEqual(signin["content-type"], "application/x-www-form-urlencoded")
+            self.assertEqual(signin["origin"], "https://chatgpt.com")
             for kwargs in (warmup, formal):
                 self.assertNotIn("data", kwargs)
                 self.assertNotIn("params", kwargs)

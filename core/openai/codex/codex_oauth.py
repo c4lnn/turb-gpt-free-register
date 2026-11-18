@@ -38,7 +38,7 @@ from urllib.parse import urlencode, urlparse, parse_qs, quote
 from config import codex as _cfg
 from config import IMPERSONATE
 from core.infra.wreq_session import WreqSession
-from core.openai.transport.session import BrowserSession
+from core.openai.transport.session import BrowserSession, attach_sentinel_credentials
 from core.infra.humanize import delay as human_delay
 from core.openai.auth.openai_auth import (
     _is_transient_network_error,
@@ -728,9 +728,7 @@ def _post_json(session: BrowserSession, url: str, payload: dict, referer: str,
     """统一发 /api/accounts/* 的 JSON POST。"""
     headers = session.get_auth_headers(referer=referer)
     if sentinel_header:
-        headers["openai-sentinel-token"] = sentinel_header
-    if so_header:
-        headers["openai-sentinel-so-token"] = so_header
+        attach_sentinel_credentials(headers, sentinel_header, so_header)
     return session.post(url, headers=headers, data=json.dumps(payload), allow_redirects=False)
 
 
@@ -1118,13 +1116,11 @@ def exchange_codex_token(session: BrowserSession, code: str, code_verifier: str)
         "redirect_uri": _cfg.CODEX_REDIRECT_URI,
         "code_verifier": code_verifier,
     }
-    headers = {
+    headers = session._get_common_headers()
+    headers.update({
         "Content-Type": "application/x-www-form-urlencoded",
         "Accept": "application/json",
-    }
-    base = session._get_common_headers()
-    base.update(headers)
-    headers = base
+    })
 
     logger.info("[Codex] 用 authorization code 换 token...")
     resp = session.post(_cfg.CODEX_TOKEN_URL, headers=headers, data=urlencode(data))

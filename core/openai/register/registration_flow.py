@@ -56,7 +56,7 @@ from core.openai.auth.openai_auth import (
 from core.openai.auth.sentinel_runner import SentinelSDKError
 from core.openai.register.profile_utils import generate_random_birthday
 from core.openai.register.registration_preflight import registration_preflight
-from core.openai.transport.session import BrowserSession, close_browser_session
+from core.openai.transport.session import BrowserSession, HeaderProfile, close_browser_session
 
 logger = logging.getLogger(__name__)
 
@@ -424,7 +424,9 @@ def run_registration(
             password = credentials.get("registration_password")
             if password:
                 try:
-                    state = verify_login_password(session, password)
+                    state = verify_login_password(
+                        session, password, header_profile=HeaderProfile.STANDARD,
+                    )
                 except PasswordRejectedError as exc:
                     progress["password_state"] = "rejected"
                     otp_after_ts = time.time()
@@ -458,7 +460,9 @@ def run_registration(
                 )
                 callback_referer = "https://auth.openai.com/email-verification"
             elif step == "totp":
-                state = verify_login_totp(session, state, totp_secret)
+                state = verify_login_totp(
+                    session, state, totp_secret, header_profile=HeaderProfile.STANDARD,
+                )
                 callback_referer = "https://auth.openai.com/mfa"
             elif step == "profile":
                 if kind == "existing":

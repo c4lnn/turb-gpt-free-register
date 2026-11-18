@@ -1,6 +1,11 @@
 # -*- coding: utf-8 -*-
 import unittest
 from urllib.parse import parse_qs, urlparse
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+from config.browser import build_browser_environment
+from core.openai.transport.session import BrowserSession, HeaderProfile
 
 from core.openai.auth.chatgpt_auth import (
     _ensure_authorize_context, build_login_referer, get_csrf_token, signin_openai,
@@ -47,13 +52,13 @@ class ChatgptAuthContextTests(unittest.TestCase):
             def json(self):
                 return {"url": "https://auth.openai.com/oauth/authorize?state=opaque", "csrfToken": "formal-csrf"}
 
-        class SigninSession(_Session):
+        class SigninSession(BrowserSession):
             def __init__(self):
                 self.posts = []
                 self.gets = []
-
-            def get_nextauth_headers(self, referer):
-                return {"accept": "*/*", "content-type": "application/json", "referer": referer}
+                self.browser_profile = build_browser_environment()
+                self.device_id = _Session.device_id
+                self.auth_session_logging_id = _Session.auth_session_logging_id
 
             def get(self, url, *, headers):
                 self.gets.append((url, dict(headers)))
@@ -111,9 +116,6 @@ class ChatgptAuthContextTests(unittest.TestCase):
         self.assertEqual(authorize_query["login_hint"], [email])
 
     def test_nonregistration_auth_retains_its_request_semantics(self):
-        from types import SimpleNamespace
-        from unittest.mock import Mock
-        from core.openai.transport.session import BrowserSession
 
         session = BrowserSession.__new__(BrowserSession)
         session.browser_profile = {}
@@ -139,6 +141,42 @@ class ChatgptAuthContextTests(unittest.TestCase):
         for headers in (csrf_headers, signin_headers):
             self.assertNotIn("cache-control", headers)
             self.assertNotIn("pragma", headers)
+
+    def test_password_profile_csrf_and_signin_share_context_and_formal_token(self):
+        session = BrowserSession.__new__(BrowserSession)
+        session.browser_profile = build_browser_environment()
+        session.device_id = "fixture-device"
+        session.auth_session_logging_id = "fixture-logging"
+        session.get = Mock(return_value=SimpleNamespace(
+            raise_for_status=lambda: None, json=lambda: {"csrfToken": "formal-fixture"},
+        ))
+        session.post = Mock(return_value=SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"url": "https://auth.openai.com/oauth/authorize?state=fixture"},
+        ))
+        email = "fixture+tag@example.test"
+        referer = build_login_referer(session, email)
+        profile = HeaderProfile.PASSWORD_TOTP_LOGIN
+        csrf = get_csrf_token(session, login_referer=referer, header_profile=profile)
+        signin_openai(session, csrf, email, login_referer=referer, header_profile=profile)
+
+        csrf_args = session.get.call_args
+        signin_args = session.post.call_args
+        self.assertEqual(csrf_args.args[0], "https://chatgpt.com/api/auth/csrf")
+        csrf_headers = csrf_args.kwargs["headers"]
+        signin_headers = signin_args.kwargs["headers"]
+        self.assertNotIn("content-type", csrf_headers)
+        self.assertNotIn("origin", csrf_headers)
+        self.assertEqual(signin_headers["content-type"], "application/x-www-form-urlencoded")
+        self.assertEqual(signin_headers["origin"], "https://chatgpt.com")
+        for headers in (csrf_headers, signin_headers):
+            self.assertEqual(headers["referer"], referer)
+            self.assertEqual(headers["cache-control"], "no-cache")
+            self.assertEqual(headers["pragma"], "no-cache")
+            self.assertEqual(headers["sec-ch-ua-full-version"], session.browser_profile["chrome_full_version"])
+            self.assertNotIn("priority", headers)
+        self.assertEqual(parse_qs(urlparse(referer).query)["login_hint"], [email])
+        self.assertEqual(parse_qs(signin_args.kwargs["data"])["csrfToken"], ["formal-fixture"])
 
 if __name__ == "__main__":
     unittest.main()

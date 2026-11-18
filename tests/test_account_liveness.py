@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import json
 import tempfile
 import logging
 import unittest
@@ -6,6 +7,10 @@ import uuid
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+from urllib.parse import parse_qs, urlparse
+
+from config.browser import build_browser_environment
+from core.openai.transport.session import BrowserSession
 
 import core.openai.account.account_liveness as liveness
 
@@ -63,6 +68,9 @@ class AccountLivenessTests(unittest.TestCase):
         rate_patch = patch("core.openai.commerce.plan_check_service._wait_for_rate_slot")
         rate_patch.start()
         self.addCleanup(rate_patch.stop)
+        password_patch = patch.object(liveness, "_account_registration_password", return_value="")
+        password_patch.start()
+        self.addCleanup(password_patch.stop)
         _DummyBrowserSession.created = []
 
     def test_preflight_preserves_explicit_direct_route_and_skips_providers(self):
@@ -378,19 +386,144 @@ class AccountLivenessTests(unittest.TestCase):
                 logging.getLogger().removeHandler(handler)
                 handler.close()
 
-    def test_password_login_delegates_to_shared_verify_helper(self):
-        # 迁移回归：查活不再持有本地 password/verify 副本，改走共享 openai_auth 助手。
-        session = _DummyBrowserSession(proxy="")
-        with patch.object(liveness, "_account_registration_password", return_value="pw"), \
-             patch.object(liveness, "verify_login_password", return_value={
-                 "continue_url": "https://auth.openai.com/authorize/continue?x=1",
-             }) as verify, \
-             patch.object(liveness, "_follow_continue_and_fetch", return_value={"accessToken": "t"}) as follow:
-            result = liveness._login_via_password_or_otp(session, "a@b.c", 1.0)
+    def test_full_web_header_profile_reaches_csrf_password_and_mfa_without_leaking(self):
+        from core.openai.auth import openai_auth
 
-        verify.assert_called_once_with(session, "pw")
-        follow.assert_called_once()
-        self.assertEqual(result["accessToken"], "t")
+        def response(payload=None, url="", content_type="application/json"):
+            return SimpleNamespace(
+                status_code=200, url=url, text="", headers={"content-type": content_type},
+                json=lambda: payload or {}, raise_for_status=lambda: None,
+            )
+
+        class Session(BrowserSession):
+            def __init__(self):
+                self.proxy = ""
+                self.device_id = "fixture-device"
+                self.auth_session_logging_id = "fixture-logging"
+                self.oai_session_id = "fixture-session"
+                self.browser_profile = build_browser_environment()
+                self.document_navigation_id = "before-authorize"
+                self.datadog_origin = "rum"
+                self.requests = []
+
+            def fingerprint_summary_text(self):
+                return "synthetic-profile"
+
+            def auth_cookie_header(self):
+                return ""
+
+            def get(self, url, *, headers, **_kwargs):
+                self.requests.append(("GET", urlparse(url).path, dict(headers), None))
+                if urlparse(url).path == "/api/auth/csrf":
+                    return response({"csrfToken": "formal-fixture"})
+                if urlparse(url).path == "/api/auth/session":
+                    return response()
+                if urlparse(url).path == "/oauth/authorize":
+                    return response(url="https://auth.openai.com/log-in/password", content_type="text/html")
+                raise AssertionError("unexpected GET")
+
+            def post(self, url, *, headers, data, **_kwargs):
+                path = urlparse(url).path
+                self.requests.append(("POST", path, dict(headers), data))
+                if path == "/api/auth/signin/openai":
+                    return response({"url": "https://auth.openai.com/oauth/authorize?state=fixture"})
+                if path == "/backend-api/sentinel/req":
+                    flow = json.loads(data)["flow"]
+                    return response({"token": "challenge-" + flow, "so": {"required": False}})
+                if path == "/api/accounts/password/verify":
+                    return response({"page": {"type": "mfa_challenge", "payload": {"factor_id": "factor-fixture"}}})
+                if path == "/api/accounts/mfa/issue_challenge":
+                    return response()
+                if path == "/api/accounts/mfa/verify":
+                    return response({"continue_url": "https://chatgpt.com/api/auth/callback/openai"})
+                raise AssertionError("unexpected POST")
+
+        class SDK:
+            def __init__(self, *, flow, device_id, **_kwargs):
+                self.flow, self.device_id = flow, device_id
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                pass
+
+            def requirements(self):
+                return "requirements-fixture"
+
+            def solve(self, challenge):
+                return json.dumps({
+                    "p": "proof-fixture", "t": "", "c": challenge["token"],
+                    "id": self.device_id, "flow": self.flow,
+                }), None
+
+        for password in ("snapshot-fixture", ""):
+            with self.subTest(password_available=bool(password)):
+                session = Session()
+                with patch.object(liveness, "_account_registration_password", side_effect=[password, "changed-password"]), \
+                     patch.object(liveness, "_new_fingerprint_pinned_session", return_value=session), \
+                     patch.object(liveness, "_warm_login_fingerprint_context"), \
+                     patch.object(liveness, "_account_totp_secret", return_value="secret-fixture"), \
+                     patch.object(liveness, "_account_totp_code", return_value="000000"), \
+                     patch.object(liveness, "_follow_continue_and_fetch", return_value={"accessToken": "fixture"}), \
+                     patch.object(liveness, "_login_via_email_otp", return_value={"accessToken": "fixture"}), \
+                     patch.object(openai_auth, "SentinelSDK", SDK), \
+                     patch.object(openai_auth, "_proxy_retry_config", return_value=(1, 0)), \
+                     patch("core.openai.transport.session.random.getrandbits", side_effect=[11, 12, 21, 22, 31, 32]), \
+                     patch("core.openai.transport.session.uuid.uuid4", side_effect=["nav-fixture", "invoke-1", "invoke-2", "invoke-3"]):
+                    returned, info = liveness._login_via_full_web_flow(
+                        "fixture+tag@example.test", "", email_source=None, fingerprint_state={},
+                    )
+
+                self.assertIs(returned, session)
+                self.assertEqual(info["accessToken"], "fixture")
+                paths = [item[1] for item in session.requests]
+                prefix = ["/api/auth/csrf", "/api/auth/session", "/api/auth/signin/openai", "/oauth/authorize"]
+                self.assertEqual(paths[:4], prefix)
+                csrf_headers, signin_headers, nav_headers = [session.requests[index][2] for index in (0, 2, 3)]
+                self.assertEqual(parse_qs(session.requests[2][3])["csrfToken"], ["formal-fixture"])
+                if not password:
+                    self.assertEqual(paths, prefix)
+                    self.assertEqual(csrf_headers["referer"], "https://chatgpt.com/auth/login")
+                    self.assertEqual(csrf_headers["content-type"], "application/json")
+                    self.assertIn("priority", nav_headers)
+                    self.assertEqual(nav_headers["sec-fetch-user"], "?1")
+                    self.assertNotIn("sec-ch-ua-full-version", csrf_headers)
+                    continue
+
+                self.assertEqual(paths[4:], [
+                    "/backend-api/sentinel/req", "/api/accounts/password/verify",
+                    "/api/accounts/mfa/issue_challenge", "/backend-api/sentinel/req",
+                    "/api/accounts/mfa/verify",
+                ])
+                self.assertEqual(csrf_headers["referer"], signin_headers["referer"])
+                self.assertEqual(parse_qs(urlparse(csrf_headers["referer"]).query)["login_hint"], ["fixture+tag@example.test"])
+                self.assertNotIn("content-type", csrf_headers)
+                for headers in (csrf_headers, signin_headers):
+                    self.assertEqual(headers["cache-control"], "no-cache")
+                    self.assertEqual(headers["pragma"], "no-cache")
+                self.assertNotIn("sec-fetch-user", nav_headers)
+                self.assertEqual(nav_headers["sec-fetch-site"], "cross-site")
+                self.assertEqual(nav_headers["referer"], "https://chatgpt.com/")
+                auth_requests = [session.requests[index] for index in (5, 6, 8)]
+                self.assertEqual(json.loads(auth_requests[0][3]), {"password": "snapshot-fixture"})
+                self.assertEqual([request[2]["accept"] for request in auth_requests], ["application/json", "*/*", "application/json"])
+                self.assertNotIn("openai-sentinel-token", auth_requests[1][2])
+                self.assertEqual([request[2]["x-datadog-trace-id"] for request in auth_requests], ["11", "21", "31"])
+                self.assertEqual({request[2]["x-openai-document-navigation-id"] for request in auth_requests}, {"nav-fixture"})
+                for index, request in enumerate(session.requests):
+                    headers = request[2]
+                    if index == 1:
+                        self.assertIn("priority", headers)
+                        self.assertNotIn("sec-ch-ua-full-version", headers)
+                        continue
+                    self.assertNotIn("priority", headers)
+                    if index in (4, 7):
+                        self.assertNotIn("sec-ch-ua-full-version", headers)
+                        self.assertNotIn("x-datadog-trace-id", headers)
+                        self.assertEqual(headers["content-type"], "text/plain;charset=UTF-8")
+                    else:
+                        self.assertEqual(headers["sec-ch-ua-full-version"], session.browser_profile["chrome_full_version"])
 
 
     def test_reauth_transport_retry_keeps_liveness_otp_on_final_document_id(self):

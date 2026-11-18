@@ -7,7 +7,7 @@ from unittest.mock import patch
 from config import browser as browser_config
 import core.openai.auth.openai_auth as openai_auth
 import core.openai.codex.codex_oauth as codex_oauth
-from core.openai.transport.session import BrowserSession
+from core.openai.transport.session import BrowserSession, HeaderProfile
 
 
 class _Response:
@@ -36,7 +36,7 @@ class _ObservedResponse(_Response):
         super().raise_for_status()
 
 
-class _ProtocolSession:
+class _ProtocolSession(BrowserSession):
     def __init__(self):
         self.device_id = "device-id"
         self.document_navigation_id = "document-1"
@@ -51,9 +51,12 @@ class _ProtocolSession:
         self.gets = []
         self.get_navigation_ids = []
 
-    def get_auth_headers(self, referer="", *, include_high_entropy=False):
+    def get_auth_headers(
+        self, referer="", *, include_high_entropy=False, accept="application/json",
+        header_profile=HeaderProfile.STANDARD,
+    ):
         headers = {
-            "accept": "application/json",
+            "accept": accept,
             "content-type": "application/json",
             "sec-fetch-site": "same-origin",
             "sec-fetch-mode": "cors",
@@ -63,15 +66,10 @@ class _ProtocolSession:
             "x-access-flow-invocation-id": str(uuid.uuid4()),
             "x-openai-document-navigation-id": self.document_navigation_id,
         }
-        if include_high_entropy:
+        if include_high_entropy or header_profile is HeaderProfile.PASSWORD_TOTP_LOGIN:
             headers.update(self._high_entropy_headers())
         return headers
 
-    def get_auth_navigate_headers(self, referer="", *, include_high_entropy=False, **_kwargs):
-        headers = {"referer": referer}
-        if include_high_entropy:
-            headers.update(self._high_entropy_headers())
-        return headers
 
     def _high_entropy_headers(self):
         return {
@@ -89,7 +87,7 @@ class _ProtocolSession:
     def navigator_language(self):
         return "en-US"
 
-    def get_sentinel_headers(self):
+    def get_sentinel_headers(self, *, header_profile=HeaderProfile.STANDARD):
         return {"content-type": "text/plain;charset=UTF-8"}
 
     def auth_cookie_header(self):
@@ -184,8 +182,13 @@ class OpenAIRegistrationFlowTests(unittest.TestCase):
         )
         openai_auth.navigate_email_otp_send(session)
 
-        self.assertFalse(any(name.startswith("sec-ch-ua-") for name in session.posts[0][1]))
-        self.assertFalse(any(name.startswith("sec-ch-ua-") for name in session.gets[0][1]))
+        high_entropy = {
+            "sec-ch-ua-full-version", "sec-ch-ua-full-version-list",
+            "sec-ch-ua-platform-version", "sec-ch-ua-arch",
+            "sec-ch-ua-bitness", "sec-ch-ua-model",
+        }
+        self.assertTrue(high_entropy.isdisjoint(session.posts[0][1]))
+        self.assertTrue(high_entropy.isdisjoint(session.gets[0][1]))
 
     def test_auth_high_entropy_headers_are_opt_in_per_request(self):
         positive = _ProtocolSession()
@@ -320,6 +323,23 @@ class OpenAIRegistrationFlowTests(unittest.TestCase):
                 "id": session.device_id, "flow": flow,
             })
         return result
+
+    def test_password_and_mfa_reject_mismatched_credentials_before_sending(self):
+        for flow in ("password_verify", "verify_mfa"):
+            for field in ("flow", "id", "c", "p"):
+                with self.subTest(flow=flow, field=field):
+                    session = _ProtocolSession()
+                    proof = self._solved_response(session, flow)
+                    token = json.loads(proof["_sentinel_header"])
+                    token[field] = "" if field == "p" else "mismatched"
+                    proof["_sentinel_header"] = json.dumps(token)
+                    with patch.object(openai_auth, "request_sentinel_token", return_value=proof):
+                        with self.assertRaises(openai_auth.SentinelRequestError):
+                            if flow == "password_verify":
+                                openai_auth.verify_login_password(session, "synthetic-password")
+                            else:
+                                openai_auth._mfa_verify(session, "synthetic-factor", "000000")
+                    self.assertEqual(session.posts, [])
 
     def test_result_from_another_flow_cannot_be_consumed(self):
         session = _ProtocolSession()
@@ -703,8 +723,6 @@ class OpenAIRegistrationFlowTests(unittest.TestCase):
         self.assertEqual(headers["accept"], "application/json")
         self.assertEqual(headers["content-type"], "application/json")
         self.assertEqual(headers["origin"], "https://auth.openai.com")
-        sentinel.assert_called_once_with(session, "password_verify")
-        build.assert_called_once_with(session, {}, "password_verify")
         self.assertEqual(result["continue_url"], "/api/accounts/email-otp/send")
 
     def test_verify_login_password_explicit_rejection(self):
@@ -861,7 +879,6 @@ class OpenAIRegistrationFlowTests(unittest.TestCase):
                 {"page": {"type": "mfa_challenge", "payload": {"factor_id": "f1"}}},
                 "JBSWY3DPEHPK3PXP",
             )
-        sentinel.assert_called_once_with(session, "verify_mfa")
         self.assertEqual(
             [post[0] for post in session.posts],
             [
@@ -932,7 +949,7 @@ class OpenAIRegistrationFlowTests(unittest.TestCase):
 
         session = TraceSession()
 
-        def request_sentinel(current_session, flow):
+        def request_sentinel(current_session, flow, **_kwargs):
             events.append({"kind": "sentinel", "flow": flow})
             return self._solved_response(current_session, flow, include_so=True)
 
@@ -997,7 +1014,7 @@ class OpenAIRegistrationFlowTests(unittest.TestCase):
         flows = []
         error = openai_auth.SentinelRequestError("challenge unavailable", "sentinel_network_failed")
 
-        def fail_sentinel(_session, flow):
+        def fail_sentinel(_session, flow, **_kwargs):
             flows.append(flow)
             raise error
 
@@ -1159,7 +1176,7 @@ class OpenAIRegistrationFlowTests(unittest.TestCase):
             len(sessions),
         )
 
-    def test_registration_follow_authorize_omits_user_header_and_auto_follows(self):
+    def test_registration_follow_authorize_rebuilds_each_redirect_hop(self):
         class Session(_ProtocolSession):
             def get_auth_navigate_headers(self, referer="", user_initiated=True, **_kwargs):
                 headers = {"referer": referer}
@@ -1170,6 +1187,10 @@ class OpenAIRegistrationFlowTests(unittest.TestCase):
             def get(self, url, *, headers, allow_redirects=True):
                 self.gets.append((url, dict(headers), allow_redirects))
                 self.get_navigation_ids.append(self.document_navigation_id)
+                if len(self.gets) == 1:
+                    response = _Response(status_code=302, url=url)
+                    response.headers = {"location": "/email-verification"}
+                    return response
                 return _Response(url="https://auth.openai.com/email-verification")
 
         session = Session()
@@ -1181,12 +1202,17 @@ class OpenAIRegistrationFlowTests(unittest.TestCase):
             )
 
         self.assertEqual(final_url, "https://auth.openai.com/email-verification")
-        self.assertEqual(len(session.gets), 1)
-        url, headers, allow_redirects = session.gets[0]
-        self.assertEqual(url, "https://auth.openai.com/oauth/authorize?state=test")
-        self.assertNotIn("sec-fetch-user", headers)
-        self.assertFalse(any(name.startswith("sec-ch-ua-") for name in headers))
-        self.assertTrue(allow_redirects)
+        self.assertEqual(len(session.gets), 2)
+        first_url, first_headers, first_redirects = session.gets[0]
+        second_url, second_headers, second_redirects = session.gets[1]
+        self.assertEqual(first_url, "https://auth.openai.com/oauth/authorize?state=test")
+        self.assertEqual(second_url, "https://auth.openai.com/email-verification")
+        self.assertFalse(first_redirects)
+        self.assertFalse(second_redirects)
+        self.assertEqual(first_headers, second_headers)
+        self.assertEqual(first_headers["referer"], "https://chatgpt.com/")
+        self.assertNotIn("sec-fetch-user", first_headers)
+        self.assertFalse(any(name.startswith("sec-ch-ua-") for name in first_headers))
 
     def test_follow_authorize_default_keeps_user_initiated_header(self):
         class Session(_ProtocolSession):
@@ -1203,7 +1229,7 @@ class OpenAIRegistrationFlowTests(unittest.TestCase):
             )
 
         self.assertEqual(len(session.gets), 1)
-        self.assertTrue(session.gets[0][2])
+        self.assertFalse(session.gets[0][2])
         self.assertEqual(session.gets[0][1]["sec-fetch-user"], "?1")
 
     def _probe_registration_navigation_id(self, session):

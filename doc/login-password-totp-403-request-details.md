@@ -113,7 +113,7 @@
 | header | `x-datadog-origin` | `rum` | 同值公共字段 |
 | header | `tracestate` | `dd=s:1;o:rum` | 同值公共字段 |
 
-**来源（按组）**：#58/#84/#93 认证 fetch 共同值，#84 单独将 Accept 覆盖为 */*。三个请求 navigation ID 相同，RUM 采样标记相同；生成算法无法判断。本地见 `session.py:572–598、683–697` 和 `openai_auth.py:987–1040`。Origin 为 auth 源，Referer 仅为根 URL，不擅加密码/MFA 路径。
+**来源（按组）**：#58/#84/#93 认证 fetch 共同值，#84 单独将 Accept 覆盖为 */*。三个请求 navigation ID 相同，RUM 采样标记相同；生成算法无法判断。本地见 `session.py:572–598、683–697` 和 `openai_auth.py:992–1045`。Origin 为 auth 源，Referer 仅为根 URL，不擅加密码/MFA 路径。
 
 ### T-SentinelPOST
 
@@ -155,7 +155,7 @@
 | header-json | `flow` | `password_verify` | E-58 |
 | header-json | `flow` | `verify_mfa` | E-93 |
 
-**来源（按字段机制）**：`c` 分别匹配 #34/#87 响应 token，确认 password_verify 的 #34→#58、verify_mfa 的 #87→#93；`id` 与对应请求 id 及 oai-did 同值；`flow` 与对应请求一致。两组 challenge 的 proofofwork.required、turnstile.required 都为 true，`p` 与 requirements p 不同，`t` 非空但不直接等于 dx。SDK 求解算法无法判断；本地当前 SDK 请求／solve 见 `core/openai/auth/openai_auth.py:409–451`，消费校验见 `459–475`。
+**来源（按字段机制）**：`c` 分别匹配 #34/#87 响应 token，确认 password_verify 的 #34→#58、verify_mfa 的 #87→#93；`id` 与对应请求 id 及 oai-did 同值；`flow` 与对应请求一致。两组 challenge 的 proofofwork.required、turnstile.required 都为 true，`p` 与 requirements p 不同，`t` 非空但不直接等于 dx。SDK 求解算法无法判断；本地当前 SDK 请求／solve 见 `core/openai/auth/openai_auth.py:419–461`，消费校验见 `469–485`。
 
 ## 公共 Cookie 基线
 
@@ -294,7 +294,7 @@ CSRF Cookie URL 解码后按竖线分为两部分：
 ### 字段来源
 
 - 本条所有 query（包括 state、S256 code_challenge、client_id、scope、redirect_uri 等）完整包含于 #17 JSON url，且该 url 与 #18 请求 URL 完全相同。#17 同时设置 state/pkce.code_verifier Cookie，不代表 opaque Cookie 就是明文 verifier，浏览器／服务端内部生成算法无法判断。#18 Location 解析后与 #19 请求 URL 相同。
-- Sec-Fetch-Site=cross-site、mode=navigate、dest=document，Referer 仍为 chatgpt.com 根 URL；未记录 Sec-Fetch-User。#19 不能仅因目标域名未变而改写为 same-origin。本地导航模板见 `core/openai/transport/session.py:719–735`，不代替捕获证据。
+- Sec-Fetch-Site=cross-site、mode=navigate、dest=document，Referer 仍为 chatgpt.com 根 URL；未记录 Sec-Fetch-User。#19 不能仅因目标域名未变而改写为 same-origin。本地导航模板见 `core/openai/transport/session.py:719–735`；`follow_authorize` 对重定向逐跳发送并保留同一导航头（`core/openai/auth/openai_auth.py:347–377`），不代替捕获证据。
 - Cookie 初始来源按对应 K 组；本条未找到此前域／路径和值匹配的 Set-Cookie，不能由相邻请求推定来源。
 
 ## 请求 #19 — GET auth.openai.com/log-in/password
@@ -315,7 +315,7 @@ CSRF Cookie URL 解码后按竖线分为两部分：
 
 ### 字段来源
 
-- Sec-Fetch-Site=cross-site、mode=navigate、dest=document，Referer 仍为 chatgpt.com 根 URL；未记录 Sec-Fetch-User。#19 不能仅因目标域名未变而改写为 same-origin。本地导航模板见 `core/openai/transport/session.py:719–735`，不代替捕获证据。
+- Sec-Fetch-Site=cross-site、mode=navigate、dest=document，Referer 仍为 chatgpt.com 根 URL；未记录 Sec-Fetch-User。#19 不能仅因目标域名未变而改写为 same-origin。本地导航模板见 `core/openai/transport/session.py:719–735`；`follow_authorize` 对重定向逐跳发送并保留同一导航头（`core/openai/auth/openai_auth.py:347–377`），不代替捕获证据。
 - Cookie `oai-did` 的值匹配此前 #18 Set-Cookie；响应属性 `domain=.openai.com；path=/；samesite=lax`。这是作用域与内容证据，不保证唯一写入者。
 - Cookie `rg_context`、`iss_context` 的值匹配此前 #18 Set-Cookie；响应属性 `domain=auth.openai.com；path=/；samesite=lax`。这是作用域与内容证据，不保证唯一写入者。
 - Cookie `oai-login-csrf_dev_3772291445` 的值匹配此前 #18 Set-Cookie；响应属性 `httponly=True；path=/；samesite=Lax；secure=True`。这是作用域与内容证据，不保证唯一写入者。
@@ -341,7 +341,7 @@ CSRF Cookie URL 解码后按竖线分为两部分：
 
 ### 字段来源
 
-- body 的 p 是当前 flow requirements 编码证明，整体脱敏，其生成算法无法判断；id 与设备 query/Cookie 同值；flow 指定认证步骤。本地输入和紧凑 JSON 构造见 `core/openai/auth/openai_auth.py:414–428`、`core/openai/auth/sentinel.py:259–276`。Content-Type 保留 text/plain，不改为 application/json。
+- body 的 p 是当前 flow requirements 编码证明，整体脱敏，其生成算法无法判断；id 与设备 query/Cookie 同值；flow 指定认证步骤。本地输入和紧凑 JSON 构造见 `core/openai/auth/openai_auth.py:424–438`、`core/openai/auth/sentinel.py:259–276`。Content-Type 保留 text/plain，不改为 application/json。
 - Content-Length 与本次原始 body 字节数相符；脱敏结构不是原始序列化，不按占位文本重算长度。
 - Cookie `oaicom-stable-id` 的值匹配此前 #19 Set-Cookie；响应属性 `domain=openai.com；path=/；secure=True；samesite=Lax`。这是作用域与内容证据，不保证唯一写入者。
 - Cookie `oai-did` 的值匹配此前 #19 Set-Cookie；响应属性 `domain=openai.com；path=/；samesite=Lax`。这是作用域与内容证据，不保证唯一写入者。
@@ -373,7 +373,7 @@ CSRF Cookie URL 解码后按竖线分为两部分：
 
 ### 字段来源
 
-- body.password 是密码输入，无法判断人工／密码管理器／自动填入；本地 password 入参见 `core/openai/auth/openai_auth.py:1025–1040`。token 组成和 #34→#58 消费关系见 E-58。
+- body.password 是密码输入，无法判断人工／密码管理器／自动填入；本地 password 入参见 `core/openai/auth/openai_auth.py:1036–1051`。token 组成和 #34→#58 消费关系见 E-58。
 - Content-Length 与本次原始 body 字节数相符；脱敏结构不是原始序列化，不按占位文本重算长度。
 - Cookie `oaicom-stable-id` 的值匹配此前 #19 Set-Cookie；响应属性 `domain=openai.com；path=/；secure=True；samesite=Lax`。这是作用域与内容证据，不保证唯一写入者。
 - Cookie `oai-did` 的值匹配此前 #19 Set-Cookie；响应属性 `domain=openai.com；path=/；samesite=Lax`。这是作用域与内容证据，不保证唯一写入者。
@@ -410,7 +410,7 @@ CSRF Cookie URL 解码后按竖线分为两部分：
 
 ### 字段来源
 
-- body.id 与 #58 JSON page.payload.factor_id、page.payload.factors[0].id 及 oai-client-auth-session 的 MFA factor 同值；#93 还匹配 #84 的 MFA factor。多个位置同值不能证明浏览器读取哪一个。type=totp 与响应 factor_type 一致；本地见 `core/openai/auth/openai_auth.py:987–1016`。
+- body.id 与 #58 JSON page.payload.factor_id、page.payload.factors[0].id 及 oai-client-auth-session 的 MFA factor 同值；#93 还匹配 #84 的 MFA factor。多个位置同值不能证明浏览器读取哪一个。type=totp 与响应 factor_type 一致；本地见 `core/openai/auth/openai_auth.py:992–1021`。
 - force_fresh_challenge 是 JSON false；Accept 显式覆盖为 */*；本请求没有 openai-sentinel-token，不能套用 #58/#93 的凭据模板。
 - Content-Length 与本次原始 body 字节数相符；脱敏结构不是原始序列化，不按占位文本重算长度。
 - Cookie `oaicom-stable-id` 的值匹配此前 #19 Set-Cookie；响应属性 `domain=openai.com；path=/；secure=True；samesite=Lax`。这是作用域与内容证据，不保证唯一写入者。
@@ -437,7 +437,7 @@ CSRF Cookie URL 解码后按竖线分为两部分：
 
 ### 字段来源
 
-- body 的 p 是当前 flow requirements 编码证明，整体脱敏，其生成算法无法判断；id 与设备 query/Cookie 同值；flow 指定认证步骤。本地输入和紧凑 JSON 构造见 `core/openai/auth/openai_auth.py:414–428`、`core/openai/auth/sentinel.py:259–276`。Content-Type 保留 text/plain，不改为 application/json。
+- body 的 p 是当前 flow requirements 编码证明，整体脱敏，其生成算法无法判断；id 与设备 query/Cookie 同值；flow 指定认证步骤。本地输入和紧凑 JSON 构造见 `core/openai/auth/openai_auth.py:424–438`、`core/openai/auth/sentinel.py:259–276`。Content-Type 保留 text/plain，不改为 application/json。
 - Content-Length 与本次原始 body 字节数相符；脱敏结构不是原始序列化，不按占位文本重算长度。
 - Cookie `oaicom-stable-id` 的值匹配此前 #19 Set-Cookie；响应属性 `domain=openai.com；path=/；secure=True；samesite=Lax`。这是作用域与内容证据，不保证唯一写入者。
 - Cookie `oai-did` 的值匹配此前 #19 Set-Cookie；响应属性 `domain=openai.com；path=/；samesite=Lax`。这是作用域与内容证据，不保证唯一写入者。
@@ -470,8 +470,8 @@ CSRF Cookie URL 解码后按竖线分为两部分：
 
 ### 字段来源
 
-- body.id 与 #58 JSON page.payload.factor_id、page.payload.factors[0].id 及 oai-client-auth-session 的 MFA factor 同值；#93 还匹配 #84 的 MFA factor。多个位置同值不能证明浏览器读取哪一个。type=totp 与响应 factor_type 一致；本地见 `core/openai/auth/openai_auth.py:987–1016`。
-- body.code 为验证码输入，具体生成密钥、时钟或手工／自动来源无法判断；本地 code 参数与 TOTP 调用见 `core/openai/auth/openai_auth.py:1004–1016、1132–1146`。token 组成和 #87→#93 消费关系见 E-93。
+- body.id 与 #58 JSON page.payload.factor_id、page.payload.factors[0].id 及 oai-client-auth-session 的 MFA factor 同值；#93 还匹配 #84 的 MFA factor。多个位置同值不能证明浏览器读取哪一个。type=totp 与响应 factor_type 一致；本地见 `core/openai/auth/openai_auth.py:992–1021`。
+- body.code 为验证码输入，具体生成密钥、时钟或手工／自动来源无法判断；本地 code 参数与 TOTP 调用见 `core/openai/auth/openai_auth.py:1015–1021、1142–1156`。token 组成和 #87→#93 消费关系见 E-93。
 - Content-Length 与本次原始 body 字节数相符；脱敏结构不是原始序列化，不按占位文本重算长度。
 - Cookie `oaicom-stable-id` 的值匹配此前 #19 Set-Cookie；响应属性 `domain=openai.com；path=/；secure=True；samesite=Lax`。这是作用域与内容证据，不保证唯一写入者。
 - Cookie `oai-did` 的值匹配此前 #19 Set-Cookie；响应属性 `domain=openai.com；path=/；samesite=Lax`。这是作用域与内容证据，不保证唯一写入者。

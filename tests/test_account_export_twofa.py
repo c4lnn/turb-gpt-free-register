@@ -5,6 +5,7 @@ from unittest.mock import Mock, patch
 
 import core.openai.account.account_export as account_export
 import core.openai.auth.openai_auth as openai_auth
+from core.openai.transport.session import HeaderProfile
 
 class _CircuitSession:
     def __init__(self):
@@ -67,7 +68,8 @@ class _ReauthSession(_CircuitSession):
     def get_auth_navigate_headers(self, referer="", **_kwargs):
         return {"referer": referer}
 
-    def get_auth_headers(self, referer=""):
+    def get_auth_headers(self, referer="", *, include_high_entropy=False, accept="application/json",
+                         header_profile=HeaderProfile.STANDARD):
         return {
             "referer": referer,
             "x-openai-document-navigation-id": self.document_navigation_id,
@@ -358,7 +360,7 @@ class AccountExportTwofaTests(unittest.TestCase):
             self.assertEqual(account_export.setup_2fa(
                 session, "user@example.test", password="saved-password",
             ), "secret")
-        verify.assert_called_once_with(session, "saved-password")
+        verify.assert_called_once_with(session, "saved-password", header_profile=HeaderProfile.STANDARD)
 
     def test_independent_setup_uses_existing_access_token_before_reauth(self):
         session = Mock()

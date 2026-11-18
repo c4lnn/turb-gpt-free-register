@@ -7,7 +7,7 @@ import json
 import logging
 from urllib.parse import urlencode, urlparse, parse_qs
 
-from core.openai.transport.session import BrowserSession
+from core.openai.transport.session import BrowserSession, HeaderProfile
 from config import (
     OPENAI_CLIENT_ID, OPENAI_SCOPE, OPENAI_AUDIENCE, OPENAI_REDIRECT_URI
 )
@@ -85,25 +85,26 @@ def get_providers(session: BrowserSession) -> dict:
     return data
 
 
-def get_csrf_token(session: BrowserSession, *, login_referer: str | None = None) -> str:
+def get_csrf_token(
+    session: BrowserSession, *, login_referer: str | None = None,
+    header_profile: HeaderProfile = HeaderProfile.STANDARD,
+) -> str:
     """
     步骤2: 获取 CSRF Token。
     GET https://chatgpt.com/api/auth/csrf
 
     CSRF token 将在后续 signin 请求中使用。
-    注册显式提供 login_referer 时使用正式登录页上下文和禁缓存头；
-    普通登录保留原有请求语义，设备 warmup 不调用此函数。
+    显式登录上下文用于正式登录页 Referer 和禁缓存头；
+    目标密码登录额外启用场景画像，设备 warmup 不调用此函数。
 
     Returns:
         csrfToken 字符串
     """
     url = "https://chatgpt.com/api/auth/csrf"
-    headers = session.get_nextauth_headers(
+    headers = session.get_nextauth_csrf_headers(
         referer=login_referer if login_referer is not None else "https://chatgpt.com/auth/login",
+        no_cache=login_referer is not None, header_profile=header_profile,
     )
-    if login_referer is not None:
-        headers.pop("content-type", None)
-        headers.update({"cache-control": "no-cache", "pragma": "no-cache"})
 
     logger.info("[步骤2] 获取 CSRF Token...")
     resp = session.get(url, headers=headers)
@@ -131,6 +132,7 @@ def probe_auth_session(session: BrowserSession) -> dict:
 
 def signin_openai(
     session: BrowserSession, csrf_token: str, email: str, *, login_referer: str | None = None,
+    header_profile: HeaderProfile = HeaderProfile.STANDARD,
 ) -> str:
     """
     步骤3: 发起 OAuth Signin 请求。
@@ -142,7 +144,7 @@ def signin_openai(
         session: 浏览器会话
         csrf_token: 从步骤2获取的 CSRF token
         email: 注册邮箱
-        login_referer: 注册显式共享的登录页 Referer；提供时启用禁缓存头
+        login_referer: 显式共享的正式登录页 Referer；提供时启用禁缓存头
 
     Returns:
         authorize_url: auth.openai.com 的授权 URL
@@ -158,12 +160,9 @@ def signin_openai(
 
     referer = login_referer if login_referer is not None else build_login_referer(session, email)
 
-    # 构造 signin 请求头，仅在此端点覆盖 Origin 和 Referer。
-    headers = session.get_nextauth_headers(referer=referer)
-    headers["content-type"] = "application/x-www-form-urlencoded"
-    headers["origin"] = "https://chatgpt.com"
-    if login_referer is not None:
-        headers.update({"cache-control": "no-cache", "pragma": "no-cache"})
+    headers = session.get_nextauth_signin_headers(
+        referer=referer, no_cache=login_referer is not None, header_profile=header_profile,
+    )
     # 构造请求体
     body = urlencode({
         "callbackUrl": "https://chatgpt.com/",

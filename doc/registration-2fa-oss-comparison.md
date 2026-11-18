@@ -165,8 +165,8 @@ signup()
 
 | 请求 | 当前 Referer/来源 |
 |---|---|
-| 注册正式 `get_csrf_token()` | 使用与 signin 共享的完整 `https://chatgpt.com/auth/login_with?...` Referer；显式注册参数下移除 GET Content-Type，并添加 `cache-control/pragma: no-cache`。普通登录未传参数时保留 `/auth/login` 默认值。 |
-| 注册 signin | 查询参数为 `prompt=login`、`auth_session_logging_id`、`screen_hint=login_or_signup`、`login_hint`；Referer 与正式 CSRF 共享，由 `callback_path`、`screen_hint`、`login_hint`、`auth_session_logging_id`、`ext-oai-did` 构造；另有 `Origin: https://chatgpt.com` 和两个 no-cache 头；form 的 `callbackUrl=https://chatgpt.com/`，`csrfToken` 来自正式 CSRF。查活虽共享 signin 函数，但未显式传注册 Referer 时保留原默认策略。 |
+| 注册正式 `get_csrf_token()` | 使用与 signin 共享的完整 `https://chatgpt.com/auth/login_with?...` Referer；显式注册参数下移除 GET Content-Type，并添加 `cache-control/pragma: no-cache`。无密码的标准邮箱 OTP 登录保留 `/auth/login` 默认上下文；有密码的查活 full-web 分支另选 `PASSWORD_TOTP_LOGIN`，构造并传递完整 `login_with` Referer。 |
+| 注册 signin | 查询参数为 `prompt=login`、`auth_session_logging_id`、`screen_hint=login_or_signup`、`login_hint`；Referer 与正式 CSRF 共享，由 `callback_path`、`screen_hint`、`login_hint`、`auth_session_logging_id`、`ext-oai-did` 构造；另有 `Origin: https://chatgpt.com` 和两个 no-cache 头；form 的 `callbackUrl=https://chatgpt.com/`，`csrfToken` 来自正式 CSRF。查活有密码分支也显式共享同一 Referer；无密码标准分支仍使用原默认策略。 |
 | authorize | `https://chatgpt.com/`。 |
 | `/create-account/password` | 当前落点若以 `https://auth.openai.com/` 开头则使用该 URL，否则使用 `https://auth.openai.com/`。 |
 | `/api/accounts/authorize/continue` 状态探测 | 注册为 `https://auth.openai.com/`，body 额外携带 `screen_hint=signup`；2FA 重认证保留 `/create-account` Referer，不发送 screen hint。 |

@@ -66,7 +66,6 @@ SEC_CH_UA_ARCH = '"arm"'
 SEC_CH_UA_BITNESS = '"64"'
 SEC_CH_UA_MODEL = '""'
 SEND_CLIENT_HINTS = True
-SEND_HIGH_ENTROPY_CLIENT_HINTS = False
 
 # ---------- 语言 / 时区 ----------
 BROWSER_LOCALE_PROFILE = "jp"

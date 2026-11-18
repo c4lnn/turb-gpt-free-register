@@ -8,10 +8,12 @@ from pathlib import Path
 from typing import Callable
 
 from core.infra import db
-from core.openai.transport.session import BrowserSession, close_browser_session
+from core.openai.transport.session import BrowserSession, HeaderProfile, close_browser_session
 from core.openai.codex.codex_oauth import _account_registration_password, _account_totp_secret, _account_totp_code
 from core.infra.humanize import delay as human_delay
-from core.openai.auth.chatgpt_auth import get_csrf_token, get_providers, probe_auth_session, signin_openai
+from core.openai.auth.chatgpt_auth import (
+    build_login_referer, get_csrf_token, get_providers, probe_auth_session, signin_openai,
+)
 from core.openai.auth.openai_auth import (
     follow_authorize,
     send_email_otp,
@@ -157,6 +159,7 @@ def _network_preflight_with_retry(
     proxy: str | None,
     max_attempts: int = 4,
     fingerprint_state: dict | None = None,
+    *, header_profile: HeaderProfile = HeaderProfile.STANDARD,
 ) -> tuple[BrowserSession, str]:
     """CSRF → Signin 备用预检；失败时保留同一会话重试。
 
@@ -185,10 +188,18 @@ def _network_preflight_with_retry(
         logger.info("[查活] 指纹摘要：%s", session.fingerprint_summary_text())
         try:
             _warm_login_fingerprint_context(session)
-            csrf = get_csrf_token(session, login_referer=None)
+            login_referer = (
+                build_login_referer(session, email)
+                if header_profile is HeaderProfile.PASSWORD_TOTP_LOGIN else None
+            )
+            csrf = get_csrf_token(
+                session, login_referer=login_referer, header_profile=header_profile,
+            )
             # 成功 Web 样本在 signin 前会再次确认匿名 NextAuth session。
             probe_auth_session(session)
-            authorize_url = signin_openai(session, csrf, email, login_referer=None)
+            authorize_url = signin_openai(
+                session, csrf, email, login_referer=login_referer, header_profile=header_profile,
+            )
             return session, authorize_url
         except Exception as exc:
             last_exc = exc
@@ -446,9 +457,9 @@ def _login_via_password_or_otp(
     email: str,
     otp_after_ts: float,
     email_source: str | None = None,
+    *, password: str, header_profile: HeaderProfile = HeaderProfile.STANDARD,
 ) -> dict:
-    """优先密码登录；如进入 MFA challenge 则自动用 TOTP 完成。"""
-    password = _account_registration_password(email)
+    """使用入口选定的密码快照；如进入 MFA challenge 则自动用 TOTP 完成。"""
     if not password:
         logger.info("[查活] 未找到注册密码，继续使用邮箱 OTP：%s", email)
         return _login_via_email_otp(
@@ -459,7 +470,7 @@ def _login_via_password_or_otp(
         )
 
     logger.info("[查活] 账号存在密码，优先走密码登录：%s", email)
-    password_result = verify_login_password(session, password)
+    password_result = verify_login_password(session, password, header_profile=header_profile)
     continue_url = get_auth_continue_url(password_result)
     page = password_result.get("page") if isinstance(password_result, dict) else {}
     page = page if isinstance(page, dict) else {}
@@ -473,11 +484,11 @@ def _login_via_password_or_otp(
         if not secret:
             raise RuntimeError(f"密码登录后进入 MFA，但账号没有 totp_secret：{email}")
         logger.info("[查活] 已进入 MFA challenge，开始提交 TOTP：%s factor_id=%s", email, factor_id)
-        _mfa_issue_challenge(session, factor_id)
+        _mfa_issue_challenge(session, factor_id, header_profile=header_profile)
         code = _account_totp_code(email)
         if not code:
             raise RuntimeError(f"无法生成 TOTP 验证码：{email}")
-        mfa_result = _mfa_verify(session, factor_id, code)
+        mfa_result = _mfa_verify(session, factor_id, code, header_profile=header_profile)
         mfa_continue_url = get_auth_continue_url(mfa_result) or continue_url
         if not mfa_continue_url:
             raise RuntimeError(f"MFA 验证成功但没有 continue_url: {mfa_result}")
@@ -511,15 +522,19 @@ def _login_via_full_web_flow(
     fingerprint_state: dict,
 ) -> tuple[BrowserSession, dict]:
     """按 plus 纯协议注册的 Web 登录序列建立一份全新登录态。"""
+    password = _account_registration_password(email)
+    header_profile = (
+        HeaderProfile.PASSWORD_TOTP_LOGIN if password else HeaderProfile.STANDARD
+    )
     session, authorize_url = _network_preflight_with_retry(
         email,
         proxy,
-        fingerprint_state=fingerprint_state,
+        fingerprint_state=fingerprint_state, header_profile=header_profile,
     )
     # 预检返回后本函数持有会话；只有成功返回才把释放责任移交给上层。
     try:
         otp_after_ts = time.time()
-        final_url = follow_authorize(session, authorize_url)
+        final_url = follow_authorize(session, authorize_url, header_profile=header_profile)
         dead_code = detect_account_unusable_text(final_url)
         if dead_code:
             raise AccountUnusableError(
@@ -530,7 +545,7 @@ def _login_via_full_web_flow(
             session,
             email,
             otp_after_ts,
-            email_source=email_source,
+            email_source=email_source, password=password, header_profile=header_profile,
         )
         return session, session_info
     except BaseException:

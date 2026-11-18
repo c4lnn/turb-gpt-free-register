@@ -14,7 +14,7 @@ from core.infra import db, job_context
 from core.mail import email_provider
 from core.link import flow_trigger
 from core.openai.register import registration_flow as registration
-from core.openai.transport.session import BrowserSession
+from core.openai.transport.session import BrowserSession, HeaderProfile
 from core.openai.register import registration_service
 from config import register as register_config
 
@@ -493,12 +493,13 @@ class RegistrationPipelineTests(unittest.TestCase):
             totp_secret="JBSWY3DPEHPK3PXP", extra={"registration_password": "stored-password", "note": "keep"})
         with self._pipeline({}, kind="existing") as (session, _), \
                 patch.object(registration, "verify_login_password", return_value={
-                    "continue_url": "https://chatgpt.com/api/auth/callback/openai"}), \
+                    "continue_url": "https://chatgpt.com/api/auth/callback/openai"}) as verify, \
                 patch.object(registration, "register_user") as create:
             result = self._run()
         self.assertTrue(result["success"])
         self.assertEqual(result["account_id"], original_id)
         self.assertEqual(result["registration"]["password_state"], "verified")
+        verify.assert_called_once_with(session, "stored-password", header_profile=HeaderProfile.STANDARD)
         row = db.get_account_by_email("user@example.com")
         self.assertEqual(row["access_token"], "test-access")
         self.assertEqual(json.loads(row["extra_json"])["note"], "keep")
@@ -527,7 +528,7 @@ class RegistrationPipelineTests(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertEqual(result["error_code"], "account_deactivated")
         self.assertEqual(result["error_stage"], "password")
-        verify.assert_called_once_with(session, "stored-password")
+        verify.assert_called_once_with(session, "stored-password", header_profile=HeaderProfile.STANDARD)
         otp.assert_not_called()
         callback.assert_not_called()
         release.assert_not_called()
@@ -557,7 +558,9 @@ class RegistrationPipelineTests(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertEqual(result["error_code"], "account_deactivated")
         self.assertEqual(result["error_stage"], "totp")
-        verify.assert_called_once_with(session, mfa_state, "secret-placeholder")
+        verify.assert_called_once_with(
+            session, mfa_state, "secret-placeholder", header_profile=HeaderProfile.STANDARD,
+        )
         otp.assert_not_called()
         callback.assert_not_called()
         release.assert_not_called()
@@ -842,7 +845,8 @@ class RegistrationPipelineTests(unittest.TestCase):
 
                 sentinel_flows = []
 
-                def sentinel_response(current_session, flow):
+                def sentinel_response(current_session, flow, *, header_profile=HeaderProfile.STANDARD):
+                    self.assertIs(header_profile, HeaderProfile.STANDARD)
                     sentinel_flows.append(flow)
                     return {
                         "token": "sentinel-challenge",

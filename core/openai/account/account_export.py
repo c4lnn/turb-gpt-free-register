@@ -21,7 +21,7 @@ from urllib.parse import urlencode, urljoin, urlparse
 import pyotp
 from requests.exceptions import TooManyRedirects
 
-from core.openai.transport.session import BrowserSession
+from core.openai.transport.session import BrowserSession, HeaderProfile, attach_sentinel_credentials
 from core.infra.humanize import delay as human_delay
 
 logger = logging.getLogger(__name__)
@@ -432,7 +432,7 @@ def _trigger_reauth(session: BrowserSession, email: str) -> str:
     """
     # 重新拿一次 csrf（旧的可能已过期）
     csrf_url = "https://chatgpt.com/api/auth/csrf"
-    csrf_resp = session.get(csrf_url, headers=session.get_nextauth_headers(referer="https://chatgpt.com/"))
+    csrf_resp = session.get(csrf_url, headers=session.get_nextauth_csrf_headers(referer="https://chatgpt.com/"))
     csrf_resp.raise_for_status()
     csrf_token = csrf_resp.json()["csrfToken"]
     logger.info("[2FA] 重认证 CSRF token 已获取")
@@ -447,9 +447,7 @@ def _trigger_reauth(session: BrowserSession, email: str) -> str:
     }
     signin_url = "https://chatgpt.com/api/auth/signin/openai?" + urlencode(query)
 
-    headers = session.get_nextauth_headers(referer="https://chatgpt.com/")
-    headers["content-type"] = "application/x-www-form-urlencoded"
-    headers["origin"] = "https://chatgpt.com"
+    headers = session.get_nextauth_signin_headers(referer="https://chatgpt.com/")
 
     body = urlencode({
         "callbackUrl": "https://chatgpt.com/?action=enable&factor=totp",
@@ -560,9 +558,7 @@ def _validate_reauth_otp(
     url = "https://auth.openai.com/api/accounts/email-otp/validate"
     headers = session.get_auth_headers(referer="https://auth.openai.com/email-verification")
     if sentinel_header:
-        headers["openai-sentinel-token"] = sentinel_header
-    if so_header:
-        headers["openai-sentinel-so-token"] = so_header
+        attach_sentinel_credentials(headers, sentinel_header, so_header)
     body = json.dumps({"code": code})
 
     logger.info("[2FA] 提交重认证 OTP，code_present=%s", bool(code))
@@ -602,8 +598,6 @@ def _enroll_totp(session: BrowserSession, access_token: str) -> tuple[str, str]:
     url = "https://chatgpt.com/backend-api/accounts/mfa/enroll"
     headers = session.get_chatgpt_headers(referer="https://chatgpt.com/")
     headers["authorization"] = f"Bearer {access_token}"
-    headers["oai-device-id"] = session.device_id
-    headers["oai-language"] = session.navigator_language()
 
     body = json.dumps({"factor_type": "totp"})
 
@@ -633,8 +627,6 @@ def _activate_totp(
     url = "https://chatgpt.com/backend-api/accounts/mfa/user/activate_enrollment"
     headers = session.get_chatgpt_headers(referer="https://chatgpt.com/")
     headers["authorization"] = f"Bearer {access_token}"
-    headers["oai-device-id"] = session.device_id
-    headers["oai-language"] = session.navigator_language()
 
     totp_code = pyotp.TOTP(secret).now()
     body = json.dumps({
@@ -790,7 +782,9 @@ def setup_2fa(
         if step == "password":
             if not str(password or "").strip():
                 raise RuntimeError("服务端要求密码验证，但账号没有已保存的 OpenAI 登录密码")
-            state = verify_login_password(session, str(password).strip())
+            state = verify_login_password(
+                session, str(password).strip(), header_profile=HeaderProfile.STANDARD,
+            )
             continue_url = get_auth_continue_url(state)
             if not continue_url:
                 raise RuntimeError("密码验证响应缺少有效 continue_url")

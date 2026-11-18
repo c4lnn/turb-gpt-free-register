@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from core.openai.auth import openai_auth
+from core.openai.transport.session import HeaderProfile
 
 
 class _Response:
@@ -30,8 +31,9 @@ class _AuthApiSession:
         self.auth_document_navigation_id = navigation_id
         self.calls = []
 
-    def get_auth_headers(self, referer, *, include_high_entropy=False):
-        return {"content-type": "application/json", "referer": referer}
+    def get_auth_headers(self, referer, *, include_high_entropy=False, accept="application/json",
+                         header_profile=HeaderProfile.STANDARD):
+        return {"accept": accept, "content-type": "application/json", "referer": referer}
 
     def attach_auth_document_navigation_header(self, headers):
         if self.auth_document_navigation_id:

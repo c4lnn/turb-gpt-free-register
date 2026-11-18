@@ -15,7 +15,9 @@ import pyotp
 
 from config import openai_protocol as _protocol_cfg
 from core.infra import job_context
-from core.openai.transport.session import BrowserSession, reset_retryable_circuit
+from core.openai.transport.session import (
+    BrowserSession, HeaderProfile, attach_sentinel_credentials, reset_retryable_circuit,
+)
 from core.openai.auth.sentinel import build_sentinel_request_body
 from core.openai.auth.sentinel_runner import SentinelSDK
 
@@ -347,6 +349,7 @@ def follow_authorize(
     authorize_url: str,
     *,
     user_initiated: bool = True,
+    header_profile: HeaderProfile = HeaderProfile.STANDARD,
 ) -> str:
     """跟随 authorize URL 重定向；允许注册导航省略 user-initiated 请求头。"""
     max_attempts, retry_delay = _proxy_retry_config()
@@ -356,8 +359,20 @@ def follow_authorize(
             logger.info(f"[步骤4] 跟随 authorize URL 重定向 (尝试 {attempt}/{max_attempts})...")
             headers = session.get_auth_navigate_headers(
                 referer="https://chatgpt.com/", user_initiated=user_initiated,
+                header_profile=header_profile,
             )
-            resp = session.get(authorize_url, headers=headers, allow_redirects=True)
+            current_url = authorize_url
+            for redirect_count in range(31):
+                resp = session.get(current_url, headers=headers, allow_redirects=False)
+                status = int(getattr(resp, "status_code", 0) or 0)
+                if status not in (301, 302, 303, 307, 308):
+                    break
+                location = (getattr(resp, "headers", {}) or {}).get("location")
+                if not location:
+                    break
+                if redirect_count == 30:
+                    raise RuntimeError("authorize 重定向超过 30 次")
+                current_url = urljoin(current_url, location)
             _rotate_document_navigation_id(session)
             resp.raise_for_status()
             final_url = str(getattr(resp, "url", "") or "")
@@ -406,7 +421,10 @@ def follow_authorize(
     raise last_exc if last_exc else RuntimeError("步骤4 重试耗尽但无异常记录")
 
 
-def request_sentinel_token(session: BrowserSession, flow: str) -> dict:
+def request_sentinel_token(
+    session: BrowserSession, flow: str, *,
+    header_profile: HeaderProfile = HeaderProfile.STANDARD,
+) -> dict:
     """当前步骤单 flow 采集、请求和求解，始终使用同一个 SDK 上下文。"""
     if not session.device_id:
         raise SentinelRequestError("Sentinel 设备上下文尚未初始化")
@@ -424,7 +442,7 @@ def request_sentinel_token(session: BrowserSession, flow: str) -> dict:
                 session, f"Sentinel challenge:{flow}",
                 lambda: session.post(
                     "https://sentinel.openai.com/backend-api/sentinel/req",
-                    headers=session.get_sentinel_headers(), data=body,
+                    headers=session.get_sentinel_headers(header_profile=header_profile), data=body,
                 ),
             )
         except job_context.StopRequested:
@@ -532,8 +550,6 @@ def navigate_create_account_password(
     url = "https://auth.openai.com/create-account/password"
     referer = current if current.startswith("https://auth.openai.com/") else "https://auth.openai.com/"
     headers = session.get_auth_navigate_headers(referer=referer)
-    headers["sec-fetch-site"] = "same-origin"
-    headers["sec-fetch-user"] = "?1"
     logger.info("[步骤5] 切换到创建账号密码页...")
     resp = session.get(url, headers=headers, allow_redirects=True)
     resp.raise_for_status()
@@ -559,9 +575,7 @@ def register_user(
     headers = session.get_auth_headers(
         referer="https://auth.openai.com/", include_high_entropy=include_high_entropy,
     )
-    headers["openai-sentinel-token"] = sentinel_header
-    if so_header:
-        headers["openai-sentinel-so-token"] = so_header
+    attach_sentinel_credentials(headers, sentinel_header, so_header)
     body = json.dumps({"password": password, "username": email}, separators=(",", ":"))
     logger.info("[步骤7] 提交邮箱和密码：%s", email)
     resp = session.post(url, headers=headers, data=body)
@@ -595,8 +609,6 @@ def navigate_email_otp_send(
         referer="https://auth.openai.com/",
         include_high_entropy=include_high_entropy,
     )
-    headers["sec-fetch-site"] = "same-origin"
-    headers["sec-fetch-user"] = "?1"
     _rotate_document_navigation_id(session)
     resp = session.get(url, headers=headers, allow_redirects=True)
     resp.raise_for_status()
@@ -613,8 +625,6 @@ def send_email_otp(session: BrowserSession, referer: str = "https://auth.openai.
     """重新发送邮箱验证码。用于验证码错误/过期后重新取码。"""
     url = "https://auth.openai.com/api/accounts/email-otp/send"
     headers = session.get_auth_navigate_headers(referer=referer)
-    headers["sec-fetch-site"] = "same-origin"
-    headers["sec-fetch-user"] = "?1"
     logger.info("[OTP] 请求重新发送邮箱验证码...")
     _rotate_document_navigation_id(session)
     resp = session.get(url, headers=headers, allow_redirects=True)
@@ -653,10 +663,8 @@ def validate_email_otp(
     url = "https://auth.openai.com/api/accounts/email-otp/validate"
 
     headers = session.get_auth_headers(referer=referer, include_high_entropy=include_high_entropy)
-    if sentinel_header:
-        headers["openai-sentinel-token"] = sentinel_header
+    attach_sentinel_credentials(headers, sentinel_header, so_header)
     if so_header:
-        headers["openai-sentinel-so-token"] = so_header
         logger.info("[步骤10] 已添加 openai-sentinel-so-token 头")
 
     body = json.dumps({"code": code})
@@ -718,9 +726,8 @@ def create_account(
     headers = session.get_auth_headers(
         referer="https://auth.openai.com/", include_high_entropy=include_high_entropy,
     )
-    headers["openai-sentinel-token"] = sentinel_header
+    attach_sentinel_credentials(headers, sentinel_header, so_header)
     if so_header:
-        headers["openai-sentinel-so-token"] = so_header
         logger.info(f"[步骤12] 已添加 openai-sentinel-so-token 头")
 
     body = json.dumps({
@@ -927,9 +934,7 @@ def probe_registration_state(
         session, sentinel_resp, "authorize_continue", consume_so=False,
     )
     headers = session.get_auth_headers(referer=referer)
-    headers["accept"] = "application/json"
-    headers["content-type"] = "application/json"
-    headers["openai-sentinel-token"] = sentinel_header
+    attach_sentinel_credentials(headers, sentinel_header)
     payload = {"username": {"kind": "email", "value": email}}
     if screen_hint is not None:
         payload["screen_hint"] = screen_hint
@@ -984,11 +989,12 @@ def _totp_code(secret: str) -> str:
         return ""
 
 
-def _mfa_issue_challenge(session, factor_id: str) -> dict:
-    headers = session.get_auth_headers(referer="https://auth.openai.com/")
-    headers["accept"] = "*/*"
-    headers.pop("openai-sentinel-token", None)
-    headers.pop("openai-sentinel-so-token", None)
+def _mfa_issue_challenge(
+    session, factor_id: str, *, header_profile: HeaderProfile = HeaderProfile.STANDARD,
+) -> dict:
+    headers = session.get_auth_headers(
+        referer="https://auth.openai.com/", accept="*/*", header_profile=header_profile,
+    )
     resp = session.post(
         "https://auth.openai.com/api/accounts/mfa/issue_challenge",
         headers=headers,
@@ -1001,15 +1007,20 @@ def _mfa_issue_challenge(session, factor_id: str) -> dict:
     return resp.json()
 
 
-def _mfa_verify(session, factor_id: str, code: str) -> dict:
+def _mfa_verify(
+    session, factor_id: str, code: str, *,
+    header_profile: HeaderProfile = HeaderProfile.STANDARD,
+) -> dict:
     flow = "verify_mfa"
-    sentinel_resp = request_sentinel_token(session, flow)
+    sentinel_resp = request_sentinel_token(session, flow, header_profile=header_profile)
     sentinel_header, so_header = build_sentinel_header(session, sentinel_resp, flow)
-    headers = session.get_auth_headers(referer="https://auth.openai.com/")
-    headers["accept"] = "application/json"
-    headers["openai-sentinel-token"] = sentinel_header
-    if (sentinel_resp.get("so") or {}).get("required") is True:
-        headers["openai-sentinel-so-token"] = so_header
+    headers = session.get_auth_headers(
+        referer="https://auth.openai.com/", header_profile=header_profile,
+    )
+    attach_sentinel_credentials(
+        headers, sentinel_header,
+        so_header if (sentinel_resp.get("so") or {}).get("required") is True else None,
+    )
     resp = session.post(
         "https://auth.openai.com/api/accounts/mfa/verify",
         headers=headers,
@@ -1023,17 +1034,19 @@ def _mfa_verify(session, factor_id: str, code: str) -> dict:
 
 
 def verify_login_password(
-    session, password: str,
+    session, password: str, *, header_profile: HeaderProfile = HeaderProfile.STANDARD,
 ) -> dict:
     """密码验证；每次为 password_verify flow 取得独立 Sentinel 凭据。"""
     flow = "password_verify"
-    sentinel_resp = request_sentinel_token(session, flow)
+    sentinel_resp = request_sentinel_token(session, flow, header_profile=header_profile)
     sentinel_header, so_header = build_sentinel_header(session, sentinel_resp, flow)
-    headers = session.get_auth_headers(referer="https://auth.openai.com/")
-    headers["accept"] = "application/json"
-    headers["openai-sentinel-token"] = sentinel_header
-    if (sentinel_resp.get("so") or {}).get("required") is True:
-        headers["openai-sentinel-so-token"] = so_header
+    headers = session.get_auth_headers(
+        referer="https://auth.openai.com/", header_profile=header_profile,
+    )
+    attach_sentinel_credentials(
+        headers, sentinel_header,
+        so_header if (sentinel_resp.get("so") or {}).get("required") is True else None,
+    )
     resp = session.post(
         "https://auth.openai.com/api/accounts/password/verify",
         headers=headers,
@@ -1075,8 +1088,6 @@ def _login_otp_follow_send(session, continue_url: str) -> dict:
     if url.startswith("/"):
         url = urljoin("https://auth.openai.com", url)
     headers = session.get_auth_navigate_headers(referer="https://auth.openai.com/log-in/password")
-    headers["sec-fetch-site"] = "same-origin"
-    headers["sec-fetch-user"] = "?1"
     logger.info("[登录] 跟随服务端指示的 email-otp/send 发送验证码")
     _rotate_document_navigation_id(session)
     resp = session.get(url, headers=headers, allow_redirects=True)
@@ -1129,7 +1140,9 @@ def request_login_otp(session, result, *, resend: bool = False) -> dict:
     raise RuntimeError(f"OTP 投递无支持路径: step={step}")
 
 
-def verify_login_totp(session, result, secret: str) -> dict:
+def verify_login_totp(
+    session, result, secret: str, *, header_profile: HeaderProfile = HeaderProfile.STANDARD,
+) -> dict:
     """密码/邮箱 OTP 后识别并完成 TOTP 校验。缺 factor_id 或缺 secret 即失败。"""
     continue_url = get_auth_continue_url(result)
     factor_id = _extract_factor_id(result, continue_url)
@@ -1138,12 +1151,12 @@ def verify_login_totp(session, result, secret: str) -> dict:
     secret = str(secret or "").strip()
     if not secret:
         raise RuntimeError("进入 MFA 但账号没有 totp_secret，无法生成动态码")
-    _mfa_issue_challenge(session, factor_id)
+    _mfa_issue_challenge(session, factor_id, header_profile=header_profile)
     code = _totp_code(secret)
     if not code:
         raise RuntimeError("无法生成 TOTP 动态码")
     logger.info("[登录] 提交 TOTP 动态码，factor_id_present=%s", bool(factor_id))
-    return _mfa_verify(session, factor_id, code)
+    return _mfa_verify(session, factor_id, code, header_profile=header_profile)
 
 
 def get_mfa_enabled(session, access_token: str) -> bool:

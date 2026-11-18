@@ -7,10 +7,24 @@ from http.cookiejar import Cookie
 from unittest.mock import patch
 
 from config.browser import build_browser_environment
-from core.openai.transport.session import BrowserSession
+from core.openai.transport.session import BrowserSession, HeaderProfile, attach_sentinel_credentials
 
 
 class SessionNavigationHeaderTests(unittest.TestCase):
+    HIGH_ENTROPY_FIELDS = {
+        "sec-ch-ua-full-version": "chrome_full_version",
+        "sec-ch-ua-full-version-list": "sec_ch_ua_full_version_list",
+        "sec-ch-ua-platform-version": "sec_ch_ua_platform_version",
+        "sec-ch-ua-arch": "sec_ch_ua_arch",
+        "sec-ch-ua-bitness": "sec_ch_ua_bitness",
+        "sec-ch-ua-model": "sec_ch_ua_model",
+    }
+    RUM_FIELDS = {
+        "traceparent", "tracestate", "x-access-flow-invocation-id",
+        "x-openai-document-navigation-id", "x-datadog-origin",
+        "x-datadog-sampling-priority", "x-datadog-trace-id", "x-datadog-parent-id",
+    }
+
     def test_vietnam_exit_uses_matching_locale_and_timezone(self):
         profile = build_browser_environment({
             "country": "VN",
@@ -66,7 +80,19 @@ class SessionNavigationHeaderTests(unittest.TestCase):
             "sec_ch_ua": '"Google Chrome";v="146", "Chromium";v="146"',
             "sec_ch_ua_mobile": "?0",
             "sec_ch_ua_platform": '"macOS"',
+            "chrome_full_version": "146.0.0.0",
+            "sec_ch_ua_full_version_list": '"Google Chrome";v="146.0.0.0", "Chromium";v="146.0.0.0"',
+            "sec_ch_ua_platform_version": '"15.7.0"',
+            "sec_ch_ua_arch": '"arm"',
+            "sec_ch_ua_bitness": '"64"',
+            "sec_ch_ua_model": '""',
         }
+        session.document_navigation_id = "document-for-header-tests"
+        session.datadog_origin = "rum"
+        session.datadog_trace_id = "11"
+        session.datadog_parent_id = "12"
+        session.device_id = "device-for-header-tests"
+        session.oai_session_id = "session-for-header-tests"
         return session
 
     def test_cross_site_auth_navigation_uses_native_document_headers(self):
@@ -177,6 +203,272 @@ class SessionNavigationHeaderTests(unittest.TestCase):
                 session.get_auth_navigate_headers(include_high_entropy=True)
         finally:
             session.close()
+
+    def test_password_totp_nine_scenes_have_exact_header_contracts(self):
+        from config import SENTINEL_SV
+
+        session = self._session_stub()
+        profile = HeaderProfile.PASSWORD_TOTP_LOGIN
+        referer = "https://chatgpt.com/auth/login_with?login_hint=user%2Btag%40example.test"
+        base = {"user-agent", "accept-language", "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform"}
+        fetch = {"accept", "sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest", "referer"}
+        high_entropy = set(self.HIGH_ENTROPY_FIELDS)
+        cached_fetch = base | fetch | high_entropy | {"cache-control", "pragma"}
+        auth_fetch = base | fetch | high_entropy | self.RUM_FIELDS | {"content-type", "origin"}
+        document = base | high_entropy | {
+            "accept", "referer", "sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest",
+            "upgrade-insecure-requests",
+        }
+        sentinel = base | fetch | {"content-type", "origin"}
+
+        with patch("core.openai.transport.session.random.getrandbits", side_effect=[11, 12, 21, 22, 31, 32]), patch(
+            "core.openai.transport.session.uuid.uuid4", side_effect=["password-call", "issue-call", "verify-call"]
+        ):
+            csrf = session.get_nextauth_csrf_headers(referer, header_profile=profile)
+            signin = session.get_nextauth_signin_headers(referer, header_profile=profile)
+            authorize = session.get_auth_navigate_headers(header_profile=profile)
+            password_page = session.get_auth_navigate_headers(header_profile=profile)
+            password_challenge = session.get_sentinel_headers(header_profile=profile)
+            password = attach_sentinel_credentials(
+                session.get_auth_headers("https://auth.openai.com/", header_profile=profile), "password-credential",
+            )
+            issue = session.get_auth_headers("https://auth.openai.com/", accept="*/*", header_profile=profile)
+            mfa_challenge = session.get_sentinel_headers(header_profile=profile)
+            verify = attach_sentinel_credentials(
+                session.get_auth_headers("https://auth.openai.com/", header_profile=profile), "mfa-credential",
+            )
+
+        scenes = [
+            (16, csrf, cached_fetch),
+            (17, signin, cached_fetch | {"content-type", "origin"}),
+            (18, authorize, document),
+            (19, password_page, document),
+            (34, password_challenge, sentinel),
+            (58, password, auth_fetch | {"openai-sentinel-token"}),
+            (84, issue, auth_fetch),
+            (87, mfa_challenge, sentinel),
+            (93, verify, auth_fetch | {"openai-sentinel-token"}),
+        ]
+        for capture, raw_headers, expected_fields in scenes:
+            with self.subTest(capture=capture):
+                headers = {name.lower(): value for name, value in raw_headers.items()}
+                self.assertEqual(set(headers), expected_fields)
+                self.assertEqual(headers["user-agent"], session.browser_profile["user_agent"])
+                self.assertEqual(headers["accept-language"], session.browser_profile["accept_language"])
+                for header, key in (
+                    ("sec-ch-ua", "sec_ch_ua"), ("sec-ch-ua-mobile", "sec_ch_ua_mobile"),
+                    ("sec-ch-ua-platform", "sec_ch_ua_platform"),
+                ):
+                    self.assertEqual(headers[header], session.browser_profile[key])
+                if capture not in (34, 87):
+                    self.assertEqual(
+                        {name: headers[name] for name in self.HIGH_ENTROPY_FIELDS},
+                        {name: session.browser_profile[key] for name, key in self.HIGH_ENTROPY_FIELDS.items()},
+                    )
+                if capture in (18, 19):
+                    self.assertTrue(headers["accept"].startswith("text/html,application/xhtml+xml"))
+                    self.assertEqual(headers["referer"], "https://chatgpt.com/")
+                    self.assertEqual(headers["sec-fetch-site"], "cross-site")
+                    self.assertEqual(headers["sec-fetch-mode"], "navigate")
+                    self.assertEqual(headers["sec-fetch-dest"], "document")
+                    self.assertEqual(headers["upgrade-insecure-requests"], "1")
+                else:
+                    self.assertEqual(headers["sec-fetch-site"], "same-origin")
+                    self.assertEqual(headers["sec-fetch-mode"], "cors")
+                    self.assertEqual(headers["sec-fetch-dest"], "empty")
+
+        for headers in (csrf, signin):
+            self.assertEqual(headers["accept"], "*/*")
+            self.assertEqual(headers["referer"], referer)
+            self.assertEqual(headers["cache-control"], "no-cache")
+            self.assertEqual(headers["pragma"], "no-cache")
+        self.assertEqual(signin["content-type"], "application/x-www-form-urlencoded")
+        self.assertEqual(signin["origin"], "https://chatgpt.com")
+        for headers in (password_challenge, mfa_challenge):
+            self.assertEqual(headers["accept"], "*/*")
+            self.assertEqual(headers["content-type"], "text/plain;charset=UTF-8")
+            self.assertEqual(headers["origin"], "https://sentinel.openai.com")
+            self.assertEqual(headers["referer"], f"https://sentinel.openai.com/backend-api/sentinel/frame.html?sv={SENTINEL_SV}")
+        for headers in (password, issue, verify):
+            self.assertEqual(headers["content-type"], "application/json")
+            self.assertEqual(headers["origin"], "https://auth.openai.com")
+            self.assertEqual(headers["referer"], "https://auth.openai.com/")
+        self.assertEqual(password["accept"], "application/json")
+        self.assertEqual(issue["accept"], "*/*")
+        self.assertEqual(verify["accept"], "application/json")
+        self.assertEqual(password["openai-sentinel-token"], "password-credential")
+        self.assertEqual(verify["openai-sentinel-token"], "mfa-credential")
+
+    def test_standard_nextauth_endpoints_preserve_cache_and_priority_choices(self):
+        session = self._session_stub()
+        referer = "https://chatgpt.com/auth/login_with?login_hint=registration%40example.test"
+        ordinary = session.get_nextauth_csrf_headers(referer)
+        self.assertEqual(ordinary, session.get_nextauth_headers(referer))
+        self.assertEqual(ordinary["content-type"], "application/json")
+        for no_cache in (False, True):
+            csrf = session.get_nextauth_csrf_headers(referer, no_cache=no_cache)
+            signin = session.get_nextauth_signin_headers(referer, no_cache=no_cache)
+            for headers in (csrf, signin):
+                self.assertEqual(headers["priority"], "u=1, i")
+                self.assertEqual(headers["referer"], referer)
+                self.assertTrue(set(self.HIGH_ENTROPY_FIELDS).isdisjoint(headers))
+                self.assertTrue(self.RUM_FIELDS.isdisjoint(headers))
+                if no_cache:
+                    self.assertEqual(headers["cache-control"], "no-cache")
+                    self.assertEqual(headers["pragma"], "no-cache")
+                else:
+                    self.assertNotIn("cache-control", headers)
+                    self.assertNotIn("pragma", headers)
+            self.assertNotIn("origin", csrf)
+            self.assertEqual("content-type" in csrf, not no_cache)
+            self.assertEqual(signin["content-type"], "application/x-www-form-urlencoded")
+            self.assertEqual(signin["origin"], "https://chatgpt.com")
+
+    def test_standard_auth_preserves_explicit_high_entropy_and_accept_choices(self):
+        session = self._session_stub()
+        referer = "https://auth.openai.com/"
+        fetch = session.get_auth_headers(referer, include_high_entropy=True, accept="*/*")
+        navigation = session.get_auth_navigate_headers(referer, include_high_entropy=True)
+        self.assertEqual(fetch["accept"], "*/*")
+        self.assertEqual(fetch["priority"], "u=1, i")
+        self.assertEqual(fetch["referer"], referer)
+        self.assertEqual(navigation["priority"], "u=0, i")
+        self.assertEqual(navigation["sec-fetch-user"], "?1")
+        self.assertEqual(navigation["sec-fetch-site"], "same-origin")
+        self.assertEqual(navigation["referer"], referer)
+        for headers in (fetch, navigation):
+            self.assertEqual(
+                {name: headers[name] for name in self.HIGH_ENTROPY_FIELDS},
+                {name: session.browser_profile[key] for name, key in self.HIGH_ENTROPY_FIELDS.items()},
+            )
+
+    def test_high_entropy_validation_rejects_each_missing_or_empty_profile_value(self):
+        session = self._session_stub()
+        complete = dict(session.browser_profile)
+        builders = (
+            lambda: session.get_nextauth_csrf_headers("https://chatgpt.com/", header_profile=HeaderProfile.PASSWORD_TOTP_LOGIN),
+            lambda: session.get_nextauth_signin_headers("https://chatgpt.com/", header_profile=HeaderProfile.PASSWORD_TOTP_LOGIN),
+            lambda: session.get_auth_headers(include_high_entropy=True),
+            lambda: session.get_auth_navigate_headers(header_profile=HeaderProfile.PASSWORD_TOTP_LOGIN),
+        )
+        for header, key in self.HIGH_ENTROPY_FIELDS.items():
+            for invalid in (None, "", " ", 0):
+                session.browser_profile = {**complete, key: invalid}
+                for index, build in enumerate(builders):
+                    with self.subTest(header=header, invalid=invalid, scene=index):
+                        with self.assertRaisesRegex(ValueError, header):
+                            build()
+            session.browser_profile = dict(complete)
+            del session.browser_profile[key]
+            with self.subTest(missing=key):
+                with self.assertRaisesRegex(ValueError, header):
+                    session.get_auth_headers(include_high_entropy=True)
+        session.browser_profile = complete
+        for build in builders:
+            self.assertEqual(build()["sec-ch-ua-model"], '""')
+
+    def test_non_chromium_scenes_do_not_fabricate_client_hints(self):
+        session = self._session_stub()
+        session.browser_profile = {
+            "user_agent": "Synthetic Safari", "accept_language": "en-GB,en;q=0.9", "send_client_hints": False,
+        }
+        for headers in (
+            session.get_nextauth_csrf_headers("https://chatgpt.com/"),
+            session.get_nextauth_signin_headers("https://chatgpt.com/"),
+            session.get_auth_headers(), session.get_auth_navigate_headers(),
+            session.get_sentinel_headers(header_profile=HeaderProfile.PASSWORD_TOTP_LOGIN),
+            session.get_chatgpt_headers(), session.get_chatgpt_navigate_headers(),
+        ):
+            self.assertEqual(headers["User-Agent"], "Synthetic Safari")
+            self.assertEqual(headers["accept-language"], "en-GB,en;q=0.9")
+            self.assertFalse(any(name.lower().startswith("sec-ch-") for name in headers))
+        for build in (
+            lambda: session.get_nextauth_csrf_headers("https://chatgpt.com/", header_profile=HeaderProfile.PASSWORD_TOTP_LOGIN),
+            lambda: session.get_nextauth_signin_headers("https://chatgpt.com/", header_profile=HeaderProfile.PASSWORD_TOTP_LOGIN),
+            lambda: session.get_auth_headers(header_profile=HeaderProfile.PASSWORD_TOTP_LOGIN),
+            lambda: session.get_auth_navigate_headers(include_high_entropy=True),
+        ):
+            with self.assertRaisesRegex(ValueError, "仅支持 Chromium"):
+                build()
+
+    def test_each_scene_returns_independent_dictionaries_without_interleaved_pollution(self):
+        session = self._session_stub()
+        target = HeaderProfile.PASSWORD_TOTP_LOGIN
+        builders = (
+            lambda: session.get_nextauth_headers(),
+            lambda: session.get_nextauth_csrf_headers("https://chatgpt.com/", header_profile=target),
+            lambda: session.get_nextauth_signin_headers("https://chatgpt.com/", header_profile=target),
+            lambda: session.get_auth_headers(header_profile=target),
+            lambda: session.get_auth_navigate_headers(header_profile=target),
+            lambda: session.get_sentinel_headers(header_profile=target),
+            lambda: session.get_chatgpt_headers(),
+            lambda: session.get_chatgpt_navigate_headers(),
+        )
+        for index, build in enumerate(builders):
+            with self.subTest(scene=index):
+                first, second = build(), build()
+                self.assertIsNot(first, second)
+                snapshot = dict(second)
+                self.assertIs(attach_sentinel_credentials(first, "validated-main", "validated-so"), first)
+                first["accept"] = "changed-for-one-request"
+                session.get_auth_headers()
+                session.get_auth_navigate_headers()
+                session.get_nextauth_csrf_headers("https://chatgpt.com/")
+                session.get_sentinel_headers()
+                self.assertEqual(second, snapshot)
+        for headers in (
+            session.get_auth_headers(), session.get_nextauth_headers(), session.get_sentinel_headers(),
+            session.get_chatgpt_headers(), session.get_auth_navigate_headers(),
+        ):
+            self.assertIn("priority", headers)
+            self.assertTrue(set(self.HIGH_ENTROPY_FIELDS).isdisjoint(headers))
+            self.assertNotIn("openai-sentinel-token", headers)
+            self.assertNotIn("openai-sentinel-so-token", headers)
+        self.assertEqual(session.get_auth_navigate_headers()["sec-fetch-user"], "?1")
+
+    def test_auth_rum_ids_are_request_scoped_and_navigation_id_is_stable(self):
+        session = self._session_stub()
+        profile = HeaderProfile.PASSWORD_TOTP_LOGIN
+        with patch("core.openai.transport.session.random.getrandbits", side_effect=[101, 102, 201, 202, 301, 302]), patch(
+            "core.openai.transport.session.uuid.uuid4", side_effect=["inv-password", "inv-issue", "inv-verify"]
+        ):
+            requests = [
+                session.get_auth_headers(header_profile=profile),
+                session.get_auth_headers(accept="*/*", header_profile=profile),
+                session.get_auth_headers(header_profile=profile),
+            ]
+        for headers, trace, parent, invocation in zip(
+            requests, (101, 201, 301), (102, 202, 302), ("inv-password", "inv-issue", "inv-verify"),
+        ):
+            self.assertEqual(headers["x-datadog-trace-id"], str(trace))
+            self.assertEqual(headers["x-datadog-parent-id"], str(parent))
+            self.assertEqual(headers["traceparent"], f"00-{trace:032x}-{parent:016x}-01")
+            self.assertEqual(headers["tracestate"], "dd=s:1;o:rum")
+            self.assertEqual(headers["x-datadog-origin"], "rum")
+            self.assertEqual(headers["x-datadog-sampling-priority"], "1")
+            self.assertEqual(headers["x-access-flow-invocation-id"], invocation)
+            self.assertEqual(headers["x-openai-document-navigation-id"], "document-for-header-tests")
+        self.assertEqual(session.document_navigation_id, "document-for-header-tests")
+        for headers in (
+            session.get_nextauth_csrf_headers("https://chatgpt.com/", header_profile=profile),
+            session.get_auth_navigate_headers(header_profile=profile),
+            session.get_sentinel_headers(header_profile=profile),
+        ):
+            self.assertTrue(self.RUM_FIELDS.isdisjoint(headers))
+
+    def test_credential_attachment_only_adds_supplied_validated_tokens(self):
+        for sentinel_header in (None, "", "validated-main"):
+            for so_header in (None, "", "validated-so"):
+                with self.subTest(sentinel_header=sentinel_header, so_header=so_header):
+                    headers = {"accept": "application/json"}
+                    result = attach_sentinel_credentials(headers, sentinel_header, so_header)
+                    self.assertIs(result, headers)
+                    expected = {"accept": "application/json"}
+                    if sentinel_header:
+                        expected["openai-sentinel-token"] = sentinel_header
+                    if so_header:
+                        expected["openai-sentinel-so-token"] = so_header
+                    self.assertEqual(headers, expected)
 
     def test_navigation_headers_keep_navigation_only_fields(self):
         # 关闭传输层默认头后，导航头必须由构造函数显式提供，否则导航报文会缺这两项。
