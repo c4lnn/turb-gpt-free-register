@@ -111,6 +111,74 @@ class _ProtocolSession(BrowserSession):
 
 class OpenAIRegistrationFlowTests(unittest.TestCase):
 
+    def test_registration_steps_opt_in_consume_real_header_scenes(self):
+        class Session(_ProtocolSession):
+            get_auth_headers = BrowserSession.get_auth_headers
+            get_sentinel_headers = BrowserSession.get_sentinel_headers
+
+            def __init__(self):
+                super().__init__()
+                synthetic = self.browser_profile
+                self.browser_profile = browser_config.build_browser_environment()
+                self.browser_profile.update(synthetic)
+                self.browser_profile["chrome_full_version"] = "152.3.4.5"
+                self.datadog_origin = "rum"
+
+            def get(self, url, *, headers, allow_redirects=True):
+                self.gets.append((url, headers, allow_redirects))
+                response = _Response(url=url)
+                if url.endswith("/oauth/authorize"):
+                    response.status_code = 302
+                    response.headers = {"location": "/create-account/password"}
+                return response
+
+        for enabled in (False, True):
+            with self.subTest(include_high_entropy=enabled):
+                session = Session()
+                expected = session._high_entropy_headers()
+                expected["sec-ch-ua-full-version"] = "152.3.4.5"
+                options = {"include_high_entropy": True} if enabled else {}
+                openai_auth.follow_authorize(
+                    session, "https://auth.openai.com/oauth/authorize", **options,
+                )
+                self.assertEqual(len(session.gets), 2)
+                self.assertEqual(session.gets[1][0], "https://auth.openai.com/create-account/password")
+                openai_auth.navigate_create_account_password(session, **options)
+                openai_auth.send_email_otp(session, **options)
+                otp_state = {"page": {"type": "email_otp_verification"}}
+                openai_auth.request_login_otp(session, otp_state, resend=True, **options)
+                openai_auth.request_login_otp(session, otp_state, **options)
+                openai_auth.request_login_otp(session, {
+                    "continue_url": "/api/accounts/email-otp/send",
+                }, **options)
+                with patch.object(openai_auth, "SentinelSDK") as sdk:
+                    sdk.return_value.__enter__.return_value.requirements.return_value = "proof"
+                    sdk.return_value.__enter__.return_value.solve.return_value = ("sentinel-token", None)
+                    with patch.object(openai_auth, "build_sentinel_header", return_value=("sentinel-token", None)):
+                        openai_auth.probe_registration_state(session, "register@example.test", **options)
+                self.assertEqual(sum(url.endswith("/sentinel/req") for url, *_ in session.posts), 1)
+                business = [headers for _url, headers, _redirects in session.gets]
+                for url, headers, data, redirects in session.posts:
+                    if url.endswith("/sentinel/req"):
+                        self.assertTrue(expected.keys().isdisjoint(headers))
+                        self.assertNotIn("x-access-flow-invocation-id", headers)
+                    else:
+                        business.append(headers)
+                        if url.endswith("/resend"):
+                            self.assertIsNone(data)
+                            self.assertFalse(redirects)
+                        if url.endswith("/authorize/continue"):
+                            self.assertEqual(json.loads(data), {"username": {"kind": "email", "value": "register@example.test"}})
+                            self.assertEqual(headers["openai-sentinel-token"], "sentinel-token")
+                for headers in business:
+                    if enabled:
+                        self.assertEqual({key: headers[key] for key in expected}, expected)
+                    else:
+                        self.assertTrue(expected.keys().isdisjoint(headers))
+                for _url, headers, _redirects in session.gets:
+                    self.assertEqual(headers["sec-fetch-mode"], "navigate")
+                    self.assertEqual(headers["sec-fetch-user"], "?1")
+
 
     def test_navigate_create_account_password_switches_from_passwordless_page(self):
         class Session(_ProtocolSession):

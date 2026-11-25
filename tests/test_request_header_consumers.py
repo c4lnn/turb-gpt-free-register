@@ -59,6 +59,41 @@ def _response(payload):
 
 
 class AccountExportHeaderConsumerTests(unittest.TestCase):
+    def test_callback_chain_and_session_keep_high_entropy_opt_in_isolated(self):
+        for include in (False, True):
+            with self.subTest(include=include):
+                session = _session()
+                callback = "https://chatgpt.com/api/auth/callback/openai?code=synthetic"
+                session.get.side_effect = [
+                    SimpleNamespace(status_code=302, headers={"location": callback}),
+                    SimpleNamespace(status_code=302, headers={"location": "/"}),
+                    SimpleNamespace(status_code=200, headers={}, url="https://chatgpt.com/"),
+                    _response({"accessToken": "synthetic-token"}),
+                ]
+                account_export.follow_oauth_callback(
+                    session, "https://auth.openai.com/authorize/continue", referer="https://auth.openai.com/",
+                    user_initiated=False, include_high_entropy=include,
+                )
+                result = account_export.fetch_session(session, include_high_entropy=include)
+                self.assertEqual(result["accessToken"], "synthetic-token")
+                expected = {
+                    "sec-ch-ua-full-version": session.browser_profile["chrome_full_version"],
+                    "sec-ch-ua-full-version-list": session.browser_profile["sec_ch_ua_full_version_list"],
+                    "sec-ch-ua-platform-version": session.browser_profile["sec_ch_ua_platform_version"],
+                    "sec-ch-ua-arch": session.browser_profile["sec_ch_ua_arch"],
+                    "sec-ch-ua-bitness": session.browser_profile["sec_ch_ua_bitness"],
+                    "sec-ch-ua-model": session.browser_profile["sec_ch_ua_model"],
+                } if include else {}
+                for index, call in enumerate(session.get.call_args_list):
+                    headers = CaseInsensitiveDict(call.kwargs["headers"])
+                    self.assertEqual({key: value for key, value in headers.items() if key in _HIGH_ENTROPY}, expected)
+                    self.assertEqual(headers["priority"], "u=0, i" if index < 3 else "u=1, i")
+                    self.assertNotIn("sec-fetch-user", headers)
+                    self.assertNotIn("traceparent", headers)
+                self.assertEqual([call.kwargs["headers"]["sec-fetch-site"] for call in session.get.call_args_list],
+                                 ["same-origin", "cross-site", "cross-site", "same-origin"])
+                self.assertFalse(_HIGH_ENTROPY.intersection(session.get_nextauth_headers()))
+
     def test_reauth_preserves_standard_csrf_signin_and_token_source(self):
         session = _session()
         session.get.return_value = _response({"csrfToken": "fresh-csrf"})
@@ -185,6 +220,7 @@ class CodexHeaderConsumerTests(unittest.TestCase):
 class BootstrapCommerceHeaderConsumerTests(unittest.TestCase):
     def test_anonymous_bootstrap_keeps_frontend_and_generic_fetch_scenes_distinct(self):
         session = _session()
+        session.get.return_value = _response({})
         chatgpt_bootstrap.anonymous_bootstrap(session, strict=True)
         calls = session.get.call_args_list
         self.assertEqual([call.args[0] for call in calls], [

@@ -71,6 +71,7 @@ def _finalize_registration_session(
     callback_referer: str = "https://auth.openai.com/about-you",
     *,
     callback_user_initiated: bool = True,
+    include_high_entropy: bool = False,
 ) -> tuple[dict, str]:
     """
     完成 OAuth 回调并拉取 accessToken。
@@ -91,9 +92,10 @@ def _finalize_registration_session(
             follow_oauth_callback(
                 session, continue_url, referer=callback_referer,
                 user_initiated=callback_user_initiated,
+                include_high_entropy=include_high_entropy,
             )
             human_delay("post_auth")
-            session_info = fetch_session(session)
+            session_info = fetch_session(session, include_high_entropy=include_high_entropy)
             access_token = session_info.get("accessToken")
             if not access_token:
                 raise RuntimeError("session 响应缺少 accessToken")
@@ -172,7 +174,9 @@ def _validate_registration_otp(session, email, otp_after_ts, otp_code, state, *,
                 raise
             logger.warning("[OTP] 验证码错误或过期，重新发送并获取当前验证码")
             otp_after_ts = time.time()
-            state = request_login_otp(session, state, resend=True)
+            state = request_login_otp(
+                session, state, resend=True, include_high_entropy=include_high_entropy,
+            )
             current_otp = None
 
 def _persist_registration_password(email, password, progress, session):
@@ -299,11 +303,15 @@ def run_registration(
         # ==================== 阶段1: ChatGPT 认证 ====================
         # 步骤2: 获取 CSRF token
         login_referer = build_login_referer(session, email)
-        csrf_token = get_csrf_token(session, login_referer=login_referer)
+        csrf_token = get_csrf_token(
+            session, login_referer=login_referer, include_high_entropy=True,
+        )
         human_delay("api")
 
         # 步骤3: 发起 OAuth signin
-        authorize_url = signin_openai(session, csrf_token, email, login_referer=login_referer)
+        authorize_url = signin_openai(
+            session, csrf_token, email, login_referer=login_referer, include_high_entropy=True,
+        )
         human_delay("api")
 
         # ==================== 阶段2: OpenAI Auth ====================
@@ -311,7 +319,7 @@ def run_registration(
         progress["auth_step"] = "authorize"
         otp_after_ts = time.time()
         authorize_final_url = follow_authorize(
-            session, authorize_url, user_initiated=False,
+            session, authorize_url, user_initiated=False, include_high_entropy=True,
         )
         human_delay("navigate")
 
@@ -323,6 +331,7 @@ def run_registration(
                 state = probe_registration_state(
                     session, email,
                     referer="https://auth.openai.com/",
+                    include_high_entropy=True,
                     screen_hint="signup",
                 )
             except StopRequested:
@@ -388,7 +397,9 @@ def run_registration(
             callback_referer = "https://auth.openai.com/email-verification"
         if kind in ("new_password", "new_passwordless"):
             progress["auth_step"] = "password"
-            navigate_create_account_password(session, registration_landing_url)
+            navigate_create_account_password(
+                session, registration_landing_url, include_high_entropy=True,
+            )
             human_delay("navigate")
             candidate = generate_registration_password()
             logger.info("[密码候选/待提交] email=%s password=%s", email, candidate)
@@ -399,13 +410,14 @@ def run_registration(
             try:
                 state = register_user(
                     session, email, candidate, header, so_header,
+                    include_high_entropy=True,
                 )
             except PasswordRegistrationRejectedError as exc:
                 progress["password_state"] = "rejected"
                 if kind != "new_passwordless":
                     raise
                 otp_after_ts = time.time()
-                state = request_login_otp(session, exc.result)
+                state = request_login_otp(session, exc.result, include_high_entropy=True)
             else:
                 progress["password_state"] = "confirmed"
                 progress["password_effective"] = True
@@ -415,7 +427,9 @@ def run_registration(
                 if get_auth_step(state) == "otp":
                     progress["auth_step"] = "otp"
                     otp_after_ts = time.time()
-                    navigate_email_otp_send(session, get_auth_continue_url(state))
+                    navigate_email_otp_send(
+                        session, get_auth_continue_url(state), include_high_entropy=True,
+                    )
                     if kind == "new_passwordless":
                         # 设置密码已切换 challenge，不能使用此前给入的验证码。
                         otp_code = None
@@ -457,6 +471,7 @@ def run_registration(
             if step == "otp":
                 state = _validate_registration_otp(
                     session, email, otp_after_ts, otp_code, state,
+                    include_high_entropy=kind != "existing",
                 )
                 callback_referer = "https://auth.openai.com/email-verification"
             elif step == "totp":
@@ -473,13 +488,16 @@ def run_registration(
                 header, so_header = build_sentinel_header(session, proof, "oauth_create_account")
                 human_delay("challenge")
                 human_delay("form")
-                state = create_account(session, name, birthday, header, so_header)
+                state = create_account(
+                    session, name, birthday, header, so_header, include_high_entropy=True,
+                )
                 callback_referer = "https://auth.openai.com/about-you"
             else:
                 session_info, access_token = _finalize_registration_session(
                     session, get_auth_continue_url(state), email,
                     callback_referer=callback_referer if kind == "existing" else "https://auth.openai.com/",
                     callback_user_initiated=kind == "existing",
+                    include_high_entropy=kind != "existing",
                 )
                 progress["authenticated"] = True
                 break

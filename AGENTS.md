@@ -15,7 +15,7 @@
 
 ## 文档落盘位置
 
-- 新增的普通项目文档 MUST 落盘到仓库根目录 `doc/`，包括抓包分析、流程对照和技术说明；维护已有此类文档时 SHOULD 统一迁移到 `doc/` 并同步有效引用，不再向 `docs/`、`saz/` 或 `har/` 写入报告。
+- 新增的普通项目文档 MUST 落盘到仓库根目录 `doc/`，包括抓包分析、流程对照和技术说明。
 - 根目录 `README.md`、`AGENTS.md` 及 OpenSpec 规范产物保留各自约定位置；原始 `.saz`、`.har` 等捕获文件仍保留在捕获目录，不随文档迁移。历史记录中的原交付路径不作为当前文档位置。
 
 ## HAR、SAZ、仓库与 OSS 对照文档
@@ -23,13 +23,15 @@
 - 比较以**流程分支**为单位，相应分支的最新 HAR / SAZ 是原生浏览器捕获参考，本地仓库是主要对照对象；OSS 仅在有助于解释字段构造时引用，不得代替 HAR / SAZ 证据。
 - 每个分支 MUST 简述捕获范围、比较起点与截止点。注册 / 登录流程的 SAZ、HAR 与代码比较默认从**正式 CSRF → signin** 开始：正式 CSRF 指响应中的 `csrfToken` 被后续 signin 消费的那次 `GET /api/auth/csrf`，不得以“第二次 CSRF”作为跨实现的统一定义；捕获未覆盖该段时 MUST 明确注明，不补写为已捕获请求。用户已确认完整的本地请求顺序不再反复审计；已确认不需要对齐的请求合并一句排除说明，不逐端点展开。
 - 正式 CSRF 之前的 trace、设备 warmup、providers、入口页面等请求默认不纳入主链比较，不逐项审计其顺序、请求头或响应；正式 CSRF / signin 携带的 Cookie、设备 ID、登录上下文等仍 MUST 核对取值与构造来源，仅在解释字段来源、状态传递或必要差异时引用前置请求并标明“辅助请求”，不得扩展为前置流程审计。省略不代表前置流程一致，也不代表请求未发生。
+- 对照密码注册分支时，即使 `/oauth/authorize` 落到邮箱验证页，本地代码仍先设置密码。HAR / SAZ 中设置密码前的首次 `POST /api/accounts/passwordless/send-otp` 在本地可省略，对照时 MUST 跳过，不计为缺失请求；设置密码后的 `/api/accounts/email-otp/send` 和 `/api/accounts/email-otp/validate` 仍须纳入对照。此规则不适用于无密码注册或登录分支。
+- 参考 HAR / SAZ 描述注册主链时，OAuth callback 之后 MUST 只保留建立注册会话或取得 `accessToken` 所需的请求（包括返回会话数据的重定向落地页）。如需用后续带鉴权的请求验证 token 来源，仅列首个匹配请求作为证据，不纳入主链。静态资源、埋点、账号 / 模型 / 对话等登录后初始化默认省略；未捕获的 session 或 token 请求不得补入。
 - 正文聚焦请求头、请求体和 query 的**字段集合、取值差异、生成来源与跨请求传递**。SHOULD 使用“请求｜位置/字段｜HAR / SAZ 值或来源证据｜本地值及构造来源｜结论”五列表格；只展开差异和来源未明项，一致项合并说明，共用字段只解释一次。MUST NOT 强制使用六列实现对照或逐端点八维判定。
 - 字段来源核对 MUST 覆盖所有相关字段，不限于 Sentinel：包括 UA / Client Hints、语言与时区画像、设备 ID、Cookie / Set-Cookie、CSRF、OAuth state / PKCE、auth-session logging ID、document-navigation ID、invocation ID、trace / RUM、Origin / Referer、Fetch Metadata，以及请求体和 query 的输入来源。
 - 浏览器指纹的版本值 MAY 与捕获不同，但每个相关请求的指纹头字段名及是否出现 MUST 逐项核对；版本、平台、品牌等值差异仍须记录。MUST 区分 HTTP 头画像、SDK 的 JS 环境与传输后端指纹，不得仅因共享配置便断言等同真实浏览器。
+- 主链业务请求 MUST 带齐六项高熵 Client Hints，Sentinel `/req` MUST 不带高熵 Client Hints。注册从正式 CSRF 起显式选择，新号业务、条件路径、回调各跳及最终 session 延续同一画像；预热和其他共享消费者保持原行为。此项是本地目标合同，不是所有历史抓包的共同事实；HAR / SAZ 未记录高熵的请求仍须按原证据注明，不得改写为已捕获或据此宣称 Cloudflare / MFA 403 已解决。
 - “值相同”与“来源一致” MUST 分开判断。来源结论须有响应到请求的内容匹配或源码赋值 / 调用证据；HAR / SAZ 无法证明的浏览器内部生成算法、随机源、画像选择和 JS 运行时行为直接写“无法判断”，不得由字段同名、相邻请求或同值推断。
 - Sentinel 仅展开在本次捕获内有内容匹配消费者的 challenge，注明“challenge → 消费者”的序号、端点及 flow；SO 元数据不得当作 SO token。省略未匹配 challenge 不代表请求未发生、token 未被消费或捕获范围外没有消费者。
 - 辅助请求仅在解释字段来源、状态传递或必要差异时列出并标明“辅助请求”；不得伪装成 HAR / SAZ 已捕获端点。响应只保留证明字段来路或后续消费所需内容，不扩展为无关流程审计。
 - MUST 区分“HAR / SAZ 未记录”“源码未显式构造”“条件性请求未触发”“没有对应实现”和“无法判断”；静态构造不等于最终 wire headers，未实测不得声称服务端接受差异。
 - 每项差异 MUST 就近附 HAR / SAZ 请求序号及相关源码路径、行号。同端点重复捕获可合并，但须列出序号，不得由合并推断连续；多份 HAR / SAZ 保持独立，不拼接账号或 session。
 - Cookie、token、OTP、邮箱、密码、设备 / session 标识及动态敏感 query 值 MUST 脱敏；可记录字段名、固定非敏感值与内容匹配结果，不复述凭据。
-

@@ -192,7 +192,7 @@ def _append_batch_archive(
 
 def follow_oauth_callback(
     session: BrowserSession, continue_url: str, referer: str = "https://auth.openai.com/about-you",
-    *, user_initiated: bool = True,
+    *, user_initiated: bool = True, include_high_entropy: bool = False,
 ) -> str:
     """
     步骤12.5: 跟随 create_account 返回的 continue_url，完成 OAuth 回调。
@@ -215,9 +215,13 @@ def follow_oauth_callback(
     for redirect_count in range(31):
         # 注册收尾按每跳目标重建 Fetch Site；其他调用保留自动重定向语义。
         if str(current_url).startswith("https://chatgpt.com"):
-            headers = session.get_chatgpt_navigate_headers(referer=referer, user_initiated=user_initiated)
+            headers = session.get_chatgpt_navigate_headers(
+                referer=referer, user_initiated=user_initiated, include_high_entropy=include_high_entropy,
+            )
         else:
-            headers = session.get_auth_navigate_headers(referer=referer, user_initiated=user_initiated)
+            headers = session.get_auth_navigate_headers(
+                referer=referer, user_initiated=user_initiated, include_high_entropy=include_high_entropy,
+            )
         resp = session.get(current_url, headers=headers, allow_redirects=user_initiated)
         if user_initiated or resp.status_code not in (301, 302, 303, 307, 308):
             break
@@ -232,7 +236,7 @@ def follow_oauth_callback(
     return resp.url
 
 
-def fetch_session(session: BrowserSession) -> dict:
+def fetch_session(session: BrowserSession, *, include_high_entropy: bool = False) -> dict:
     """
     GET https://chatgpt.com/api/auth/session
     注册成功后立刻调用，拿到 accessToken / user / account / expires。
@@ -245,7 +249,9 @@ def fetch_session(session: BrowserSession) -> dict:
             - expires: ISO 时间字符串
     """
     url = "https://chatgpt.com/api/auth/session"
-    headers = session.get_nextauth_headers(referer="https://chatgpt.com/")
+    headers = session.get_nextauth_headers(
+        referer="https://chatgpt.com/", include_high_entropy=include_high_entropy,
+    )
 
     logger.info("[Session] 拉取 ChatGPT session 信息...")
     resp = session.get(url, headers=headers)

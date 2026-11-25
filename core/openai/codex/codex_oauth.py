@@ -1116,7 +1116,7 @@ def exchange_codex_token(session: BrowserSession, code: str, code_verifier: str)
         "redirect_uri": _cfg.CODEX_REDIRECT_URI,
         "code_verifier": code_verifier,
     }
-    headers = session._get_common_headers()
+    headers = session._get_browser_profile_headers()
     headers.update({
         "Content-Type": "application/x-www-form-urlencoded",
         "Accept": "application/json",

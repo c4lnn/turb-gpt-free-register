@@ -158,35 +158,52 @@ class SessionNavigationHeaderTests(unittest.TestCase):
                 session.close()
 
     def test_auth_high_entropy_headers_are_opt_in_as_one_complete_set(self):
-        session = BrowserSession(proxy="", detect_exit_geo=False)
-        try:
-            auth_default = session.get_auth_headers()
-            nav_default = session.get_auth_navigate_headers(referer="")
-            auth_enabled = session.get_auth_headers(include_high_entropy=True)
-            nav_enabled = session.get_auth_navigate_headers(referer="", include_high_entropy=True)
-            high_entropy = {
-                "sec-ch-ua-full-version": "chrome_full_version",
-                "sec-ch-ua-full-version-list": "sec_ch_ua_full_version_list",
-                "sec-ch-ua-platform-version": "sec_ch_ua_platform_version",
-                "sec-ch-ua-arch": "sec_ch_ua_arch",
-                "sec-ch-ua-bitness": "sec_ch_ua_bitness",
-                "sec-ch-ua-model": "sec_ch_ua_model",
-            }
-            expected = {
-                header: str(session.browser_profile[key])
-                for header, key in high_entropy.items()
-            }
-            non_auth = (session.get_sentinel_headers(), session.get_chatgpt_headers())
-        finally:
-            session.close()
-
-        for headers in (auth_default, nav_default, *non_auth):
-            self.assertTrue(set(expected).isdisjoint(headers))
-        for headers in (auth_enabled, nav_enabled):
-            self.assertEqual({name: headers[name] for name in expected}, expected)
-        self.assertEqual(auth_default["sec-ch-ua"], auth_enabled["sec-ch-ua"])
-        self.assertEqual(auth_default["sec-ch-ua-mobile"], auth_enabled["sec-ch-ua-mobile"])
-        self.assertEqual(auth_default["sec-ch-ua-platform"], auth_enabled["sec-ch-ua-platform"])
+        session = self._session_stub()
+        session.browser_profile.update({
+            "chrome_full_version": "173.2.4.6",
+            "sec_ch_ua_full_version_list": '"Synthetic Chromium";v="173.2.4.6"',
+            "sec_ch_ua_platform_version": '"23.4.5"',
+            "sec_ch_ua_arch": '"synthetic-arch"',
+            "sec_ch_ua_bitness": '"128"',
+            "sec_ch_ua_model": '"Synthetic model"',
+        })
+        expected = {
+            header: session.browser_profile[key]
+            for header, key in self.HIGH_ENTROPY_FIELDS.items()
+        }
+        builders = (
+            session.get_auth_headers, session.get_auth_navigate_headers,
+            session.get_nextauth_headers,
+            lambda **kwargs: session.get_nextauth_csrf_headers("https://chatgpt.com/", **kwargs),
+            lambda **kwargs: session.get_nextauth_signin_headers("https://chatgpt.com/", **kwargs),
+            session.get_chatgpt_navigate_headers,
+            lambda **kwargs: session.get_nextauth_csrf_headers("https://chatgpt.com/", no_cache=True, **kwargs),
+            lambda **kwargs: session.get_nextauth_signin_headers("https://chatgpt.com/", no_cache=True, **kwargs),
+            lambda **kwargs: session.get_chatgpt_navigate_headers(
+                "https://auth.openai.com/", user_initiated=False, **kwargs,
+            ),
+        )
+        for index, build in enumerate(builders):
+            with self.subTest(scene=index):
+                default = build()
+                enabled = build(include_high_entropy=True)
+                self.assertTrue(set(expected).isdisjoint(default))
+                self.assertEqual({name: enabled[name] for name in expected}, expected)
+                self.assertEqual(
+                    {name: value for name, value in enabled.items() if name not in expected and name not in self.RUM_FIELDS},
+                    {name: value for name, value in default.items() if name not in self.RUM_FIELDS},
+                )
+                sentinel = session.get_sentinel_headers()
+                self.assertTrue(set(expected).isdisjoint(sentinel))
+                self.assertTrue(self.RUM_FIELDS.isdisjoint(sentinel))
+                self.assertNotIn("openai-sentinel-token", sentinel)
+                self.assertNotIn("openai-sentinel-so-token", sentinel)
+                self.assertEqual(sentinel["User-Agent"], session.browser_profile["user_agent"])
+                self.assertEqual(sentinel["accept-language"], session.browser_profile["accept_language"])
+                subsequent = build(include_high_entropy=True)
+                self.assertEqual({name: subsequent[name] for name in expected}, expected)
+                self.assertIsNot(enabled, subsequent)
+        self.assertTrue(set(expected).isdisjoint(session.get_chatgpt_headers()))
 
     def test_auth_high_entropy_opt_in_rejects_incomplete_or_non_chromium_profile(self):
         session = BrowserSession(proxy="", detect_exit_geo=False)
@@ -324,6 +341,12 @@ class SessionNavigationHeaderTests(unittest.TestCase):
             self.assertEqual(signin["content-type"], "application/x-www-form-urlencoded")
             self.assertEqual(signin["origin"], "https://chatgpt.com")
 
+    def test_nextauth_fetch_retains_empty_referer_without_adding_origin(self):
+        headers = self._session_stub().get_nextauth_headers(referer="")
+
+        self.assertEqual(headers["referer"], "")
+        self.assertNotIn("origin", headers)
+
     def test_standard_auth_preserves_explicit_high_entropy_and_accept_choices(self):
         session = self._session_stub()
         referer = "https://auth.openai.com/"
@@ -350,6 +373,10 @@ class SessionNavigationHeaderTests(unittest.TestCase):
             lambda: session.get_nextauth_signin_headers("https://chatgpt.com/", header_profile=HeaderProfile.PASSWORD_TOTP_LOGIN),
             lambda: session.get_auth_headers(include_high_entropy=True),
             lambda: session.get_auth_navigate_headers(header_profile=HeaderProfile.PASSWORD_TOTP_LOGIN),
+            lambda: session.get_nextauth_headers(include_high_entropy=True),
+            lambda: session.get_nextauth_csrf_headers("https://chatgpt.com/", include_high_entropy=True),
+            lambda: session.get_nextauth_signin_headers("https://chatgpt.com/", include_high_entropy=True),
+            lambda: session.get_chatgpt_navigate_headers(include_high_entropy=True),
         )
         for header, key in self.HIGH_ENTROPY_FIELDS.items():
             for invalid in (None, "", " ", 0):
@@ -360,12 +387,37 @@ class SessionNavigationHeaderTests(unittest.TestCase):
                             build()
             session.browser_profile = dict(complete)
             del session.browser_profile[key]
-            with self.subTest(missing=key):
-                with self.assertRaisesRegex(ValueError, header):
-                    session.get_auth_headers(include_high_entropy=True)
+            for index, build in enumerate(builders):
+                with self.subTest(missing=key, scene=index):
+                    with self.assertRaisesRegex(ValueError, header):
+                        build()
         session.browser_profile = complete
         for build in builders:
             self.assertEqual(build()["sec-ch-ua-model"], '""')
+
+    def test_standard_fetch_preserves_base_profile_and_per_field_fallbacks(self):
+        session = self._session_stub()
+        session.browser_profile = {
+            "user_agent": "Synthetic session UA",
+            "sec_ch_ua_mobile": "?1",
+        }
+        with patch.multiple(
+            "core.openai.transport.session",
+            USER_AGENT="Synthetic fallback UA",
+            ACCEPT_LANGUAGE="en-GB,en;q=0.9",
+            SEC_CH_UA='"Fallback";v="1"',
+            SEC_CH_UA_MOBILE="?0",
+            SEC_CH_UA_PLATFORM='"Fallback OS"',
+        ):
+            headers = session.get_nextauth_headers()
+            self.assertEqual(headers["User-Agent"], "Synthetic session UA")
+            self.assertEqual(headers["accept-language"], "en-GB,en;q=0.9")
+            self.assertEqual(headers["sec-ch-ua"], '"Fallback";v="1"')
+            self.assertEqual(headers["sec-ch-ua-mobile"], "?1")
+            self.assertEqual(headers["sec-ch-ua-platform"], '"Fallback OS"')
+
+            session.browser_profile = {}
+            self.assertEqual(session.get_nextauth_headers()["User-Agent"], "Synthetic fallback UA")
 
     def test_non_chromium_scenes_do_not_fabricate_client_hints(self):
         session = self._session_stub()
@@ -387,6 +439,10 @@ class SessionNavigationHeaderTests(unittest.TestCase):
             lambda: session.get_nextauth_signin_headers("https://chatgpt.com/", header_profile=HeaderProfile.PASSWORD_TOTP_LOGIN),
             lambda: session.get_auth_headers(header_profile=HeaderProfile.PASSWORD_TOTP_LOGIN),
             lambda: session.get_auth_navigate_headers(include_high_entropy=True),
+            lambda: session.get_nextauth_headers(include_high_entropy=True),
+            lambda: session.get_nextauth_csrf_headers("https://chatgpt.com/", include_high_entropy=True),
+            lambda: session.get_nextauth_signin_headers("https://chatgpt.com/", include_high_entropy=True),
+            lambda: session.get_chatgpt_navigate_headers(include_high_entropy=True),
         ):
             with self.assertRaisesRegex(ValueError, "仅支持 Chromium"):
                 build()
@@ -403,6 +459,10 @@ class SessionNavigationHeaderTests(unittest.TestCase):
             lambda: session.get_sentinel_headers(header_profile=target),
             lambda: session.get_chatgpt_headers(),
             lambda: session.get_chatgpt_navigate_headers(),
+            lambda: session.get_nextauth_headers(include_high_entropy=True),
+            lambda: session.get_nextauth_csrf_headers("https://chatgpt.com/", include_high_entropy=True),
+            lambda: session.get_nextauth_signin_headers("https://chatgpt.com/", include_high_entropy=True),
+            lambda: session.get_chatgpt_navigate_headers(include_high_entropy=True),
         )
         for index, build in enumerate(builders):
             with self.subTest(scene=index):

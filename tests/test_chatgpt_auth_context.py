@@ -178,5 +178,46 @@ class ChatgptAuthContextTests(unittest.TestCase):
         self.assertEqual(parse_qs(urlparse(referer).query)["login_hint"], [email])
         self.assertEqual(parse_qs(signin_args.kwargs["data"])["csrfToken"], ["formal-fixture"])
 
+    def test_registration_opt_in_preserves_formal_auth_semantics(self):
+        session = BrowserSession.__new__(BrowserSession)
+        session.browser_profile = build_browser_environment()
+        session.browser_profile.update({
+            "send_client_hints": True, "chrome_full_version": "152.3.4.5",
+            "sec_ch_ua_full_version_list": '"Chromium";v="152.3.4.5"',
+            "sec_ch_ua_platform_version": '"19.2.0"', "sec_ch_ua_arch": '"arm"',
+            "sec_ch_ua_bitness": '"64"', "sec_ch_ua_model": '""',
+        })
+        session.device_id = "registration-device"
+        session.auth_session_logging_id = "registration-logging"
+        session.get = Mock(return_value=SimpleNamespace(
+            raise_for_status=lambda: None, json=lambda: {"csrfToken": "formal-token"},
+        ))
+        session.post = Mock(return_value=SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"url": "https://auth.openai.com/oauth/authorize?state=opaque"},
+        ))
+        expected = {
+            "sec-ch-ua-full-version": "152.3.4.5",
+            "sec-ch-ua-full-version-list": '"Chromium";v="152.3.4.5"',
+            "sec-ch-ua-platform-version": '"19.2.0"', "sec-ch-ua-arch": '"arm"',
+            "sec-ch-ua-bitness": '"64"', "sec-ch-ua-model": '""',
+        }
+        referer = build_login_referer(session, "register@example.test")
+        for enabled in (False, True):
+            with self.subTest(include_high_entropy=enabled):
+                options = {"include_high_entropy": True} if enabled else {}
+                token = get_csrf_token(session, login_referer=referer, **options)
+                signin_openai(session, token, "register@example.test", login_referer=referer, **options)
+                for headers in (session.get.call_args.kwargs["headers"],
+                                session.post.call_args.kwargs["headers"]):
+                    if enabled:
+                        self.assertEqual({key: headers[key] for key in expected}, expected)
+                    else:
+                        self.assertTrue(expected.keys().isdisjoint(headers))
+                    self.assertEqual(headers["referer"], referer)
+                    self.assertEqual(headers["cache-control"], "no-cache")
+                    self.assertEqual(headers["pragma"], "no-cache")
+                self.assertEqual(parse_qs(session.post.call_args.kwargs["data"])["csrfToken"], ["formal-token"])
+
 if __name__ == "__main__":
     unittest.main()

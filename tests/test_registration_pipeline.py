@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from core.openai.codex import codex_oauth
+from core.openai.auth import chatgpt_auth, openai_auth
 from core.infra import db, job_context
 from core.mail import email_provider
 from core.link import flow_trigger
@@ -23,10 +24,18 @@ class _Session(BrowserSession):
     proxy = ""
     device_id = "device-for-test"
     auth_session_logging_id = "logging-for-test"
-    browser_profile = {}
+    browser_profile = {
+        "send_client_hints": True,
+        "chrome_full_version": "146.0.4321.9",
+        "sec_ch_ua_full_version_list": '"Chromium";v="146.0.4321.9"',
+        "sec_ch_ua_platform_version": '"15.2.0"',
+        "sec_ch_ua_arch": '"arm"', "sec_ch_ua_bitness": '"64"', "sec_ch_ua_model": '""',
+    }
 
     def __init__(self):
         self.closed = False
+        self.document_navigation_id = "synthetic-document"
+        self.datadog_origin = "rum"
 
     def close(self):
         self.closed = True
@@ -56,8 +65,6 @@ class RegistrationPipelineTests(unittest.TestCase):
         session = _Session()
         observed = {
             "created": False, "saved": False, "flows": [],
-            "register_high_entropy": [], "navigate_high_entropy": [],
-            "validate_high_entropy": [],
         }
 
         def request_sentinel(_session, flow):
@@ -73,17 +80,16 @@ class RegistrationPipelineTests(unittest.TestCase):
             }
 
 
-        def register_user(*_args, **kwargs):
-            observed["register_high_entropy"].append(kwargs.get("include_high_entropy", False))
+        def register_user(*_args, include_high_entropy=False):
             return {"continue_url": "/api/accounts/email-otp/send"}
 
-        def navigate_email_otp_send(*_args, **kwargs):
-            observed["navigate_high_entropy"].append(kwargs.get("include_high_entropy", False))
+        def navigate_email_otp_send(*_args, include_high_entropy=False):
+            return None
 
-        def validate_email_otp(*_args, **kwargs):
-            observed["validate_high_entropy"].append(kwargs.get("include_high_entropy", False))
+        def validate_email_otp(*_args, referer="", include_high_entropy=False):
             return otp_result
-        def create_account(*_args):
+
+        def create_account(*_args, include_high_entropy=False):
             observed["created"] = True
             return {"continue_url": "https://chatgpt.com/api/auth/callback/openai"}
 
@@ -134,19 +140,99 @@ class RegistrationPipelineTests(unittest.TestCase):
             yield session, observed
 
 
-    def test_registration_defaults_do_not_enable_auth_high_entropy_hints(self):
-        otp_result = {"page": {"type": "about_you"}, "continue_url": "/about-you"}
+    def test_registration_business_requests_use_profile_hints_through_session(self):
+        expected = {
+            "sec-ch-ua-full-version": _Session.browser_profile["chrome_full_version"],
+            "sec-ch-ua-full-version-list": _Session.browser_profile["sec_ch_ua_full_version_list"],
+            "sec-ch-ua-platform-version": _Session.browser_profile["sec_ch_ua_platform_version"],
+            "sec-ch-ua-arch": _Session.browser_profile["sec_ch_ua_arch"],
+            "sec-ch-ua-bitness": _Session.browser_profile["sec_ch_ua_bitness"],
+            "sec-ch-ua-model": _Session.browser_profile["sec_ch_ua_model"],
+        }
+        from urllib.parse import urlsplit
+
+        def response(url, payload=None, status=200, location=None):
+            return SimpleNamespace(
+                url=url, status_code=status, headers={"location": location} if location else {},
+                json=lambda: payload or {}, text="", raise_for_status=lambda: None,
+            )
+
+        def get(url, **kwargs):
+            path = urlsplit(url).path
+            if path == "/api/auth/csrf":
+                return response(url, {"csrfToken": "formal-csrf"})
+            if path == "/oauth/authorize":
+                return response(url, status=302, location="/email-verification")
+            if path == "/api/accounts/email-otp/send":
+                return response("https://auth.openai.com/email-verification")
+            if path == "/api/auth/callback/openai":
+                return response(url, status=302, location="/")
+            if path == "/api/auth/session":
+                return response(url, {
+                    "accessToken": "test-access",
+                    "user": {"id": "test-user", "email": "user@example.com"},
+                    "account": {"id": "test-account", "planType": "free"},
+                    "expires": "2030-01-01T00:00:00Z",
+                })
+            self.assertIn(path, ("/", "/email-verification"))
+            return response(url)
+
+        def post(url, **kwargs):
+            path = urlsplit(url).path
+            payload = {
+                "/api/auth/signin/openai": {"url": "https://auth.openai.com/oauth/authorize?state=test"},
+                "/api/accounts/user/register": {"continue_url": "/api/accounts/email-otp/send"},
+                "/api/accounts/email-otp/validate": {"page": {"type": "about_you"}, "continue_url": "/about-you"},
+                "/api/accounts/create_account": {"continue_url": "https://chatgpt.com/api/auth/callback/openai"},
+            }
+            return response(url, payload[path])
+
+        real_steps = {
+            "get_csrf_token": chatgpt_auth.get_csrf_token, "signin_openai": chatgpt_auth.signin_openai,
+            "follow_authorize": openai_auth.follow_authorize, "register_user": openai_auth.register_user,
+            "navigate_email_otp_send": openai_auth.navigate_email_otp_send,
+            "validate_email_otp": openai_auth.validate_email_otp, "create_account": openai_auth.create_account,
+            "_finalize_registration_session": registration._finalize_registration_session,
+        }
         for kind in ("new_passwordless", "new_password"):
-            with self.subTest(kind=kind), self._pipeline(otp_result, kind=kind) as (session, observed), patch.object(
-                registration, "wait_for_otp", return_value="123456",
-            ):
-                result = registration.run_registration(
-                    "user@example.com", "Test User", "1995-01-01", otp_code="123456",
-                )
+            with self.subTest(kind=kind), self._pipeline({}, kind=kind) as (session, _), patch.multiple(
+                registration, **real_steps,
+            ), patch.object(registration, "wait_for_otp", return_value="123456"), patch.object(
+                session, "get", side_effect=get,
+            ) as gets, patch.object(session, "post", side_effect=post) as posts:
+                result = self._run()
             self.assertTrue(result["success"], msg=result)
-            self.assertEqual(observed["register_high_entropy"], [False])
-            self.assertEqual(observed["navigate_high_entropy"], [False])
-            self.assertEqual(observed["validate_high_entropy"], [False])
+            self.assertEqual(len(gets.call_args_list), 7)
+            self.assertEqual(len(posts.call_args_list), 4)
+            for call in gets.call_args_list + posts.call_args_list:
+                headers = call.kwargs["headers"]
+                self.assertEqual({key: headers.get(key) for key in expected}, expected)
+
+    def test_registration_otp_recovery_keeps_high_entropy_on_resend(self):
+        for include in (False, True):
+            session = _Session()
+            bad = SimpleNamespace(status_code=400, text="invalid otp", json=lambda: {})
+            ok = SimpleNamespace(status_code=200, text="", json=lambda: {
+                "continue_url": "https://chatgpt.com/api/auth/callback/openai",
+            }, raise_for_status=lambda: None)
+            with self.subTest(include=include), patch.object(session, "post", side_effect=[bad, ok, ok]) as post, \
+                    patch.object(registration, "human_delay"), \
+                    patch.object(registration, "wait_for_otp", return_value="654321"), \
+                    patch.object(registration._protocol_cfg, "SEND_SENTINEL_ON_EMAIL_OTP_VALIDATE", False):
+                result = registration._validate_registration_otp(
+                    session, "user@example.com", 0, "123456",
+                    {"page": {"type": "email_otp_verification"}}, include_high_entropy=include,
+                )
+            self.assertIn("continue_url", result)
+            self.assertEqual([call.args[0].rsplit("/", 1)[-1] for call in post.call_args_list],
+                             ["validate", "resend", "validate"])
+            for call in post.call_args_list:
+                headers = call.kwargs["headers"]
+                self.assertEqual(headers.get("sec-ch-ua-full-version"),
+                                 session.browser_profile["chrome_full_version"] if include else None)
+                self.assertEqual(headers["priority"], "u=1, i")
+                self.assertEqual(headers["sec-fetch-site"], "same-origin")
+
     def test_direct_callback_does_not_submit_profile_or_request_its_proof(self):
         with self._pipeline({
             "page": {"type": "external_url"},
@@ -186,7 +272,7 @@ class RegistrationPipelineTests(unittest.TestCase):
         finalize = registration._finalize_registration_session
         session_info = {
             "accessToken": "test-access", "user": {"id": "test-user", "email": "user@example.com"},
-            "account": {"planType": "free"}, "expires": "2030-01-01T00:00:00Z",
+            "account": {"id": "test-account", "planType": "free"}, "expires": "2030-01-01T00:00:00Z",
         }
         for kind in ("new_password", "existing"):
             otp_result = ({"page": {"type": "about_you"}, "continue_url": "/about-you"}
@@ -214,7 +300,7 @@ class RegistrationPipelineTests(unittest.TestCase):
                              else "https://auth.openai.com/email-verification")
             self.assertEqual(headers.get("sec-fetch-user"), None if kind == "new_password" else "?1")
             self.assertEqual(headers["sec-fetch-site"], "cross-site")
-            fetch.assert_called_once_with(session)
+            fetch.assert_called_once_with(session, include_high_entropy=kind != "existing")
             saved = db.get_account_by_email("user@example.com")
             self.assertEqual(saved["access_token"], session_info["accessToken"])
 
@@ -268,7 +354,7 @@ class RegistrationPipelineTests(unittest.TestCase):
         self.assertFalse(observed["saved"])
         probe.assert_called_once_with(
             session, "user@example.com",
-            referer="https://auth.openai.com/", screen_hint="signup",
+            referer="https://auth.openai.com/", screen_hint="signup", include_high_entropy=True,
         )
         self.assertTrue(session.closed)
 
@@ -402,7 +488,7 @@ class RegistrationPipelineTests(unittest.TestCase):
         self.assertTrue(result["success"])
         probe.assert_called_once_with(
             session, "user@example.com",
-            referer="https://auth.openai.com/", screen_hint="signup",
+            referer="https://auth.openai.com/", screen_hint="signup", include_high_entropy=True,
         )
         send.assert_called_once_with(session, referer="https://auth.openai.com/create-account/password")
         validate_otp.assert_called_once()
@@ -419,7 +505,7 @@ class RegistrationPipelineTests(unittest.TestCase):
             self.assertIn("Test-only-password!", "\n".join(captured.output))
             return {"continue_url": "/api/accounts/email-otp/send"}
 
-        def send(*args):
+        def send(*args, include_high_entropy=False):
             credentials = db.get_account_credentials("user@example.com")
             self.assertEqual(credentials["registration_password"], "Test-only-password!")
             self.assertFalse(credentials["complete"])
@@ -482,7 +568,7 @@ class RegistrationPipelineTests(unittest.TestCase):
         self.assertTrue(result["success"])
         probe.assert_called_once_with(
             session, "user@example.com",
-            referer="https://auth.openai.com/", screen_hint="signup",
+            referer="https://auth.openai.com/", screen_hint="signup", include_high_entropy=True,
         )
         password.assert_not_called()
         profile.assert_not_called()

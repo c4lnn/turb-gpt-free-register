@@ -163,8 +163,10 @@ class RegistrationPreflightTests(unittest.TestCase):
             ) as post:
                 registration_preflight(session)
                 referer = build_login_referer(session, "test+tag@example.test")
-                token = get_csrf_token(session, login_referer=referer)
-                signin_openai(session, token, "test+tag@example.test", login_referer=referer)
+                token = get_csrf_token(session, login_referer=referer, include_high_entropy=True)
+                signin_openai(
+                    session, token, "test+tag@example.test", login_referer=referer, include_high_entropy=True,
+                )
 
             self.assertEqual([url for url, _ in csrf_requests], ["https://chatgpt.com/api/auth/csrf"] * 2)
             warmup, formal = [kwargs for _, kwargs in csrf_requests]
@@ -185,10 +187,15 @@ class RegistrationPreflightTests(unittest.TestCase):
                 self.assertEqual(headers["cache-control"], "no-cache")
                 self.assertEqual(headers["pragma"], "no-cache")
                 self.assertEqual(headers["accept"], "*/*")
-                for field in ("sec-ch-ua-full-version", "sec-ch-ua-full-version-list",
-                              "sec-ch-ua-platform-version", "sec-ch-ua-arch",
-                              "sec-ch-ua-bitness", "sec-ch-ua-model"):
-                    self.assertNotIn(field, headers)
+                expected = {
+                    "sec-ch-ua-full-version": "chrome_full_version",
+                    "sec-ch-ua-full-version-list": "sec_ch_ua_full_version_list",
+                    "sec-ch-ua-platform-version": "sec_ch_ua_platform_version",
+                    "sec-ch-ua-arch": "sec_ch_ua_arch", "sec-ch-ua-bitness": "sec_ch_ua_bitness",
+                    "sec-ch-ua-model": "sec_ch_ua_model",
+                }
+                self.assertEqual({field: headers.get(field) for field in expected},
+                                 {field: session.browser_profile[key] for field, key in expected.items()})
             self.assertNotIn("content-type", formal["headers"])
             self.assertNotIn("origin", formal["headers"])
             self.assertEqual(signin["content-type"], "application/x-www-form-urlencoded")

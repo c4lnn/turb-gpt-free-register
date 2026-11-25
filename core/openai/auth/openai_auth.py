@@ -350,6 +350,7 @@ def follow_authorize(
     *,
     user_initiated: bool = True,
     header_profile: HeaderProfile = HeaderProfile.STANDARD,
+    include_high_entropy: bool = False,
 ) -> str:
     """跟随 authorize URL 重定向；允许注册导航省略 user-initiated 请求头。"""
     max_attempts, retry_delay = _proxy_retry_config()
@@ -360,6 +361,7 @@ def follow_authorize(
             headers = session.get_auth_navigate_headers(
                 referer="https://chatgpt.com/", user_initiated=user_initiated,
                 header_profile=header_profile,
+                include_high_entropy=include_high_entropy,
             )
             current_url = authorize_url
             for redirect_count in range(31):
@@ -541,6 +543,8 @@ def generate_registration_password(length: int = 14) -> str:
 def navigate_create_account_password(
     session: BrowserSession,
     current_url: str | None = None,
+    *,
+    include_high_entropy: bool = False,
 ) -> str:
     """进入注册密码页，确保协议注册不再走无密码 OTP 分支。"""
     current = str(current_url or "")
@@ -549,7 +553,7 @@ def navigate_create_account_password(
 
     url = "https://auth.openai.com/create-account/password"
     referer = current if current.startswith("https://auth.openai.com/") else "https://auth.openai.com/"
-    headers = session.get_auth_navigate_headers(referer=referer)
+    headers = session.get_auth_navigate_headers(referer=referer, include_high_entropy=include_high_entropy)
     logger.info("[步骤5] 切换到创建账号密码页...")
     resp = session.get(url, headers=headers, allow_redirects=True)
     resp.raise_for_status()
@@ -621,10 +625,13 @@ def navigate_email_otp_send(
 
 
 
-def send_email_otp(session: BrowserSession, referer: str = "https://auth.openai.com/email-verification") -> None:
+def send_email_otp(
+    session: BrowserSession, referer: str = "https://auth.openai.com/email-verification",
+    *, include_high_entropy: bool = False,
+) -> None:
     """重新发送邮箱验证码。用于验证码错误/过期后重新取码。"""
     url = "https://auth.openai.com/api/accounts/email-otp/send"
-    headers = session.get_auth_navigate_headers(referer=referer)
+    headers = session.get_auth_navigate_headers(referer=referer, include_high_entropy=include_high_entropy)
     logger.info("[OTP] 请求重新发送邮箱验证码...")
     _rotate_document_navigation_id(session)
     resp = session.get(url, headers=headers, allow_redirects=True)
@@ -927,13 +934,14 @@ def probe_registration_state(
     strict: bool = False,
     referer: str = "https://auth.openai.com/create-account",
     screen_hint: str | None = None,
+    include_high_entropy: bool = False,
 ) -> dict:
     """用 authorize_continue 探测落点；strict 慢路径拒绝无效或未知响应。"""
     sentinel_resp = request_sentinel_token(session, "authorize_continue")
     sentinel_header, _ = build_sentinel_header(
         session, sentinel_resp, "authorize_continue", consume_so=False,
     )
-    headers = session.get_auth_headers(referer=referer)
+    headers = session.get_auth_headers(referer=referer, include_high_entropy=include_high_entropy)
     attach_sentinel_credentials(headers, sentinel_header)
     payload = {"username": {"kind": "email", "value": email}}
     if screen_hint is not None:
@@ -1068,10 +1076,12 @@ def verify_login_password(
 
 
 
-def _login_otp_resend(session) -> dict:
+def _login_otp_resend(session, *, include_high_entropy: bool = False) -> dict:
     """POST /api/accounts/email-otp/resend：复用当前 challenge 重发，不切换 state。"""
     url = "https://auth.openai.com/api/accounts/email-otp/resend"
-    headers = session.get_auth_headers(referer="https://auth.openai.com/email-verification")
+    headers = session.get_auth_headers(
+        referer="https://auth.openai.com/email-verification", include_high_entropy=include_high_entropy,
+    )
     logger.info("[登录] 复用当前 challenge 重发邮箱 OTP")
     resp = session.post(url, headers=headers, allow_redirects=False)
     if resp.status_code >= 400:
@@ -1082,12 +1092,14 @@ def _login_otp_resend(session) -> dict:
     }
 
 
-def _login_otp_follow_send(session, continue_url: str) -> dict:
+def _login_otp_follow_send(session, continue_url: str, *, include_high_entropy: bool = False) -> dict:
     """跟随服务端指示的 email-otp/send 继续路径触发新发码（password/verify 后）。"""
     url = str(continue_url or "")
     if url.startswith("/"):
         url = urljoin("https://auth.openai.com", url)
-    headers = session.get_auth_navigate_headers(referer="https://auth.openai.com/log-in/password")
+    headers = session.get_auth_navigate_headers(
+        referer="https://auth.openai.com/log-in/password", include_high_entropy=include_high_entropy,
+    )
     logger.info("[登录] 跟随服务端指示的 email-otp/send 发送验证码")
     _rotate_document_navigation_id(session)
     resp = session.get(url, headers=headers, allow_redirects=True)
@@ -1113,7 +1125,9 @@ def _is_login_otp_send_path(continue_url: str) -> bool:
     return path.rstrip("/").endswith("/email-otp/send")
 
 
-def request_login_otp(session, result, *, resend: bool = False) -> dict:
+def request_login_otp(
+    session, result, *, resend: bool = False, include_high_entropy: bool = False,
+) -> dict:
     """登录路径邮箱 OTP 投递/重发，返回规范化下一步状态。
 
     - resend=True：POST /api/accounts/email-otp/resend（复用当前 challenge）。
@@ -1129,13 +1143,13 @@ def request_login_otp(session, result, *, resend: bool = False) -> dict:
     if resend:
         if step not in ("password", "otp") and not has_send_path:
             raise RuntimeError(f"OTP 重发不支持当前步骤: step={step}")
-        return _login_otp_resend(session)
+        return _login_otp_resend(session, include_high_entropy=include_high_entropy)
 
     if has_send_path:
-        return _login_otp_follow_send(session, continue_url)
+        return _login_otp_follow_send(session, continue_url, include_high_entropy=include_high_entropy)
 
     if step in ("password", "otp"):
-        return _login_otp_resend(session)
+        return _login_otp_resend(session, include_high_entropy=include_high_entropy)
 
     raise RuntimeError(f"OTP 投递无支持路径: step={step}")
 

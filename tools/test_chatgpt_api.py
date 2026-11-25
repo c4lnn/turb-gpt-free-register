@@ -139,7 +139,7 @@ def _build_url(endpoint: str, token: str, account_id: Optional[str], timezone_of
 
 
 def _build_headers(env: BrowserSession, token: str, target_path: str, target_route: str) -> Dict[str, str]:
-    headers = env._get_common_headers()  # 复用项目统一指纹画像头
+    headers = env._get_browser_profile_headers()  # 复用项目统一指纹画像头
     headers.update(
         {
             "accept": "*/*",

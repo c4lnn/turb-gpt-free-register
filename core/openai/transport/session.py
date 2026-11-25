@@ -539,13 +539,20 @@ class BrowserSession:
             "org": data.get("org") or data.get("isp") or data.get("connection", {}).get("org"),
         }
 
-    def _get_common_headers(self) -> dict:
-        """只生成当前稳定画像的 UA、语言和低熵 Client Hints。"""
+    def _get_browser_profile_headers(self) -> dict:
+        """组合当前稳定画像的 UA、语言和适用的低熵 Client Hints。"""
         profile = getattr(self, "browser_profile", {}) or {}
         headers = {
             "User-Agent": str(profile.get("user_agent") or USER_AGENT),
             "accept-language": str(profile.get("accept_language") or ACCEPT_LANGUAGE),
         }
+        headers.update(self._build_low_entropy_client_hints(profile))
+        return headers
+
+    @staticmethod
+    def _build_low_entropy_client_hints(profile: dict) -> dict:
+        """按画像生成基础 Client Hints，保留原有逐字段回退。"""
+        headers = {}
 
         # Safari 不发送 Chromium Client Hints；Chrome/Chromium 画像才补 sec-ch-*。
         send_client_hints = bool(profile.get("send_client_hints", bool(SEC_CH_UA)))
@@ -654,45 +661,85 @@ class BrowserSession:
         return headers
 
     @staticmethod
+    def _attach_cache_headers(headers: dict, *, no_cache: bool) -> None:
+        if no_cache:
+            headers["cache-control"] = "no-cache"
+            headers["pragma"] = "no-cache"
+
+    # 请求语义：Accept 与 Content-Type 在 fetch 中分次附加，以保留构造顺序。
+    @staticmethod
+    def _attach_accept_header(headers: dict, accept: str) -> None:
+        headers["accept"] = accept
+
+    @staticmethod
+    def _attach_content_type_header(headers: dict, content_type: str | None) -> None:
+        if content_type is not None:
+            headers["content-type"] = content_type
+
+    # 来源上下文：是否省略 Referer 由 fetch / 导航场景决定。
+    @staticmethod
+    def _attach_referer_header(headers: dict, referer: str) -> None:
+        headers["referer"] = referer
+
+    @staticmethod
+    def _attach_origin_header(headers: dict, origin: str | None) -> None:
+        if origin is not None:
+            headers["origin"] = origin
+
+    @staticmethod
+    def _attach_fetch_metadata(headers: dict, *, site: str, mode: str, dest: str) -> None:
+        headers.update({
+            "sec-fetch-site": site,
+            "sec-fetch-mode": mode,
+            "sec-fetch-dest": dest,
+        })
+
+    # 导航专用字段：在现有导航顺序中的不同位置附加。
+    @staticmethod
+    def _attach_upgrade_insecure_requests(headers: dict) -> None:
+        headers["upgrade-insecure-requests"] = "1"
+
+    @staticmethod
+    def _attach_fetch_user_header(headers: dict, *, user_initiated: bool) -> None:
+        if user_initiated:
+            headers["sec-fetch-user"] = "?1"
+
+    @staticmethod
+    def _attach_priority_header(headers: dict, value: str | None) -> None:
+        if value is not None:
+            headers["priority"] = value
+
+    @staticmethod
     def _attach_fetch_headers(
         headers: dict, *, accept: str, content_type: str | None, referer: str,
         origin: str | None = None, priority: bool = True, no_cache: bool = False,
     ) -> dict:
-        headers.update({
-            "accept": accept,
-            "sec-fetch-site": "same-origin",
-            "sec-fetch-mode": "cors",
-            "sec-fetch-dest": "empty",
-            "referer": referer,
-        })
-        if content_type is not None:
-            headers["content-type"] = content_type
-        if origin is not None:
-            headers["origin"] = origin
-        if priority:
-            headers["priority"] = "u=1, i"
-        if no_cache:
-            headers["cache-control"] = "no-cache"
-            headers["pragma"] = "no-cache"
+        BrowserSession._attach_accept_header(headers, accept)
+        BrowserSession._attach_fetch_metadata(headers, site="same-origin", mode="cors", dest="empty")
+        BrowserSession._attach_referer_header(headers, referer)
+        BrowserSession._attach_content_type_header(headers, content_type)
+        BrowserSession._attach_origin_header(headers, origin)
+        BrowserSession._attach_priority_header(headers, "u=1, i" if priority else None)
+        BrowserSession._attach_cache_headers(headers, no_cache=no_cache)
         return headers
 
     def _attach_navigation_headers(
         self, headers: dict, *, referer: str, user_initiated: bool,
         target_origin: str, priority: bool = True,
     ) -> dict:
-        headers.update({
-            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-            "sec-fetch-site": self._sec_fetch_site_for(target_origin, referer),
-            "sec-fetch-mode": "navigate",
-            "sec-fetch-dest": "document",
-            "upgrade-insecure-requests": "1",
-        })
-        if priority:
-            headers["priority"] = "u=0, i"
+        self._attach_accept_header(
+            headers,
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,"
+            "*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        )
+        self._attach_fetch_metadata(
+            headers, site=self._sec_fetch_site_for(target_origin, referer), mode="navigate", dest="document",
+        )
+        self._attach_upgrade_insecure_requests(headers)
+        self._attach_priority_header(headers, "u=0, i" if priority else None)
         if referer:
-            headers["referer"] = referer
-        if user_initiated:
-            headers["sec-fetch-user"] = "?1"
+            self._attach_referer_header(headers, referer)
+        self._attach_fetch_user_header(headers, user_initiated=user_initiated)
         return headers
 
     def _attach_high_entropy_client_hints(self, headers: dict, include: bool) -> dict:
@@ -715,21 +762,26 @@ class BrowserSession:
         headers.update(values)
         return headers
 
-    def get_nextauth_headers(self, referer: str = "https://chatgpt.com/") -> dict:
+    def get_nextauth_headers(
+        self, referer: str = "https://chatgpt.com/", *, include_high_entropy: bool = False,
+    ) -> dict:
         """NextAuth providers/session/reauth 等通用 fetch，不携带 oai-client-*。"""
+        headers = self._get_browser_profile_headers()
+        self._attach_high_entropy_client_hints(headers, include_high_entropy)
         return self._attach_fetch_headers(
-            self._get_common_headers(), accept="*/*", content_type="application/json", referer=referer,
+            headers, accept="*/*", content_type="application/json", referer=referer,
         )
 
     def get_nextauth_csrf_headers(
         self, referer: str, *, no_cache: bool = False,
         header_profile: HeaderProfile = HeaderProfile.STANDARD,
+        include_high_entropy: bool = False,
     ) -> dict:
         """正式 CSRF GET；注册禁缓存场景与目标登录均不设置 Content-Type。"""
         target_login = header_profile is HeaderProfile.PASSWORD_TOTP_LOGIN
         no_cache = no_cache or target_login
-        headers = self._get_common_headers()
-        self._attach_high_entropy_client_hints(headers, target_login)
+        headers = self._get_browser_profile_headers()
+        self._attach_high_entropy_client_hints(headers, include_high_entropy or target_login)
         return self._attach_fetch_headers(
             headers, accept="*/*", content_type=None if no_cache else "application/json",
             referer=referer, priority=not target_login, no_cache=no_cache,
@@ -738,11 +790,12 @@ class BrowserSession:
     def get_nextauth_signin_headers(
         self, referer: str, *, no_cache: bool = False,
         header_profile: HeaderProfile = HeaderProfile.STANDARD,
+        include_high_entropy: bool = False,
     ) -> dict:
         """NextAuth signin 表单，与本次正式 CSRF 共用调用方提供的 Referer。"""
         target_login = header_profile is HeaderProfile.PASSWORD_TOTP_LOGIN
-        headers = self._get_common_headers()
-        self._attach_high_entropy_client_hints(headers, target_login)
+        headers = self._get_browser_profile_headers()
+        self._attach_high_entropy_client_hints(headers, include_high_entropy or target_login)
         return self._attach_fetch_headers(
             headers, accept="*/*", content_type="application/x-www-form-urlencoded",
             referer=referer, origin="https://chatgpt.com", priority=not target_login,
@@ -752,7 +805,7 @@ class BrowserSession:
     def get_chatgpt_headers(self, referer: str = "https://chatgpt.com/login") -> dict:
         """获取带前端设备上下文和 Datadog 的 ChatGPT API 请求头。"""
         headers = self._attach_fetch_headers(
-            self._get_common_headers(), accept="*/*", content_type="application/json", referer=referer,
+            self._get_browser_profile_headers(), accept="*/*", content_type="application/json", referer=referer,
         )
         return self._attach_frontend_api_headers(headers)
 
@@ -763,7 +816,7 @@ class BrowserSession:
     ) -> dict:
         """Auth JSON fetch；RUM 按请求生成，文档 ID 仅取当前会话值。"""
         target_login = header_profile is HeaderProfile.PASSWORD_TOTP_LOGIN
-        headers = self._get_common_headers()
+        headers = self._get_browser_profile_headers()
         self._attach_high_entropy_client_hints(headers, include_high_entropy or target_login)
         self._attach_fetch_headers(
             headers, accept=accept, content_type="application/json", referer=referer,
@@ -778,17 +831,22 @@ class BrowserSession:
     ) -> dict:
         """Auth document 导航不附加 fetch 的 RUM、设备上下文或凭据。"""
         target_login = header_profile is HeaderProfile.PASSWORD_TOTP_LOGIN
-        headers = self._get_common_headers()
+        headers = self._get_browser_profile_headers()
         self._attach_high_entropy_client_hints(headers, include_high_entropy or target_login)
         return self._attach_navigation_headers(
             headers, referer=referer, user_initiated=user_initiated and not target_login,
             target_origin=target_origin, priority=not target_login,
         )
 
-    def get_chatgpt_navigate_headers(self, referer: str = "https://chatgpt.com/", user_initiated: bool = True) -> dict:
+    def get_chatgpt_navigate_headers(
+        self, referer: str = "https://chatgpt.com/", user_initiated: bool = True, *,
+        include_high_entropy: bool = False,
+    ) -> dict:
         """ChatGPT 页面导航，用于预热登录页和回到应用页。"""
+        headers = self._get_browser_profile_headers()
+        self._attach_high_entropy_client_hints(headers, include_high_entropy)
         return self._attach_navigation_headers(
-            self._get_common_headers(), referer=referer, user_initiated=user_initiated,
+            headers, referer=referer, user_initiated=user_initiated,
             target_origin="https://chatgpt.com",
         )
 
@@ -796,7 +854,7 @@ class BrowserSession:
         """Sentinel frame fetch 不附加高熵、Auth RUM 或校验凭据。"""
         from config import SENTINEL_SV
         return self._attach_fetch_headers(
-            self._get_common_headers(), accept="*/*", content_type="text/plain;charset=UTF-8",
+            self._get_browser_profile_headers(), accept="*/*", content_type="text/plain;charset=UTF-8",
             origin="https://sentinel.openai.com",
             referer=f"https://sentinel.openai.com/backend-api/sentinel/frame.html?sv={SENTINEL_SV}",
             priority=header_profile is not HeaderProfile.PASSWORD_TOTP_LOGIN,

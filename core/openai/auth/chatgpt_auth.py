@@ -88,6 +88,7 @@ def get_providers(session: BrowserSession) -> dict:
 def get_csrf_token(
     session: BrowserSession, *, login_referer: str | None = None,
     header_profile: HeaderProfile = HeaderProfile.STANDARD,
+    include_high_entropy: bool = False,
 ) -> str:
     """
     步骤2: 获取 CSRF Token。
@@ -104,6 +105,7 @@ def get_csrf_token(
     headers = session.get_nextauth_csrf_headers(
         referer=login_referer if login_referer is not None else "https://chatgpt.com/auth/login",
         no_cache=login_referer is not None, header_profile=header_profile,
+        include_high_entropy=include_high_entropy,
     )
 
     logger.info("[步骤2] 获取 CSRF Token...")
@@ -133,6 +135,7 @@ def probe_auth_session(session: BrowserSession) -> dict:
 def signin_openai(
     session: BrowserSession, csrf_token: str, email: str, *, login_referer: str | None = None,
     header_profile: HeaderProfile = HeaderProfile.STANDARD,
+    include_high_entropy: bool = False,
 ) -> str:
     """
     步骤3: 发起 OAuth Signin 请求。
@@ -162,6 +165,7 @@ def signin_openai(
 
     headers = session.get_nextauth_signin_headers(
         referer=referer, no_cache=login_referer is not None, header_profile=header_profile,
+        include_high_entropy=include_high_entropy,
     )
     # 构造请求体
     body = urlencode({
