@@ -1,6 +1,6 @@
 # 密码注册链路总结
 
-本文总结当前本地新账号密码注册主链：每一步发什么请求、请求头和请求体怎么构造、以及与抓包（`har/chatgpt.com.har`、`saz/1.saz`）和 OSS 实现有分歧时本地对齐哪一边。
+本文总结当前本地新账号密码注册主链：每一步发什么请求、请求头和请求体怎么构造、以及与抓包（`captures/har/chatgpt.com.har`、`captures/saz/1.saz`）和 OSS 实现有分歧时本地对齐哪一边。
 
 **状态：请求形态已按抓包对齐，未在真实站点验证。** 文中「本地值」均来自源码构造或打到本地接收端的实发报文，没有对 `chatgpt.com` / `auth.openai.com` 发过真实注册请求。
 
@@ -183,7 +183,7 @@ Sentinel `/req` 和所有导航请求不带这些头，与两份捕获一致。
 **同源 fetch 的 `Origin`：与 HAR / SAZ 对齐，带。**
 
 - OSS 的 `_common_headers()`（`auth_flow.py:1759-1762`）只在跨源时发 `Origin`，注释称其抓包里 signin、`user/register`、`email-otp/validate`、`create_account` 四个同源 POST 都没有这个头。
-- 本仓库的抓包结论相反：4 份 HAR + 2 份 SAZ 中，这三个 Auth JSON POST、signin 和 Sentinel `/req` **全部带 `Origin`**，没有一条例外。`har/chatgpt.com.har` 为 `#5/#133/#237/#275/#128/#236/#270`，`1.saz` 为 `#197/#147/#168/#173/#426/#432/#433`。
+- 本仓库的抓包结论相反：4 份 HAR + 2 份 SAZ 中，这三个 Auth JSON POST、signin 和 Sentinel `/req` **全部带 `Origin`**，没有一条例外。`captures/har/chatgpt.com.har` 为 `#5/#133/#237/#275/#128/#236/#270`，`1.saz` 为 `#197/#147/#168/#173/#426/#432/#433`。
 - OSS 引用的是另一份抓包（`captures/revive-20260920-reg`），无法核对。两边证据相反时以本仓库抓包为准。
 
 本地实现：`_attach_fetch_headers` 按请求显式传入 `origin`（`core/openai/transport/session.py:684-687,721`）。
@@ -205,10 +205,10 @@ OSS 的规则（`_new_document_navigation()` 注释 `:1810-1822`、`_auth_json_h
 | 轮换点 | OSS | 本地 | 差异 |
 | --- | --- | --- | --- |
 | 初始 ID | `:210` | `core/openai/transport/session.py:169` | 无 |
-| authorize 响应后 | `:2389` | `core/openai/auth/openai_auth.py:378` | 时点一致：都在收到 HTTP 响应之后、状态检查之前 |
-| 密码页后 | `:2723` | `core/openai/auth/openai_auth.py:560` | 已落在密码页时本地跳过 GET 和轮换，OSS 仍 GET 并轮换；OSS 在 GET 抛异常时也轮换 |
-| 发码 | `:2812` | `core/openai/auth/openai_auth.py:616` | OSS 在 GET 之前轮换，本地在导航之后轮换 |
-| 重发、登录 follow-send、回调前 | 无单独规则 | `openai_auth.py:636,1104`、`core/openai/account/account_export.py:483` | 本地多出的轮换点 |
+| authorize 响应后 | `:2389` | `core/openai/auth/openai_auth.py:377` | 时点一致：都在收到 HTTP 响应之后、状态检查之前 |
+| 密码页后 | `:2723` | `core/openai/auth/openai_auth.py:530` | 已落在密码页时本地跳过 GET 和轮换，OSS 仍 GET 并轮换；OSS 在 GET 抛异常时也轮换 |
+| 发码 | `:2812` | `core/openai/auth/openai_auth.py:586` | OSS 在 GET 之前轮换，本地在导航之后轮换 |
+| 重发、登录 follow-send、回调前 | 无单独规则 | `openai_auth.py:606,1074`、`core/openai/account/account_export.py:483` | 本地多出的轮换点 |
 | Auth JSON 读取当前值 | `:1838-1839` | `core/openai/transport/session.py:608` | 一致 |
 | 文档 GET 不带该头 | `_navigation_headers()` `:1842-1879` | 导航头构造不附加 | 一致，两份捕获亦相同 |
 
@@ -235,7 +235,7 @@ OSS 总结的「validate 与 create_account 同值、两次验证页之间切换
 
 ### 4.5 authorize URL 校正规则
 
-本地以 #2 signin 响应的 URL 为底稿，不原样使用，会做以下处理（`core/openai/auth/chatgpt_auth.py:32-53,181-187`）：
+本地以 #2 signin 响应的 URL 为底稿，不原样使用，会做以下处理（`core/openai/auth/chatgpt_auth.py:34-55,195-201`）：
 
 - 删除 `ext-passkey-client-capabilities`、`ext-oai-did`、`ui_locales`、`auth_return_target_category`。
 - 强制 `device_id` 使用当前已绑定的设备；设备未初始化时直接失败。
@@ -249,7 +249,7 @@ HAR `#5 → #6` 支持「消费 signin 返回的 URL」，不证明浏览器也�
 
 ### 4.6 落点分类与 unknown fallback
 
-本地按 authorize 落地 URL 分类，已知落点不请求 `authorize/continue`，未知才探测（`core/openai/auth/openai_auth.py:856-872`；编排 `core/openai/register/registration_flow.py:326-362`）。注册入口固定 `intent="signup"`，按以下顺序匹配，命中即止：
+本地按 authorize 落地 URL 分类，已知落点不请求 `authorize/continue`，未知才探测（`core/openai/auth/openai_auth.py:826-842`；编排 `core/openai/register/registration_flow.py:326-362`）。注册入口固定 `intent="signup"`，按以下顺序匹配，命中即止：
 
 | 顺序 | 落地 URL 包含 | 分类为 | 步骤 |
 | --- | --- | --- | --- |
@@ -312,12 +312,12 @@ trace / Datadog 补证的统计范围。比较使用完整数值，不只截取 
 
 | 捕获 | 三个字段齐全的请求 | 结果 |
 | --- | --- | --- |
-| `har/chatgpt.com.har` | `#133/#237/#275` | 3 条全部匹配 |
-| `har/11.1-密码注册-快路径设置2fa.har` | `#125/#153/#257/#292` | 4 条全部匹配 |
-| `har/11.4-passwordless2about-you.har` | `#196/#305` | 2 条全部匹配 |
-| `har/预热.har` | 无 | 未记录这三个字段 |
-| `saz/1.saz` | `#147/#168/#173` | 3 条全部匹配 |
-| `saz/login-password-totp-403.saz` | `#58/#84/#93` | 3 条全部匹配 |
+| `captures/har/chatgpt.com.har` | `#133/#237/#275` | 3 条全部匹配 |
+| `captures/har/11.1-密码注册-快路径设置2fa.har` | `#125/#153/#257/#292` | 4 条全部匹配 |
+| `captures/har/11.4-passwordless2about-you.har` | `#196/#305` | 2 条全部匹配 |
+| `captures/har/预热.har` | 无 | 未记录这三个字段 |
+| `captures/saz/1.saz` | `#147/#168/#173` | 3 条全部匹配 |
+| `captures/saz/login-password-totp-403.saz` | `#58/#84/#93` | 3 条全部匹配 |
 
 `1.saz #398/#410` 是浏览器扩展请求，只带 `traceparent`、没有两个 Datadog ID，属于缺字段，不是不匹配。该补证不说明所有请求都带这些字段，也不能证明浏览器内部随机源与本地相同。
 
@@ -343,9 +343,9 @@ trace / Datadog 补证的统计范围。比较使用完整数值，不只截取 
 | 浏览器版本、平台与设备池 | 固定 `wreq/chrome152`，对齐 Chrome / macOS / `MacIntel`，设备规格从画像池选择并在会话内稳定。`core/openai/transport/session.py:70-85,214-251`、`core/openai/transport/protocol_profiles.py:23-46`、`config/browser.py:264-283`。 | HAR `#133/#237/#275` 为 Windows / Chrome 154。本地 UA、CH、SDK 自洽有工程理由，但不是复刻该样本；也不能由 HTTP 值推断 TLS 指纹等同浏览器。 |
 | 语言与时区 | 自动模式使用观测国家；默认时区按画像国家选择，显式值校验后冻结。`core/openai/register/registration_geo.py:327-426,449-548`。HTTP 与 SDK 共用当前画像。 | HAR 的语言头为 `en-PH,en;q=0.9`，不能证明浏览器按出口国家选语言，也不能确认 JS 时区。 |
 | invocation 与 trace 随机生成 | 每次构造 Auth JSON 头时新生成 UUID4 invocation 和两个 64-bit 随机数；零值用 1 替换。`core/openai/transport/session.py:592-610`。 | 支持逐请求区分及数值关联；不能证明随机源、位宽、零值处理相同。粒度是每次构造头，不保证传输层重发时重新生成。 |
-| 导航上下文 | 按 Referer 前缀粗判 `Sec-Fetch-Site`，由调用方布尔参数选择 `Sec-Fetch-User`。authorize 沿用同一组显式头，新号 callback 逐跳重建。`core/openai/transport/session.py:572-581,689-743`、`core/openai/auth/openai_auth.py:347-378`、`core/openai/account/account_export.py:214-234`。 | HAR `#6/#7`、`#137/#138`、`#279/#280` 可支持对应样本值；不等同完整浏览器的 site、重定向链和用户激活算法。 |
-| Sentinel 运行宿主 | SDK 在 Node VM 中执行，采集与求解共用一次宿主上下文，由 Python 发送 `/req`；不为形式对齐先请求 SDK 或 frame 页面。`core/openai/auth/sentinel_runner.py:60-114,165-227,477-530`、`core/openai/auth/openai_auth.py:426-464`。 | 三个 challenge 及其消费者支持最终字段与消费匹配，不能证明 VM 的 JS 环境等同浏览器。`SENTINEL_SV` 与 HAR 三个请求 frame Referer 的版本标记相符，不证明本地 SDK 字节相同或仍是线上最新。配置：`config/openai_protocol.py:27-31`。 |
-| SDK Cookie 投影 | 把当前 Jar 的 Cookie 投影给 VM；JS 按名称去重，缺少时可将当前 `oai-did` 补入 VM 输入。`core/openai/transport/session.py:426-462`、`core/openai/auth/openai_auth.py:431-447`、`core/openai/auth/sentinel/sentinel-runner.js:1225-1262`。 | Cookie 头与 `Set-Cookie` 支持部分传递关系，不证明 SDK 实际可见的 `document.cookie` 集合。投影不复现 Domain / Path / HttpOnly 可见性；VM 补值不是向 HTTP CookieJar 补种。 |
+| 导航上下文 | 按 Referer 前缀粗判 `Sec-Fetch-Site`，由调用方布尔参数选择 `Sec-Fetch-User`。authorize 沿用同一组显式头，新号 callback 逐跳重建。`core/openai/transport/session.py:572-581,689-743`、`core/openai/auth/openai_auth.py:347-377`、`core/openai/account/account_export.py:214-234`。 | HAR `#6/#7`、`#137/#138`、`#279/#280` 可支持对应样本值；不等同完整浏览器的 site、重定向链和用户激活算法。 |
+| Sentinel 运行宿主 | SDK 在 Node VM 中执行，采集与求解共用一次宿主上下文，由 Python 发送 `/req`；不为形式对齐先请求 SDK 或 frame 页面。`core/openai/auth/sentinel_runner.py:60-114,165-227,477-530`、`core/openai/auth/openai_auth.py:396-434`。 | 三个 challenge 及其消费者支持最终字段与消费匹配，不能证明 VM 的 JS 环境等同浏览器。`SENTINEL_SV` 与 HAR 三个请求 frame Referer 的版本标记相符，不证明本地 SDK 字节相同或仍是线上最新。配置：`config/openai_protocol.py:27-31`。 |
+| SDK Cookie 投影 | 把当前 Jar 的 Cookie 投影给 VM；JS 按名称去重，缺少时可将当前 `oai-did` 补入 VM 输入。`core/openai/transport/session.py:426-462`、`core/openai/auth/openai_auth.py:401-417`、`core/openai/auth/sentinel/sentinel-runner.js:1225-1262`。 | Cookie 头与 `Set-Cookie` 支持部分传递关系，不证明 SDK 实际可见的 `document.cookie` 集合。投影不复现 Domain / Path / HttpOnly 可见性；VM 补值不是向 HTTP CookieJar 补种。 |
 | 操作节奏与 OTP 恢复 | 按动作类别配置随机等待；无效或过期的 OTP 最多提交三次，失败后重发并取当前验证码。`config/humanize.py:16-29`、`core/openai/register/registration_flow.py:154-180`。 | 成功捕获推不出自动化的等待区间或重试上限。这是运行策略，不是浏览器行为，也不证明降低风控风险。 |
 
 SO 凭据不能按某一份捕获一刀切：HAR `#237/#275`、SAZ `#168/#173` 独立记录了 SO；challenge 响应里的 `so.required` 等只是元数据，不是 SO token。

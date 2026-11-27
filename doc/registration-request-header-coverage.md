@@ -1,6 +1,6 @@
 # 注册主链请求头：HAR 字段覆盖
 
-覆盖统计只比较请求头的**字段名**，忽略大小写；下文单独列出 `Priority` 的非敏感值。浏览器参考为 [`har/chatgpt.com.har`](../har/chatgpt.com.har)，从正式 CSRF `#4` 到回调后返回 `accessToken` 的首页 `#280`（HAR 序号从 **0** 开始）。`#4` 响应的 `csrfToken` 与 `#5` 的 signin 表单匹配。源码范围为新账号密码注册从正式 CSRF 到回调后的 `/api/auth/session`；该 HAR 未记录独立的 `/api/auth/session` 或 `/oauth/token`。
+覆盖统计只比较请求头的**字段名**，忽略大小写；下文单独列出 `Priority` 的非敏感值。浏览器参考为 [`captures/har/chatgpt.com.har`](../captures/har/chatgpt.com.har)，从正式 CSRF `#4` 到回调后返回 `accessToken` 的首页 `#280`（HAR 序号从 **0** 开始）。`#4` 响应的 `csrfToken` 与 `#5` 的 signin 表单匹配。源码范围为新账号密码注册从正式 CSRF 到回调后的 `/api/auth/session`；该 HAR 未记录独立的 `/api/auth/session` 或 `/oauth/token`。
 
 不含预热、邮箱服务、已有账号分支、注册后 2FA、设置密码前的首次 `POST /api/accounts/passwordless/send-otp`（`#88`）、未匹配主链消费者的 Sentinel challenge，以及回调落地后的埋点、静态资源和登录后初始化。
 
@@ -149,7 +149,7 @@ Transport
 
 ## HAR 字段差异与抓包补证
 
-本次主链未记录 `Host`、`Connection` 或上述六个高熵 Client Hints。六个高熵字段计入[当前注册业务场景显式构造字段](../core/openai/transport/session.py#L745-L851)，但不计入 HAR 已记录字段。与 HAR 独立对照的 [`saz/1.saz`](../saz/1.saz) 不计入本次覆盖统计；其 13 条业务请求中 12 条带齐六项，首次 authorize `#108` 未记录，同 URL `#109` 带齐，两条均返回 403，不能据此确定 Cloudflare challenge 的原因。`1.saz` 的三条匹配 Sentinel `/req`（`#426/#432/#433`）均不带高熵。
+本次主链未记录 `Host`、`Connection` 或上述六个高熵 Client Hints。六个高熵字段计入[当前注册业务场景显式构造字段](../core/openai/transport/session.py#L745-L851)，但不计入 HAR 已记录字段。与 HAR 独立对照的 [`captures/saz/1.saz`](../captures/saz/1.saz) 不计入本次覆盖统计；其 13 条业务请求中 12 条带齐六项，首次 authorize `#108` 未记录，同 URL `#109` 带齐，两条均返回 403，不能据此确定 Cloudflare challenge 的原因。`1.saz` 的三条匹配 Sentinel `/req`（`#426/#432/#433`）均不带高熵。
 
 | 字段名 | 注册源码在哪些请求设置 | 抓包证据 |
 | --- | --- | --- |
