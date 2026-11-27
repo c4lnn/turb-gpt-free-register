@@ -104,3 +104,6 @@ logs/
 run/
 
 *.har
+
+# 原始抓包文件（HAR / SAZ 等）体积大且含会话凭据，统一放在 captures/，不纳入版本库
+captures/
