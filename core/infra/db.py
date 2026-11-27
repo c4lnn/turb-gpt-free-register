@@ -10,6 +10,7 @@
     - 注册成功的邮箱.json     注册成功账号完整状态
 """
 import hashlib
+import logging
 import json
 import os
 import sqlite3
@@ -74,6 +75,7 @@ _LEGACY_OUTLOOK_JSON = _LEGACY_DATA_DIR / "outlook_accounts.json"
 _LEGACY_ACCOUNTS_JSON = _LEGACY_DATA_DIR / "registered_accounts.json"
 _LEGACY_JOBS_JSON = _LEGACY_DATA_DIR / "registration_jobs.json"
 _LOCK = threading.RLock()
+logger = logging.getLogger(__name__)
 _SQLITE_STORE = SQLiteRuntimeStore(_RUNTIME_DB)
 _SQLITE_PATH_BINDINGS = {
     "_OUTLOOK_JSON": _OUTLOOK_JSON,
@@ -267,6 +269,7 @@ def _normalize_pool_row(row: dict, *, missing_status: str = "disabled", alias: b
     row.setdefault("manual_reactivated_from", None)
     row.setdefault("manual_reactivated_at", None)
     row.setdefault("manual_reactivated_by", None)
+    row.setdefault("network_release_count", 0)
     row.setdefault("deleted_at", None)
     return row
 
@@ -287,6 +290,8 @@ def _mark_pool_row_used(row: dict, account_id: int | None = None) -> bool:
     if account_id is not None:
         row["registered_account_id"] = int(account_id)
     row["completed_at"] = row.get("completed_at") or _now()
+    # 池行进入 used，网络类回池次数不再有意义。
+    row["network_release_count"] = 0
     return True
 
 
@@ -310,7 +315,12 @@ def _transition_pool_row(
     change_reason: str | None = None,
     reactivated_from: str | None = None,
 ) -> bool:
-    """在内存行上执行统一状态迁移；force 仅供历史迁移使用。"""
+    """在内存行上执行统一状态迁移；force 绕过 can_transition。
+
+    force 仅供三处受控迁移使用：历史状态迁移、人工恢复（restore_email_pool_entry）、
+    网络类失败回池（settle_failed_registration_email）。其余调用方必须遵守 can_transition，
+    它禁止 failed / disabled 等终态被复活。
+    """
     current = canonical_status(row.get("status"), missing="disabled", unknown="disabled")
     destination = validate_status(target)
     if not force and current != destination and not can_transition(current, destination):
@@ -375,6 +385,113 @@ def _save_pool_rows(kind: str, rows: list[dict]) -> None:
         _save_icloud_emails(rows)
 
 
+def settle_failed_registration_email(
+    email: str,
+    *,
+    reusable: bool,
+    note: str | None = None,
+) -> bool:
+    """注册失败后一次性决定邮箱的去向：回池（available）或标 failed。
+
+    由失败类别驱动：``reusable=True`` 表示网络类失败，邮箱本身没问题；
+    ``reusable=False`` 表示账号类或未知类失败，与引入失败分类之前一致地标 ``failed``。
+    四个持久化邮箱池共用本函数，按邮箱定位所属池后分派到对应的保存函数。
+
+    只处理状态仍为 ``registering`` 的池行。上一轮已回池的邮箱、被人工改过状态的邮箱
+    都返回 False，不会被改成 ``failed``。
+
+    返回是否完成了迁移。
+    """
+    target_email = str(email or "").strip().casefold()
+    if not target_email:
+        return False
+    with _LOCK:
+        kind, rows, row = _pool_rows_for_email_locked(target_email)
+        if kind is None or rows is None or row is None:
+            return False
+        if is_complete_account(_pool_account_locked(target_email, row)):
+            return False
+        current = canonical_status(row.get("status"), missing="disabled", unknown="disabled")
+        if current != "registering":
+            logger.warning(
+                "注册失败后处理邮箱 %s：池行状态为 %s 而非 registering，不改动",
+                target_email, current,
+            )
+            return False
+        if reusable:
+            count = int(row.get("network_release_count") or 0) + 1
+            row["network_release_count"] = count
+            max_count = int(_email_cfg.EMAIL_NETWORK_RELEASE_MAX_COUNT or 0)
+            if max_count > 0 and count >= max_count:
+                target = "failed"
+                note = f"网络类失败已达 {count} 次，停止自动回池"
+            else:
+                target = "available"
+        else:
+            target = "failed"
+        # registering -> available 不在 can_transition 的允许集合内，回池是唯一需要 force 的自动迁移。
+        if not _transition_pool_row(
+            row,
+            target,
+            note=note,
+            force=(target == "available"),
+            change_source="registration_failure",
+        ):
+            return False
+        _save_pool_rows(kind, rows)
+        return True
+
+def claim_specific_email(email: str, *, job_id: int) -> bool:
+    """重试任务复用原邮箱：把指定的池行领取为 ``registering``，归属 ``job_id``。
+
+    只接受两种状态：``available`` 直接领取；``failed`` 先按重试恢复再领取。``used``（已注册成账号）
+    和 ``disabled``（被人工停用）不复用，重试任务改领新邮箱。池行对应已有完整账号时同样不复用：
+    ``restore_email_pool_entry`` 是人工/导入边界，不查账号，自动重试必须自己挡住。恢复与领取在
+    同一把锁内完成，期间其它任务领不走这个邮箱。
+
+    返回是否领取成功。
+    """
+    target = str(email or "").strip().casefold()
+    if not target:
+        return False
+    with _LOCK:
+        kind, rows, row = _pool_rows_for_email_locked(target)
+        if kind is None or rows is None or row is None:
+            return False
+        if is_complete_account(_pool_account_locked(target, row)):
+            return False
+        current = canonical_status(row.get("status"), missing="disabled", unknown="disabled")
+        if current == "failed":
+            if _active_registration_conflict_locked(kind, row):
+                return False
+            try:
+                restore_email_pool_entry(
+                    target,
+                    source="retry",
+                    reason="任务重试复用原邮箱",
+                    actor=f"retry-job-{int(job_id)}",
+                    expected_status="failed",
+                )
+            except EmailPoolLifecycleError:
+                return False
+            # restore 改的是它自己加载并保存的那份行数据（重新计数、恢复痕迹等）。上面读到的 row 是
+            # 恢复之前的旧字典，沿用它在下一次保存时会把那些字段全部覆盖回去；旧状态 failed 也过不了
+            # can_transition。所以恢复之后在同一把锁内重新读取，让后面的迁移落在已恢复的数据上。
+            kind, rows, row = _pool_rows_for_email_locked(target)
+            if kind is None or rows is None or row is None:
+                return False
+            current = canonical_status(row.get("status"), missing="disabled", unknown="disabled")
+        elif current != "available":
+            return False
+        if current != "available":
+            return False
+        if not _transition_pool_row(row, "registering", job_id=int(job_id)):
+            return False
+        row["note"] = None
+        _save_pool_rows(kind, rows)
+        return True
+
+
 def _active_registration_conflict_locked(kind: str, row: dict) -> str | None:
     """在统一锁内判断条目是否仍被注册任务/母号租约占用。"""
     state = canonical_status(row.get("status"), missing="disabled", unknown="disabled")
@@ -420,9 +537,9 @@ def restore_email_pool_entry(
     actor: str | None = None,
     expected_status: str | None = None,
 ) -> dict:
-    """唯一的人工/显式导入恢复边界，不放宽自动迁移规则。"""
+    """唯一的人工/显式导入/任务重试恢复边界，不放宽自动迁移规则。"""
     source = str(source or "manual").strip().casefold()
-    if source not in {"manual", "import"}:
+    if source not in {"manual", "import", "retry"}:
         raise EmailPoolLifecycleError("restore_source_invalid", "恢复来源非法")
     reason_text = str(reason or "").strip()
     if not reason_text:
@@ -456,6 +573,10 @@ def restore_email_pool_entry(
         row["registration_job_id"] = None
         row["registration_started_at"] = None
         row["deleted_at"] = None
+        # 人工恢复或显式重新导入后重新计数。本函数改的是它自己重新加载并保存的那份池行；调用方若在
+        # 返回后继续用 restore 之前读到的旧字典再保存，必须把上面这些字段逐一同步过去，否则会被旧值
+        # 覆盖回去。新增的调用方优先在同一把锁内重新读取池行再继续（见 claim_specific_email）。
+        row["network_release_count"] = 0
         row["note"] = reason_text[:500]
         _save_pool_rows(kind, rows)
         return {
@@ -769,6 +890,36 @@ def migrate_email_pool_statuses() -> dict[str, int]:
         migrate_rows("icloud_emails", _load_icloud_emails())
 
         return {"stores_changed": changed, "rows_normalized": normalized, "rows_failed": failed}
+
+
+def recover_interrupted_registration_jobs() -> int:
+    """服务重启时收口上个进程遗留的注册任务，避免 pending / running / stopping 永久挂起。
+
+    必须在 ``migrate_email_pool_statuses`` 之前调用：迁移把仍处于活动状态的任务算作占用，
+    先迁移会让它们领取的池行继续留在 ``registering``。本函数不改邮箱池，也不释放补跑占位
+    （``codex_retry_service._RETRYING`` 与 ``operation_lock._OWNERS`` 是进程内状态，重启即空）。
+    """
+    with _LOCK:
+        rows = _load_jobs()
+        recovered = 0
+        now = _now()
+        for row in rows:
+            if str(row.get("job_type") or "registration") not in {"registration", "codex_retry"}:
+                continue
+            status = str(row.get("status") or "")
+            if status == "pending":
+                row["status"] = "cancelled"
+                row["error_message"] = "WebUI 重启，任务未执行"
+            elif status in {"running", "stopping"}:
+                row["status"] = "stopped"
+                row["error_message"] = "WebUI 重启，任务执行中断"
+            else:
+                continue
+            row["completed_at"] = now
+            recovered += 1
+        if recovered:
+            _save_jobs(rows)
+        return recovered
 
 
 def _ensure_storage() -> None:
@@ -2682,6 +2833,9 @@ def import_outlook_accounts(records: list[dict], *, reactivate_existing: bool = 
                 except EmailPoolLifecycleError:
                     skipped += 1
                     continue
+                # restore 在自己重新加载的那份池行上清了计数；这里随后会用 existing 再保存一次，
+                # 所以必须在 existing 上也清零，否则旧计数会被写回去。
+                existing["network_release_count"] = 0
                 existing["status"] = "available"
                 existing["status_change_source"] = "import"
                 existing["status_change_reason"] = "显式重新导入并恢复邮箱池条目"
@@ -3020,6 +3174,8 @@ def import_generic_api_emails(records: list[dict], *, reactivate_existing: bool 
                 except EmailPoolLifecycleError:
                     skipped += 1
                     continue
+                # 同 import_outlook_accounts：existing 会被再保存一次，必须在这里清零。
+                existing["network_release_count"] = 0
                 existing["status"] = "available"
                 existing["status_change_source"] = "import"
                 existing["status_change_reason"] = "显式重新导入并恢复邮箱池条目"
@@ -3320,6 +3476,7 @@ def _new_job_row(
         "completed_at": None,
         "account_id": account_id,
         "network_traffic": None,
+        "failure_category": None,
         "created_at": _now(),
     }
 
@@ -3410,6 +3567,7 @@ def update_job(
     account_id: int | None = None,
     network_traffic: dict | None = None,
     registration: dict | None = None,
+    failure_category: str | None = None,
 ) -> None:
     with _LOCK:
         rows = _load_jobs()
@@ -3439,6 +3597,8 @@ def update_job(
             merged = dict(existing) if isinstance(existing, dict) else {}
             merged.update(dict(registration))
             row["registration"] = merged
+        if failure_category is not None:
+            row["failure_category"] = failure_category
         _save_jobs(rows)
 
 
@@ -3773,6 +3933,8 @@ def claim_next_domain_email(
                     )
                 except EmailPoolLifecycleError:
                     return None
+                # restore 在自己重新加载的那份池行上清了计数；row 会被再保存一次，必须在这里清零。
+                row["network_release_count"] = 0
                 row["status"] = "available"
                 if not _transition_pool_row(row, "registering", job_id=job_id):
                     return None
@@ -3903,6 +4065,8 @@ def import_icloud_emails(records: list[dict], *, reactivate_existing: bool = Fal
                 except EmailPoolLifecycleError:
                     skipped += 1
                     continue
+                # 同 import_outlook_accounts：existing 会被再保存一次，必须在这里清零。
+                existing["network_release_count"] = 0
                 existing["status"] = "available"
                 existing["status_change_source"] = "import"
                 existing["status_change_reason"] = "显式重新导入并恢复邮箱池条目"

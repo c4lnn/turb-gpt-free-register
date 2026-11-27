@@ -7,10 +7,12 @@ import json
 import logging
 from urllib.parse import urlencode, urlparse, parse_qs
 
-from core.openai.transport.session import BrowserSession, HeaderProfile
 from config import (
-    OPENAI_CLIENT_ID, OPENAI_SCOPE, OPENAI_AUDIENCE, OPENAI_REDIRECT_URI
+    OPENAI_CLIENT_ID, OPENAI_SCOPE, OPENAI_AUDIENCE, OPENAI_REDIRECT_URI,
+    OPENAI_CSRF_403_RETRY_MAX_ATTEMPTS, OPENAI_CSRF_403_RETRY_BASE_DELAY,
 )
+from core.infra import job_context
+from core.openai.transport.session import BrowserSession, HeaderProfile, reset_retryable_circuit
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +100,9 @@ def get_csrf_token(
     显式登录上下文用于正式登录页 Referer 和禁缓存头；
     目标密码登录额外启用场景画像，设备 warmup 不调用此函数。
 
+    收到 403 时在同一会话内重试，每次重试前清除本地熔断；
+    传输层的链路瞬断重试在更下层，耗尽后抛出的异常原样穿出本函数。
+
     Returns:
         csrfToken 字符串
     """
@@ -107,9 +112,18 @@ def get_csrf_token(
         no_cache=login_referer is not None, header_profile=header_profile,
         include_high_entropy=include_high_entropy,
     )
+    max_attempts = max(1, int(OPENAI_CSRF_403_RETRY_MAX_ATTEMPTS))
 
     logger.info("[步骤2] 获取 CSRF Token...")
-    resp = session.get(url, headers=headers)
+    for attempt in range(1, max_attempts + 1):
+        resp = session.get(url, headers=headers)
+        if int(getattr(resp, "status_code", 0)) != 403 or attempt >= max_attempts:
+            break
+        # 403 响应已被会话记入熔断；不清除则下一次 session.get 会被本地拦截。
+        reset_retryable_circuit(session)
+        logger.warning("[步骤2] 获取 CSRF Token 收到 403 (%s/%s)，保留当前会话，%.1fs 后重试",
+                       attempt, max_attempts, OPENAI_CSRF_403_RETRY_BASE_DELAY * attempt)
+        job_context.interruptible_sleep(OPENAI_CSRF_403_RETRY_BASE_DELAY * attempt)
     resp.raise_for_status()
 
     data = resp.json()

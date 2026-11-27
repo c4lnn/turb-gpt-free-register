@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from core.openai.codex import codex_retry_service
+from core.openai.register.registration_failure import classify_failure
 from core.openai.register.registration_flow import run_registration
 from core.infra import db
 from core.infra import job_context
@@ -85,23 +86,29 @@ def _prepare_registration_args() -> tuple[str | None, str, str]:
     return email, name, birthday
 
 
-def _release_unconsumed_job_email(email: str | None, reason: str, *, job_id: int | None = None) -> None:
-    """任务失败兜底：把已领取但未生成账号的邮箱永久标记为 failed。"""
+def _release_unconsumed_job_email(
+    email: str | None, reason: str, *, reusable: bool, job_id: int | None = None,
+) -> None:
+    """任务结束时处理它领取的邮箱：``reusable=True`` 回池，否则标 failed。
+
+    只在池行仍是 ``registering`` 时生效；已回池、已标 failed 或已保存账号的邮箱不会被改动。
+    ``reusable`` 由调用方按失败类别显式传入，停止路径固定传 ``False``。
+    """
+    # 已有账号登录失败只影响任务，不动它的邮箱。
     if job_context.is_current_account_task():
         return
     if not email:
         return
     try:
-        # 统一走 provider 兼容入口：持久化池写入 failed，临时邮箱清理
-        # 进程上下文；已有账号时入口会保持 used。
-        from core.mail.email_provider import release_email_if_unconsumed
+        from core.mail.email_provider import settle_email_on_failure
 
-        release_email_if_unconsumed(
+        settle_email_on_failure(
             email,
-            note=f"任务失败，邮箱不可复用: {reason[:180]}",
+            reusable=reusable,
+            note=f"任务失败: {reason[:180]}",
         )
     except Exception:
-        logger.exception("[Service] 回收未消耗邮箱失败: %s", email)
+        logger.exception("[Service] 处理未消耗邮箱失败: %s", email)
 
 
 def _is_final_session_access_token_timeout(error: object) -> bool:
@@ -269,7 +276,9 @@ def _run_one_job(job_id: int, log_file: str) -> None:
     try:
         with _JobLogContext(log_file):
             log_logger.info(f"[Job {job_id}] 开始注册任务")
-            email, name, birthday = _prepare_registration_args()
+            # 任务行上已有邮箱（重试子任务复用原邮箱）时直接用它，不再从配置取。
+            prepared_email, name, birthday = _prepare_registration_args()
+            email = str(current.get("email") or "").strip() or prepared_email
             db.update_job(job_id, email=email)
             job_context.check_stop_requested()
             def _on_email_acquired(acquired_email: str) -> None:
@@ -288,7 +297,7 @@ def _run_one_job(job_id: int, log_file: str) -> None:
             if isinstance(result, dict) and isinstance(result.get("registration"), dict):
                 job_context.record_progress(result["registration"])
             if job_context.is_stop_requested(job_id):
-                _release_unconsumed_job_email(email, "用户手动停止")
+                _release_unconsumed_job_email(email, "用户手动停止", reusable=False)
                 db.update_job(
                     job_id,
                     status="stopped",
@@ -299,21 +308,29 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                 )
                 log_logger.warning(f"[Job {job_id}] 已按用户请求停止")
                 return
-            if isinstance(result, dict) and result.get("success"):
+            if isinstance(result, dict) and (result.get("success") or result.get("partial")):
+                partial = bool(result.get("partial")) and not result.get("success")
                 db.update_job(
                     job_id,
-                    status="success",
+                    status="partial_success" if partial else "success",
                     email=result.get("email"),
                     account_id=result.get("account_id"),
                     network_traffic=result.get("network_traffic"),
                     registration=job_context.progress(),
+                    error=(result.get("error") or None) if partial else None,
                     completed_at=datetime.now().isoformat(timespec="seconds"),
                 )
-                log_logger.info(f"[Job {job_id}] 成功: {result.get('email')}")
+                if partial:
+                    log_logger.warning(
+                        f"[Job {job_id}] 部分成功: {result.get('email')}，{result.get('error') or ''}"
+                    )
+                else:
+                    log_logger.info(f"[Job {job_id}] 成功: {result.get('email')}")
             else:
                 # 注意：失败也可能伴随 account_id（如 Codex 失败但账号已注册成功）
                 err = (result or {}).get("error") if isinstance(result, dict) else "unknown"
                 result_email = (result or {}).get("email") if isinstance(result, dict) else None
+                failure_category = (result or {}).get("failure_category") if isinstance(result, dict) else None
                 db.update_job(
                     job_id,
                     status="failed",
@@ -323,23 +340,28 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                     error=str(err)[:500],
                     error_code=(result or {}).get("error_code") if isinstance(result, dict) else None,
                     error_stage=(result or {}).get("error_stage") if isinstance(result, dict) else None,
+                    failure_category=failure_category,
                     registration=job_context.progress(),
                     completed_at=datetime.now().isoformat(timespec="seconds"),
                 )
                 email_to_handle = str(result_email or email or "").strip()
+                email_settled = bool(result.get("email_settled")) if isinstance(result, dict) else False
                 if _should_disable_failed_registration_email(err):
                     _disable_job_email(email_to_handle, str(err))
-                else:
-                    _release_unconsumed_job_email(email_to_handle, str(err))
+                elif not email_settled:
+                    _release_unconsumed_job_email(
+                        email_to_handle, str(err), reusable=(failure_category == "network"),
+                    )
                 log_logger.error(
-                    "[Job %s] 失败: stage=%s error_code=%s reason=%s",
+                    "[Job %s] 失败: stage=%s error_code=%s category=%s reason=%s",
                     job_id,
                     (result or {}).get("error_stage") if isinstance(result, dict) else None,
                     (result or {}).get("error_code") if isinstance(result, dict) else None,
+                    failure_category,
                     err,
                 )
     except job_context.StopRequested as exc:
-        _release_unconsumed_job_email(email, str(exc))
+        _release_unconsumed_job_email(email, str(exc), reusable=False)
         log_logger.warning(f"[Job {job_id}] 已停止: {exc}")
         db.update_job(
             job_id,
@@ -349,12 +371,9 @@ def _run_one_job(job_id: int, log_file: str) -> None:
             completed_at=datetime.now().isoformat(timespec="seconds"),
         )
     except Exception as exc:
-        err_text = f"{type(exc).__name__}: {exc}"
-        if _should_disable_failed_registration_email(err_text):
-            _disable_job_email(email, err_text)
-        else:
-            _release_unconsumed_job_email(email, err_text)
+        # 停止检查必须先于邮箱处理：停止期间撞上网络类异常时，邮箱不能回池并计入回池次数。
         if job_context.is_stop_requested(job_id):
+            _release_unconsumed_job_email(email, "用户手动停止", reusable=False)
             log_logger.warning(f"[Job {job_id}] 停止中捕获异常，按停止处理: {type(exc).__name__}: {exc}")
             db.update_job(
                 job_id,
@@ -364,6 +383,13 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                 completed_at=datetime.now().isoformat(timespec="seconds"),
             )
             return
+        # 这条路径下 run_registration 没有接住异常，进度快照里还没有失败类别，只能对异常本身分类。
+        failure_category = classify_failure(exc)
+        err_text = f"{type(exc).__name__}: {exc}"
+        if _should_disable_failed_registration_email(err_text):
+            _disable_job_email(email, err_text)
+        else:
+            _release_unconsumed_job_email(email, err_text, reusable=(failure_category == "network"))
         log_logger.exception(f"[Job {job_id}] 异常")
         db.update_job(
             job_id,
@@ -371,6 +397,7 @@ def _run_one_job(job_id: int, log_file: str) -> None:
             error=f"{type(exc).__name__}: {exc}"[:500],
             error_code=getattr(exc, "category", None),
             error_stage=getattr(exc, "stage", None),
+            failure_category=failure_category,
             registration=job_context.progress(),
             completed_at=datetime.now().isoformat(timespec="seconds"),
         )
@@ -509,7 +536,7 @@ def get_retry_info(job: dict, *, account_snapshot: dict | None = None) -> dict:
         "retry_reason": None,
         "display_status": status,
     }
-    if status not in ("failed", "stopped", "cancelled"):
+    if status not in ("failed", "stopped", "cancelled", "partial_success"):
         return info
 
     successful_retry = db.get_successful_retry_for_job(int(job.get("id") or 0))
@@ -533,7 +560,11 @@ def get_retry_info(job: dict, *, account_snapshot: dict | None = None) -> dict:
             info["retry_reason"] = "账号已废号，不能补跑 Codex"
             return info
         if auth_status == "success":
-            info["retry_reason"] = "账号和 Codex 授权均已完成"
+            info["retry_reason"] = (
+                "账号已保存，配置要求的 2FA 未完成；当前没有自动补跑入口"
+                if status == "partial_success"
+                else "账号和 Codex 授权均已完成"
+            )
             return info
         info.update({
             "retryable": True,
@@ -603,6 +634,15 @@ def retry_job(job_id: int, workers: int | None = None) -> dict:
             "job": job,
         }
 
+    # network 类别失败的注册任务优先复用原邮箱：上一轮已把它回池，或因达上限标 failed。
+    # 认领失败（已被别的任务领走、已停用、已有账号等）时子任务的 email 保持 None，执行时领新邮箱。
+    claimed_original_email = False
+    if (action == "registration" and email
+            and str(source.get("failure_category") or "") == "network"):
+        if db.claim_specific_email(email, job_id=job["id"]):
+            db.update_job(int(job["id"]), email=email)
+            claimed_original_email = True
+
     try:
         if action == "codex":
             db.update_account_codex_status(email, "retrying", None)
@@ -616,9 +656,20 @@ def retry_job(job_id: int, workers: int | None = None) -> dict:
         if reserved_codex:
             codex_retry_service.release(email)
             db.update_account_codex_status(email, "failed", f"队列提交失败：{type(exc).__name__}: {exc}"[:500])
+        if claimed_original_email:
+            # 原邮箱已认领为 registering 并归属这个提交失败的子任务，不回滚它会一直被占着。
+            from core.mail.email_provider import settle_email_on_failure
+
+            try:
+                settle_email_on_failure(
+                    email, reusable=False, note="重试任务提交线程池失败，邮箱不可复用",
+                )
+            except Exception:
+                logger.exception("[Service] 重试任务 #%s 提交失败后处理原邮箱失败: %s", job["id"], email)
         db.update_job(
             int(job["id"]),
             status="failed",
+            email=email if claimed_original_email else None,
             error=f"队列提交失败：{type(exc).__name__}: {exc}"[:500],
             completed_at=datetime.now().isoformat(timespec="seconds"),
         )
@@ -671,7 +722,7 @@ def request_stop_job(job_id: int) -> dict:
         db.update_job(job_id, status="cancelled", completed_at=now_iso, error="用户手动停止/取消排队")
         _append_job_log(job_id, "用户手动停止：任务尚未运行，已取消排队。")
         return {"ok": True, "message": "排队任务已取消", "job_id": job_id, "state": "cancelled"}
-    if status in ("success", "failed", "cancelled", "stopped"):
+    if status in ("success", "failed", "cancelled", "stopped", "partial_success"):
         return {"ok": True, "message": f"任务已结束：{status}", "job_id": job_id, "state": status}
     if status in ("running", "stopping"):
         has_instance = job_context.request_stop(int(job_id))
@@ -688,6 +739,7 @@ def request_stop_job(job_id: int) -> dict:
             _release_unconsumed_job_email(
                 str(job.get("email") or "").strip() or None,
                 "任务实例不存在，确认未继续执行",
+                reusable=False,
             )
             _append_job_log(job_id, "用户手动停止：未找到运行中的任务实例，已直接标记为已停止。")
             logger.warning("[Service] 用户停止任务 #%s：任务实例不存在，已直接标记 stopped", job_id)

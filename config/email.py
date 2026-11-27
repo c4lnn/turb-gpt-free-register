@@ -50,6 +50,10 @@ OTP_MAX_WAIT = 90
 # Outlook 双协议取件：抓到一封 OTP 后再多等多少秒看是否有更晚到达的邮件。
 OTP_SETTLE_SECONDS = 5
 
+# 持久化邮箱池条目因网络类注册失败回池的次数上限。
+# 达到上限后不再回池、改标 failed，可人工恢复并重新计数。0 表示不设上限。
+EMAIL_NETWORK_RELEASE_MAX_COUNT = 3
+
 
 # ============================================================
 # Cloudflare 域名邮箱模式（转发到 QQ 邮箱，通过 IMAP 取信）
@@ -139,4 +143,4 @@ REMAIL_ORDER_WAIT_SECONDS = 30
 REMAIL_REQUEST_TIMEOUT = 20
 
 # ---- .env overrides for WebUI editable fields ----
-apply_env_overrides(globals(), {'USE_EMAIL_SERVICE': 'bool', 'OTP_MAX_WAIT': 'int', 'OTP_POLL_INTERVAL': 'int', 'EMAIL_SOURCE': 'str', 'EMAIL_DOMAIN': 'str', 'QQ_EMAIL': 'str', 'QQ_IMAP_PASSWORD': 'str', 'QQ_IMAP_TIMEOUT': 'int', 'OUTLOOK_FETCH_MODE': 'str', 'CLOUDFLARE_API_BASE': 'str', 'CLOUDFLARE_API_KEY': 'str', 'CLOUDFLARE_AUTH_MODE': 'str', 'CLOUDFLARE_CUSTOM_AUTH': 'str', 'CLOUDFLARE_PATH_DOMAINS': 'str', 'CLOUDFLARE_PATH_ACCOUNTS': 'str', 'CLOUDFLARE_PATH_TOKEN': 'str', 'CLOUDFLARE_PATH_MESSAGES': 'str', 'CLOUDFLARE_DEFAULT_DOMAINS': 'list_str_multiline', 'CLOUDFLARE_REQUEST_TIMEOUT': 'int', 'CLOUDFLARE_NAME_LENGTH': 'int', 'CLOUDFLARE_RANDOM_SUBDOMAIN_ENABLED': 'bool', 'CLOUDFLARE_RANDOM_SUBDOMAIN_LENGTH': 'int', 'CLOUDFLARE_RANDOM_SUBDOMAIN_SUFFIX': 'str'})
+apply_env_overrides(globals(), {'USE_EMAIL_SERVICE': 'bool', 'OTP_MAX_WAIT': 'int', 'OTP_POLL_INTERVAL': 'int', 'EMAIL_NETWORK_RELEASE_MAX_COUNT': 'int', 'EMAIL_SOURCE': 'str', 'EMAIL_DOMAIN': 'str', 'QQ_EMAIL': 'str', 'QQ_IMAP_PASSWORD': 'str', 'QQ_IMAP_TIMEOUT': 'int', 'OUTLOOK_FETCH_MODE': 'str', 'CLOUDFLARE_API_BASE': 'str', 'CLOUDFLARE_API_KEY': 'str', 'CLOUDFLARE_AUTH_MODE': 'str', 'CLOUDFLARE_CUSTOM_AUTH': 'str', 'CLOUDFLARE_PATH_DOMAINS': 'str', 'CLOUDFLARE_PATH_ACCOUNTS': 'str', 'CLOUDFLARE_PATH_TOKEN': 'str', 'CLOUDFLARE_PATH_MESSAGES': 'str', 'CLOUDFLARE_DEFAULT_DOMAINS': 'list_str_multiline', 'CLOUDFLARE_REQUEST_TIMEOUT': 'int', 'CLOUDFLARE_NAME_LENGTH': 'int', 'CLOUDFLARE_RANDOM_SUBDOMAIN_ENABLED': 'bool', 'CLOUDFLARE_RANDOM_SUBDOMAIN_LENGTH': 'int', 'CLOUDFLARE_RANDOM_SUBDOMAIN_SUFFIX': 'str'})

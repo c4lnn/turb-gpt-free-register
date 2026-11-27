@@ -61,6 +61,21 @@ OPENAI_PREFLIGHT_TIMEOUT = 12.0
 OPENAI_REGISTRATION_WARMUP_ATTEMPTS = 20
 OPENAI_REGISTRATION_WARMUP_TIMEOUT = 40.0
 
+# 正式 CSRF（GET /api/auth/csrf）收到 403 时的同会话重试。
+# 总尝试次数含首次；间隔依次为 base、base*2……（默认 5s、10s）。
+OPENAI_CSRF_403_RETRY_MAX_ATTEMPTS = 3
+OPENAI_CSRF_403_RETRY_BASE_DELAY = 5.0
+
+# 传输层（WreqSession）链路瞬断的同会话重试：连接建立失败、超时、代理连接失败。
+# 重试次数不含首次；间隔依次为 base、base*2（默认 1.5s、3s）。设为 0 即关闭重试。
+WREQ_TRANSIENT_RETRY_MAX_ATTEMPTS = 2
+WREQ_TRANSIENT_RETRY_BASE_DELAY = 1.5
+
+# 整轮重试：账号创建之前因网络类失败终止时，换出口、用同一邮箱重新开始一轮。
+# 总轮数含首轮；第 N 轮失败后等待 base*N。设为 1 即关闭整轮重试。
+OPENAI_REGISTRATION_ROUND_MAX_ATTEMPTS = 3
+OPENAI_REGISTRATION_ROUND_RETRY_DELAY = 5.0
+
 
 apply_env_overrides(globals(), {
     "OPENAI_PROXY_RETRY_MAX_ATTEMPTS": "int",
@@ -68,4 +83,10 @@ apply_env_overrides(globals(), {
     "OPENAI_PREFLIGHT_TIMEOUT": "float",
     "OPENAI_REGISTRATION_WARMUP_ATTEMPTS": "int",
     "OPENAI_REGISTRATION_WARMUP_TIMEOUT": "float",
+    "OPENAI_CSRF_403_RETRY_MAX_ATTEMPTS": "int",
+    "OPENAI_CSRF_403_RETRY_BASE_DELAY": "float",
+    "WREQ_TRANSIENT_RETRY_MAX_ATTEMPTS": "int",
+    "WREQ_TRANSIENT_RETRY_BASE_DELAY": "float",
+    "OPENAI_REGISTRATION_ROUND_MAX_ATTEMPTS": "int",
+    "OPENAI_REGISTRATION_ROUND_RETRY_DELAY": "float",
 })

@@ -284,3 +284,38 @@ def release_email_if_unconsumed(email: str, note: str | None = None) -> bool:
     if changed:
         logger.info("[EmailProvider] 已回收未消耗邮箱: source=%s, email=%s", source, email)
     return changed
+
+
+def settle_email_on_failure(
+    email: str,
+    *,
+    reusable: bool,
+    note: str | None = None,
+) -> bool:
+    """注册失败后按失败类别决定邮箱去向。
+
+    持久化池的邮箱交给 ``db.settle_failed_registration_email``：``reusable=True``（网络类失败）
+    回池或在上限处标 failed，``reusable=False`` 标 failed。
+    临时邮箱（cloudflare / remail）没有池行，沿用 ``release_email_if_unconsumed`` 的清理分支，
+    ``reusable`` 对它无意义。
+
+    是否持久化池的判断与 ``registration_flow._prepare_persisted_email_registration`` 一致：
+    逐个查四个池。不用 ``resolve_email_source``，它查不到池行时会兜底返回第一个配置的来源，
+    手动输入、未入池的地址会被误判为持久化池。
+
+    返回是否完成了处理。
+    """
+    target = str(email or "").strip()
+    if not target:
+        return False
+    from core.infra import db
+
+    for getter in (
+        db.get_outlook_by_email,
+        db.get_generic_api_email_by_email,
+        db.get_domain_email_by_email,
+        db.get_icloud_email_by_email,
+    ):
+        if getter(target) is not None:
+            return db.settle_failed_registration_email(target, reusable=reusable, note=note)
+    return release_email_if_unconsumed(target, note=note)

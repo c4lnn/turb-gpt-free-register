@@ -141,6 +141,7 @@ class AccountFilterTests(unittest.TestCase):
                 stack.enter_context(patch.object(web_app.db, "_render_static_viewer"))
                 for name, value in (
                     ("validate_runtime_storage", None),
+                    ("recover_interrupted_registration_jobs", 0),
                     ("migrate_email_pool_statuses", {}),
                     ("migrate_account_status_contracts", {}),
                     ("recover_interrupted_codex_operations", 0),

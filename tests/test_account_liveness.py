@@ -9,6 +9,8 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlparse
 
+import requests
+
 from config.browser import build_browser_environment
 from core.openai.transport.session import BrowserSession
 
@@ -60,6 +62,14 @@ class _DummyBrowserSession:
         self.blocked_reason = ""
 
 
+def _http_error(status):
+    """按真实形态构造 HTTP 错误：raise_for_status() 抛出的异常带 response.status_code。"""
+    response = requests.Response()
+    response.status_code = status
+    response.url = "https://chatgpt.com/api/auth/"
+    return requests.HTTPError(f"{status} Server Error for url", response=response)
+
+
 class AccountLivenessTests(unittest.TestCase):
     def setUp(self):
         plan_patch = patch("core.openai.commerce.chatgpt_plan.check_account_plan", return_value={"ok": True, "current_plan_type": "plus"})
@@ -87,23 +97,65 @@ class AccountLivenessTests(unittest.TestCase):
         self.assertEqual(authorize_url, "https://auth.example/authorize")
         self.assertIsNone(session.kwargs["fingerprint_seed"])
 
-    def test_preflight_retries_with_same_session_when_csrf_is_blocked(self):
-        csrf_errors = [RuntimeError("HTTP Error 403"), "csrf"]
+    def test_preflight_stops_without_outer_retry_when_formal_csrf_is_403(self):
+        # 正式 CSRF 的 403 已在 get_csrf_token 内部同会话重试并耗尽，外层不再重复。
         with patch.object(liveness, "BrowserSession", _DummyBrowserSession), \
              patch.object(liveness, "_warm_login_fingerprint_context"), \
              patch.object(liveness, "probe_auth_session"), \
-             patch.object(liveness, "get_csrf_token", side_effect=csrf_errors), \
-             patch.object(liveness, "signin_openai", return_value="authorize"), \
-             patch.object(liveness.time, "sleep"):
-            session, _ = liveness._network_preflight_with_retry(
-                "user@example.com", None, max_attempts=2
+             patch.object(liveness, "get_csrf_token", side_effect=_http_error(403)) as csrf, \
+             patch.object(liveness, "signin_openai", return_value="authorize") as signin, \
+             patch.object(liveness.time, "sleep") as sleep:
+            with self.assertRaises(Exception) as raised:
+                liveness._network_preflight_with_retry(
+                    "user@example.com", None, max_attempts=4
+                )
+
+        self.assertIs(raised.exception, csrf.side_effect)
+        self.assertEqual(csrf.call_count, 1)
+        signin.assert_not_called()
+        sleep.assert_not_called()
+        self.assertEqual(len(_DummyBrowserSession.created), 1)
+        self.assertTrue(_DummyBrowserSession.created[0].session.closed)
+
+    def test_preflight_keeps_outer_retry_when_signin_is_403(self):
+        # signin 的 403 没有内层重试，查活链外层仍按原规则重试。
+        with patch.object(liveness, "BrowserSession", _DummyBrowserSession), \
+             patch.object(liveness, "_warm_login_fingerprint_context"), \
+             patch.object(liveness, "probe_auth_session"), \
+             patch.object(liveness, "get_csrf_token", return_value="csrf") as csrf, \
+             patch.object(
+                 liveness, "signin_openai",
+                 side_effect=[_http_error(403), "https://auth.example/authorize"],
+             ) as signin, \
+             patch.object(liveness.time, "sleep") as sleep:
+            session, authorize_url = liveness._network_preflight_with_retry(
+                "user@example.com", None, max_attempts=4
             )
 
-        self.assertIs(_DummyBrowserSession.created[-1], session)
-        # 403 下发的 CF Cookie 必须留在同一 Cookie Jar 中，不能每轮新建会话。
+        self.assertEqual(authorize_url, "https://auth.example/authorize")
+        self.assertEqual(csrf.call_count, 2)
+        self.assertEqual(signin.call_count, 2)
+        self.assertEqual(sleep.call_count, 1)
         self.assertEqual(len(_DummyBrowserSession.created), 1)
-        self.assertFalse(_DummyBrowserSession.created[0].session.closed)
-        self.assertIsNone(_DummyBrowserSession.created[0].received_proxy)
+        self.assertFalse(session.session.closed)
+
+    def test_preflight_keeps_outer_retry_when_formal_csrf_hits_proxy_error(self):
+        # 403 以外的失败（代理 / 超时 / 连接）外层仍按原规则重试。
+        proxy_errors = [requests.exceptions.ProxyError("proxy connect failed"), "csrf"]
+        with patch.object(liveness, "BrowserSession", _DummyBrowserSession), \
+             patch.object(liveness, "_warm_login_fingerprint_context"), \
+             patch.object(liveness, "probe_auth_session"), \
+             patch.object(liveness, "get_csrf_token", side_effect=proxy_errors) as csrf, \
+             patch.object(liveness, "signin_openai", return_value="authorize"), \
+             patch.object(liveness.time, "sleep") as sleep:
+            session, _ = liveness._network_preflight_with_retry(
+                "user@example.com", None, max_attempts=4
+            )
+
+        self.assertEqual(csrf.call_count, 2)
+        self.assertEqual(sleep.call_count, 1)
+        self.assertEqual(len(_DummyBrowserSession.created), 1)
+        self.assertFalse(session.session.closed)
 
     def test_callback_403_retries_in_same_session_before_fetching_token(self):
         session = _DummyBrowserSession(proxy="proxy")

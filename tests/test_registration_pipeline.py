@@ -7,7 +7,8 @@ import unittest
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import call, patch
+import requests
 
 from core.openai.codex import codex_oauth
 from core.openai.auth import chatgpt_auth, openai_auth
@@ -65,10 +66,15 @@ class RegistrationPipelineTests(unittest.TestCase):
         session = _Session()
         observed = {
             "created": False, "saved": False, "flows": [],
+            # 按注入顺序抛错的 Sentinel flow：{flow: [异常, ...]}，用完即空。
+            "sentinel_failures": {},
         }
 
         def request_sentinel(_session, flow):
             observed["flows"].append(flow)
+            pending = observed["sentinel_failures"].get(flow)
+            if pending:
+                raise pending.pop(0)
             return {
                 "token": "challenge", "_sentinel_flow": flow,
                 "_sentinel_device_id": session.device_id,
@@ -120,7 +126,7 @@ class RegistrationPipelineTests(unittest.TestCase):
                     "account": {"planType": "free"}, "expires": "2030-01-01T00:00:00Z",
                 }, "test-access"),
                 "get_mfa_enabled": False,
-                "release_email_if_unconsumed": False,
+                "settle_email_on_failure": False,
             }.items():
                 stack.enter_context(patch.object(registration, name, return_value=value))
             stack.enter_context(patch.object(registration, "register_user", side_effect=register_user))
@@ -130,6 +136,8 @@ class RegistrationPipelineTests(unittest.TestCase):
             stack.enter_context(patch.object(registration, "create_account", side_effect=create_account))
             stack.enter_context(patch.object(registration, "save_account_data", side_effect=save_account))
             stack.enter_context(patch.object(registration._twofa_cfg, "ENABLE_2FA", False))
+            # 整轮重试的轮间等待不在用例里真等；需要断言等待参数的用例自己再 patch 一次取 Mock。
+            stack.enter_context(patch.object(registration, "interruptible_sleep", return_value=None))
             stack.enter_context(patch.multiple(
                 registration._protocol_cfg, CHATGPT_ANON_BOOTSTRAP_ENABLED=False,
                 CHATGPT_AUTH_BOOTSTRAP_ENABLED=False, SEND_SENTINEL_ON_EMAIL_OTP_VALIDATE=False,
@@ -139,6 +147,106 @@ class RegistrationPipelineTests(unittest.TestCase):
             stack.enter_context(patch.object(email_provider, "resolve_email_source", return_value="manual"))
             yield session, observed
 
+    @contextmanager
+    def _rounds(self, proxies=("socks5h://exit-a:1", "socks5h://exit-b:2"), otp_result=None,
+                sentinel_failures=None):
+        """在 _pipeline 之上让每轮真正新建会话，并控制每轮抽到的出口。
+
+        _pipeline 把 BrowserSession 换成固定对象；这里再换成工厂，每次构造返回新的 _Session，
+        出口仍由真实的 config.proxy.pick_proxy() 抽取，只把 random.choice 换成按轮次取值。
+        ``sentinel_failures`` 形如 {flow: [异常, ...]}：指定 flow 的 Sentinel 采集按顺序抛出这些异常，
+        用完后恢复为成功；proof 的其余字段仍由 _pipeline 的桩按合法格式生成。
+        """
+        from config import proxy as proxy_config
+
+        created = []
+        # OTP 验证后直接进回调才会成功；需要走到回调之后才失败的用例自行传入。
+        if otp_result is None:
+            otp_result = {"continue_url": "https://chatgpt.com/api/auth/callback/openai"}
+        sentinel_failures = {flow: list(errors) for flow, errors in (sentinel_failures or {}).items()}
+
+        def build_session(proxy=None, **kwargs):
+            # proxy=None 表示调用方没有指定出口，由 pick_proxy 从代理池抽；与真实构造函数一致。
+            chosen = proxy_config.pick_proxy() if proxy is None else proxy
+            session = _Session()
+            session.proxy = chosen
+            created.append(session)
+            return session
+
+        with self._pipeline(otp_result) as (_, observed), \
+                patch.object(proxy_config, "PROXY_POOL", list(proxies)), \
+                patch.object(proxy_config.random, "choice",
+                             side_effect=lambda pool: pool[len(created) % len(pool)]), \
+                patch.object(registration, "BrowserSession", side_effect=build_session) as constructor, \
+                patch.object(registration, "interruptible_sleep") as sleep:
+            observed["sentinel_failures"].update(sentinel_failures)
+            yield SimpleNamespace(created=created, constructor=constructor, sleep=sleep,
+                                  flows=observed["flows"])
+
+    def test_round_retry_rebuilds_session_with_new_exit_and_succeeds(self):
+        # 11.4：第 1 轮正式 CSRF 因传输异常失败，第 2 轮成功。
+        with self._rounds() as rounds, patch.object(
+            registration, "get_csrf_token",
+            side_effect=[requests.ConnectionError("connection reset"), "csrf"],
+        ) as csrf:
+            result = self._run()
+
+        self.assertTrue(result["success"])
+        self.assertEqual(rounds.constructor.call_count, 2)
+        self.assertEqual([session.proxy for session in rounds.created],
+                         ["socks5h://exit-a:1", "socks5h://exit-b:2"])
+        self.assertEqual(csrf.call_count, 2)
+        # 第 1 轮失败后等「基础间隔 × 轮次」= 5.0 × 1。
+        rounds.sleep.assert_called_once_with(5.0)
+        # 成功返回的是第 2 轮的结果，不保留第 1 轮的失败类别。
+        self.assertNotIn("failure_category", result["registration"])
+        self.assertTrue(all(session.closed for session in rounds.created))
+
+    def test_round_retry_gives_up_after_max_attempts_and_releases_email_once(self):
+        # 11.4：三轮都是网络类失败，只在最后一轮处理一次邮箱。
+        with self._rounds() as rounds, patch.object(
+            registration, "get_csrf_token",
+            side_effect=requests.ConnectionError("connection reset"),
+        ), patch.object(registration, "settle_email_on_failure", return_value=True) as settle:
+            result = self._run()
+
+        self.assertFalse(result["success"])
+        self.assertEqual(rounds.constructor.call_count, 3)
+        self.assertEqual(result["failure_category"], "network")
+        self.assertEqual(settle.call_count, 1)
+        settle.assert_called_once()
+        self.assertEqual(settle.call_args.kwargs["reusable"], True)
+        self.assertEqual(rounds.sleep.call_count, 2)
+        self.assertEqual([call.args[0] for call in rounds.sleep.call_args_list], [5.0, 10.0])
+
+    def test_round_retry_stops_when_later_round_fails_with_unknown_category(self):
+        # 11.4：第 1 轮网络类、第 2 轮是不带 cf-mitigated 的 403，不再重试。
+        plain_forbidden = requests.HTTPError("403 Client Error: Forbidden for url: https://chatgpt.com/api/auth/csrf")
+        with self._rounds() as rounds, patch.object(
+            registration, "get_csrf_token",
+            side_effect=[requests.ConnectionError("connection reset"), plain_forbidden],
+        ), patch.object(registration, "settle_email_on_failure", return_value=True) as settle:
+            result = self._run()
+
+        self.assertFalse(result["success"])
+        self.assertEqual(rounds.constructor.call_count, 2)
+        self.assertEqual(result["failure_category"], "unknown")
+        self.assertFalse(result["retryable_round"])
+        settle.assert_called_once()
+        self.assertEqual(settle.call_args.kwargs["reusable"], False)
+
+    def test_round_retry_keeps_same_exit_when_pool_has_one_candidate(self):
+        # 11.4：代理池只有一个候选时，重试照常进行，出口不变。
+        with self._rounds(proxies=("socks5h://only-exit:1",)) as rounds, patch.object(
+            registration, "get_csrf_token",
+            side_effect=[requests.ConnectionError("connection reset"), "csrf"],
+        ):
+            result = self._run()
+
+        self.assertTrue(result["success"])
+        self.assertEqual(rounds.constructor.call_count, 2)
+        self.assertEqual([session.proxy for session in rounds.created],
+                         ["socks5h://only-exit:1", "socks5h://only-exit:1"])
 
     def test_registration_business_requests_use_profile_hints_through_session(self):
         expected = {
@@ -327,7 +435,7 @@ class RegistrationPipelineTests(unittest.TestCase):
 
         with patch.object(registration, "_prepare_persisted_email_registration", return_value=False), patch.object(
             registration, "BrowserSession", side_effect=InitializationFailure("地域信息不完整")
-        ), patch.object(registration, "release_email_if_unconsumed", return_value=False), patch.object(
+        ), patch.object(registration, "settle_email_on_failure", return_value=False), patch.object(
             registration, "signin_openai", side_effect=AssertionError("must not authenticate")
         ):
             result = registration.run_registration("user@example.com", "Test User", "1995-01-01")
@@ -348,14 +456,17 @@ class RegistrationPipelineTests(unittest.TestCase):
 
         self.assertFalse(result["success"])
         self.assertEqual(result["error_code"], "sentinel_network_failed")
+        self.assertEqual(probe.call_count, registration._protocol_cfg.OPENAI_REGISTRATION_ROUND_MAX_ATTEMPTS)
+        # 探测阶段的 Sentinel 失败发生在 user/register 之前，按 D12 每轮都重来；三轮都不猜账号类型。
+        probe.assert_called_with(
+            session, "user@example.com",
+            referer="https://auth.openai.com/", screen_hint="signup", include_high_entropy=True,
+        )
+        self.assertEqual(result["failure_category"], "network")
         self.assertEqual(result["error_stage"], "sentinel_challenge")
         self.assertEqual(result["registration"]["account_kind"], "unknown")
         self.assertEqual(observed["flows"], [])
         self.assertFalse(observed["saved"])
-        probe.assert_called_once_with(
-            session, "user@example.com",
-            referer="https://auth.openai.com/", screen_hint="signup", include_high_entropy=True,
-        )
         self.assertTrue(session.closed)
 
     def test_email_otp_sentinel_failure_stops_before_validation(self):
@@ -608,7 +719,7 @@ class RegistrationPipelineTests(unittest.TestCase):
                 patch.object(registration, "verify_login_password", side_effect=error) as verify, \
                 patch.object(registration, "request_login_otp") as otp, \
                 patch.object(registration, "_finalize_registration_session") as callback, \
-                patch.object(registration, "release_email_if_unconsumed") as release:
+                patch.object(registration, "settle_email_on_failure") as release:
             result = self._run()
 
         self.assertFalse(result["success"])
@@ -638,7 +749,7 @@ class RegistrationPipelineTests(unittest.TestCase):
                 patch.object(registration, "verify_login_totp", side_effect=error) as verify, \
                 patch.object(registration, "request_login_otp") as otp, \
                 patch.object(registration, "_finalize_registration_session") as callback, \
-                patch.object(registration, "release_email_if_unconsumed") as release:
+                patch.object(registration, "settle_email_on_failure") as release:
             result = self._run()
 
         self.assertFalse(result["success"])
@@ -673,7 +784,7 @@ class RegistrationPipelineTests(unittest.TestCase):
                 patch.object(registration, "verify_login_password", return_value={
                     "page": {"type": "about_you"}, "continue_url": "/about-you"}), \
                 patch.object(registration, "create_account") as create, \
-                patch.object(registration, "release_email_if_unconsumed") as release:
+                patch.object(registration, "settle_email_on_failure") as release:
             result = self._run()
         self.assertEqual(result["error_code"], "existing_profile_unexpected")
         self.assertEqual(db.get_account_by_email("user@example.com")["access_token"], "old-token")
@@ -755,8 +866,10 @@ class RegistrationPipelineTests(unittest.TestCase):
                         patch.object(registration, "wait_for_otp", return_value="123456"), \
                         patch.object(registration._email_cfg, "USE_EMAIL_SERVICE", True), \
                         patch.object(registration, "validate_email_otp", side_effect=fail_login), \
-                        patch.object(registration, "release_email_if_unconsumed",
-                            wraps=email_provider.release_email_if_unconsumed):
+                        patch.object(registration, "settle_email_on_failure",
+                            wraps=email_provider.settle_email_on_failure) as settle_in_flow, \
+                        patch.object(email_provider, "settle_email_on_failure",
+                            wraps=email_provider.settle_email_on_failure) as settle_in_provider:
                     if outcome == "exception":
                         with patch.object(registration_service, "run_registration", side_effect=raise_after_classification):
                             registration_service._run_one_job(job["id"], str(self.root / f"{outcome}.log"))
@@ -767,6 +880,10 @@ class RegistrationPipelineTests(unittest.TestCase):
                 self.assertEqual(stored_job["registration"]["account_kind"], "existing")
                 self.assertEqual(db.get_outlook_by_email(address)["status"], "registering")
                 self.assertIsNone(db.get_account_by_email(address))
+                # 两处都未调用：registration_flow 是单轮内部的收口，email_provider 是任务层
+                # _release_unconsumed_job_email 实际导入的那一个。
+                settle_in_flow.assert_not_called()
+                settle_in_provider.assert_not_called()
 
     def test_passwordless_rejection_can_finish_without_saving_candidate(self):
         rejection = registration.PasswordRegistrationRejectedError("password setting rejected", {
@@ -1002,6 +1119,445 @@ class RegistrationPipelineTests(unittest.TestCase):
         self.assertFalse(db.get_account_credentials("user@example.com")["complete"])
         send.assert_not_called()
         self.assertTrue(session.closed)
+
+    # ---- 整轮重试的边界（D12）：哪些失败不重试，邮箱各怎么处理 ----
+
+    def _assert_no_retry(self, rounds, settle, category, reusable, constructed=1):
+        self.assertFalse(self.result["success"])
+        self.assertEqual(rounds.constructor.call_count, constructed)
+        self.assertEqual(rounds.sleep.call_count, 0)
+        self.assertEqual(self.result["failure_category"], category)
+        self.assertFalse(self.result["retryable_round"])
+        settle.assert_called_once()
+        self.assertEqual(settle.call_args.kwargs["reusable"], reusable)
+
+    def test_no_round_retry_after_register_user_transport_failure(self):
+        # 11.5：user/register 已发出、结果未知（password_state == submission_unknown），不能重来。
+        with self._rounds() as rounds, patch.object(
+            registration, "register_user",
+            side_effect=requests.ConnectionError("connection reset"),
+        ), patch.object(registration, "settle_email_on_failure", return_value=True) as settle:
+            self.result = self._run()
+        self._assert_no_retry(rounds, settle, "network", True)
+        self.assertEqual(self.result["registration"]["password_state"], "submission_unknown")
+
+    def test_no_round_retry_after_register_user_plain_http_error(self):
+        # 11.5：同一位置的 HTTPError 不带 cf-mitigated，类别 unknown。
+        with self._rounds() as rounds, patch.object(
+            registration, "register_user",
+            side_effect=requests.HTTPError("500 Server Error for url: https://auth.openai.com/api/accounts/user/register"),
+        ), patch.object(registration, "settle_email_on_failure", return_value=True) as settle:
+            self.result = self._run()
+        self._assert_no_retry(rounds, settle, "unknown", False)
+        self.assertEqual(self.result["registration"]["password_state"], "submission_unknown")
+
+    def test_no_round_retry_for_existing_account_network_failure(self):
+        # 11.5：已有账号登录失败只影响任务，邮箱不动。
+        # 本地存有登录密码才会走 verify_login_password；没有密码会改走 OTP，量不到这里要的失败。
+        db.insert_account(email="user@example.com", access_token="old-token",
+            extra={"registration_password": "stored-password"})
+        with self._rounds() as rounds, patch.object(
+            registration, "get_registration_state",
+            return_value={"kind": "existing", "step": "password",
+                "page": {"type": "login_password"},
+                "continue_url": "https://auth.openai.com/log-in/password"},
+        ), patch.object(
+            registration, "verify_login_password",
+            side_effect=requests.ConnectionError("connection reset"),
+        ) as verify, patch.object(
+            registration, "settle_email_on_failure", return_value=True,
+        ) as settle:
+            self.result = self._run()
+        self.assertFalse(self.result["success"])
+        verify.assert_called_once()
+        self.assertEqual(rounds.constructor.call_count, 1)
+        self.assertEqual(rounds.sleep.call_count, 0)
+        self.assertEqual(self.result["failure_category"], "network")
+        self.assertEqual(self.result["registration"]["account_kind"], "existing")
+        self.assertFalse(self.result["retryable_round"])
+        settle.assert_not_called()
+
+    def test_no_round_retry_for_registration_failure(self):
+        # 11.5：_RegistrationFailure 是流程自己判定的终止，类别 unknown。
+        with self._rounds() as rounds, patch.object(
+            registration, "get_registration_state",
+            return_value={"kind": "conflicting", "step": "password"},
+        ), patch.object(registration, "settle_email_on_failure", return_value=True) as settle:
+            self.result = self._run()
+        self._assert_no_retry(rounds, settle, "unknown", False)
+        self.assertEqual(self.result["error_code"], "account_state_unknown")
+
+    def test_no_round_retry_when_user_stops_inside_round(self):
+        # 11.5：StopRequested 落进同一个 except，分类得 unknown，邮箱按失败处理。
+        with self._rounds() as rounds, patch.object(
+            registration, "get_csrf_token", side_effect=job_context.StopRequested("stopped by user"),
+        ), patch.object(registration, "settle_email_on_failure", return_value=True) as settle:
+            self.result = self._run()
+        self._assert_no_retry(rounds, settle, "unknown", False)
+
+    def test_cf_challenge_403_retries_in_session_before_switching_round(self):
+        # 11.6：正式 CSRF 的同会话重试先于换轮。第 1 轮 3 次都是 CF 403，第 2 轮成功。
+        challenge = requests.Response()
+        challenge.status_code = 403
+        challenge.headers["cf-mitigated"] = "challenge"
+        challenge._content = b""
+        challenge.url = "https://chatgpt.com/api/auth/csrf"
+        ok = requests.Response()
+        ok.status_code = 200
+        ok._content = json.dumps({"csrfToken": "csrf"}).encode("utf-8")
+        ok.url = "https://chatgpt.com/api/auth/csrf"
+        responses = [challenge, challenge, challenge, ok]
+        gets = []
+
+        class CountingSession(_Session):
+            def get(self, url, **kwargs):
+                gets.append(self)
+                return responses[len(gets) - 1]
+
+        with self._rounds() as rounds, patch.object(
+            registration, "BrowserSession", side_effect=lambda **kwargs: CountingSession(),
+        ) as constructor, patch.object(
+            registration, "get_csrf_token", chatgpt_auth.get_csrf_token,
+        ), patch.object(job_context, "interruptible_sleep") as csrf_sleep:
+            self.result = self._run()
+
+        self.assertTrue(self.result["success"])
+        self.assertEqual(constructor.call_count, 2)
+        # 第 1 轮 3 次（同会话重试耗尽）+ 第 2 轮 1 次。
+        self.assertEqual(len(gets), 4)
+        self.assertEqual(len({id(session) for session in gets[:3]}), 1, "第 1 轮的三次请求应在同一会话内")
+        self.assertIsNot(gets[0], gets[3], "第 2 轮应使用新会话")
+        csrf_sleep.assert_has_calls([call(5.0), call(10.0)])
+        rounds.sleep.assert_called_once_with(5.0)
+
+    def test_sentinel_failure_before_register_user_retries_whole_round(self):
+        # 11.6：username_password_create 的 Sentinel 失败发生在 user/register 之前，换出口重来。
+        from core.openai.auth.openai_auth import SentinelRequestError
+
+        failure = SentinelRequestError("Sentinel challenge 请求失败（Timeout，HTTP=None）", "sentinel_network_failed")
+        with self._rounds(sentinel_failures={"username_password_create": [failure]}) as rounds:
+            self.result = self._run()
+        self.assertTrue(self.result["success"])
+        self.assertEqual(rounds.constructor.call_count, 2)
+        self.assertEqual(rounds.flows, ["username_password_create", "username_password_create"])
+        self.assertNotIn("failure_category", self.result["registration"])
+
+    def test_sentinel_failure_after_register_user_does_not_retry_round(self):
+        # 11.6：oauth_create_account 在 user/register 成功之后，不重试，邮箱回池。
+        from core.openai.auth.openai_auth import SentinelRequestError
+
+        failure = SentinelRequestError("Sentinel challenge 请求失败（Timeout，HTTP=None）", "sentinel_network_failed")
+        with self._rounds(
+            sentinel_failures={"oauth_create_account": [failure]},
+            # OTP 验证后进入资料页，才会走到 oauth_create_account 的 Sentinel 采集。
+            otp_result={"page": {"type": "about_you"}, "continue_url": "https://auth.openai.com/about-you"},
+        ) as rounds, patch.object(
+            registration, "settle_email_on_failure", return_value=True,
+        ) as settle:
+            self.result = self._run()
+        self._assert_no_retry(rounds, settle, "network", True)
+        self.assertEqual(rounds.flows, ["username_password_create", "oauth_create_account"])
+        self.assertEqual(self.result["registration"]["password_state"], "confirmed")
+        self.assertEqual(self.result["registration"]["credential_persistence"], "saved")
+
+    def test_email_otp_sentinel_failure_propagates_without_otp_retry(self):
+        # 11.7：OTP 验证阶段的 Sentinel 失败直接抛出，不被循环内的 EmailOtpInvalidError 重试吞掉。
+        from core.openai.auth.openai_auth import SentinelRequestError
+
+        failure = SentinelRequestError("Sentinel challenge 请求失败（Timeout，HTTP=None）", "sentinel_network_failed")
+        with self._rounds(
+            sentinel_failures={"email_otp_validate": [failure]},
+            otp_result={"continue_url": "https://chatgpt.com/api/auth/callback/openai"},
+        ) as rounds, patch.object(
+            registration._protocol_cfg, "SEND_SENTINEL_ON_EMAIL_OTP_VALIDATE", True,
+        ), patch.object(registration, "validate_email_otp") as validate, patch.object(
+            registration, "request_login_otp",
+        ) as resend, patch.object(registration, "settle_email_on_failure", return_value=True) as settle:
+            self.result = self._run()
+        self._assert_no_retry(rounds, settle, "network", True)
+        self.assertEqual(rounds.flows[-1], "email_otp_validate")
+        self.assertEqual(self.result["registration"]["auth_step"], "otp")
+        self.assertEqual(self.result["error_code"], "sentinel_network_failed")
+        validate.assert_not_called()
+        resend.assert_not_called()
+
+    def test_email_otp_invalid_code_still_retries_after_resend(self):
+        # 11.7 对照：现有的 OTP 重发重试不受整轮重试改动的影响。
+        from core.openai.auth.openai_auth import EmailOtpInvalidError
+
+        with self._rounds() as rounds, patch.object(
+            registration, "validate_email_otp",
+            side_effect=[EmailOtpInvalidError("invalid code"),
+                         {"continue_url": "https://chatgpt.com/api/auth/callback/openai"}],
+        ) as validate, patch.object(
+            registration, "request_login_otp", return_value={"continue_url": "/api/accounts/email-otp/validate"},
+        ) as resend, patch.object(
+            registration, "wait_for_otp", return_value="654321",
+        ) as wait, patch.object(registration, "settle_email_on_failure") as settle:
+            self.result = self._run()
+        self.assertTrue(self.result["success"])
+        self.assertEqual(rounds.constructor.call_count, 1)
+        self.assertEqual(validate.call_count, 2)
+        self.assertEqual(resend.call_count, 1)
+        # 重发之后取的是新验证码，不是入参带进来的旧验证码。
+        self.assertEqual(validate.call_args_list[1].args[1], "654321")
+        wait.assert_called_once()
+        settle.assert_not_called()
+
+    def test_no_round_retry_for_transport_failure_after_register_user_succeeds(self):
+        # 11.8：user/register 成功返回之后的传输异常，与「请求已发出结果未知」是不同状态。
+        with self._rounds() as rounds, patch.object(
+            registration, "navigate_email_otp_send",
+            side_effect=requests.ConnectionError("connection reset"),
+        ), patch.object(registration, "settle_email_on_failure", return_value=True) as settle:
+            self.result = self._run()
+        self._assert_no_retry(rounds, settle, "network", True)
+        self.assertEqual(self.result["registration"]["password_state"], "confirmed")
+        self.assertEqual(self.result["registration"]["credential_persistence"], "saved")
+
+    def test_stop_during_round_wait_returns_previous_round_without_new_round(self):
+        # 11.3：轮次之间被停止时不开始新的一轮，把上一轮的结果交给调用方；邮箱未被处理。
+        with self._rounds() as rounds, patch.object(
+            registration, "get_csrf_token", side_effect=requests.ConnectionError("connection reset"),
+        ), patch.object(registration, "settle_email_on_failure") as settle:
+            rounds.sleep.side_effect = job_context.StopRequested("stopped between rounds")
+            self.result = self._run()
+        self.assertFalse(self.result["success"])
+        self.assertEqual(rounds.constructor.call_count, 1)
+        self.assertEqual(self.result["failure_category"], "network")
+        self.assertTrue(self.result["retryable_round"])
+        settle.assert_not_called()
+
+    def test_stop_before_next_round_returns_previous_round_without_new_round(self):
+        # 11.3：等待结束后、下一轮开始前发现停止请求，同样不开始新的一轮。
+        with self._rounds() as rounds, patch.object(
+            registration, "get_csrf_token", side_effect=requests.ConnectionError("connection reset"),
+        ), patch.object(registration, "settle_email_on_failure") as settle, patch.object(
+            registration, "check_stop_requested",
+            side_effect=job_context.StopRequested("stopped before next round"),
+        ) as check:
+            self.result = self._run()
+        self.assertFalse(self.result["success"])
+        self.assertEqual(rounds.constructor.call_count, 1)
+        self.assertEqual(check.call_count, 1)
+        settle.assert_not_called()
+
+    # ---- 任务层收口（12.1b / 12.6 / 12.7）：_run_one_job 与停止路径对真实池行的处理 ----
+
+    def _claimed_job(self, address):
+        """把 address 导入空池，建任务并用它的 id 领取：池行为 registering 且归属该任务。"""
+        db._save_outlook([])
+        db.import_outlook_accounts([{
+            "email": address, "password": "pw", "client_id": "client", "refresh_token": "refresh",
+        }])
+        job = db.create_job(email_source="outlook", email=address)
+        db.claim_next_outlook(job_id=job["id"])
+        row = db.get_outlook_by_email(address)
+        self.assertEqual(row["status"], "registering", "构造前提：邮箱应已被该任务领取")
+        self.assertEqual(row["registration_job_id"], job["id"], "构造前提：池行应归属该任务")
+        self.assertEqual(row["network_release_count"], 0, "构造前提：新领取的邮箱尚未回池过")
+        return job
+
+    def _assert_email_failed_without_release(self, address):
+        """池行被标 failed，且回池计数仍为 0（停止路径不回池、不计次）。"""
+        row = db.get_outlook_by_email(address)
+        self.assertEqual(row["status"], "failed")
+        self.assertEqual(row["network_release_count"], 0)
+
+    def _run_one_job(self, job_id, label):
+        # _prepare_registration_args 在手动模式下要求配置邮箱；这里只关心任务行上的邮箱。
+        with patch.object(registration._email_cfg, "USE_EMAIL_SERVICE", True), \
+                patch.object(registration_service, "_prepare_registration_args",
+                             return_value=(None, "Test User", "1995-01-01")):
+            registration_service._run_one_job(job_id, str(self.root / f"{label}.log"))
+
+    def test_stop_request_without_running_instance_fails_claimed_email_without_counting(self):
+        # 12.1b：任务行 running 但没有线程实例（服务重启、线程异常退出）时，停止直接落 stopped，
+        # 并把它领取的邮箱标 failed。计数字段区分 reusable 的两种传法：传 True 时行会回池并计数。
+        address = "stop-no-instance@example.com"
+        job = self._claimed_job(address)
+        db.update_job(job["id"], status="running")
+        result = registration_service.request_stop_job(job["id"])
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["state"], "stopped")
+        stored = db.get_job(job["id"])
+        self.assertEqual(stored["status"], "stopped")
+        self.assertIn("任务实例不存在", stored["error_message"])
+        self._assert_email_failed_without_release(address)
+
+    def test_stop_request_without_instance_ignores_email_released_by_last_round(self):
+        # 最后一轮已回池的邮箱不会被停止路径改成 failed：settle 只对 registering 行生效。
+        address = "stop-released@example.com"
+        job = self._claimed_job(address)
+        self.assertTrue(db.settle_failed_registration_email(address, reusable=True))
+        db.update_job(job["id"], status="running")
+        self.assertTrue(registration_service.request_stop_job(job["id"])["ok"])
+        row = db.get_outlook_by_email(address)
+        self.assertEqual(row["status"], "available")
+        self.assertEqual(row["network_release_count"], 1)
+
+    def test_stop_request_for_partial_success_job_reports_finished_without_side_effects(self):
+        # 部分成功是终态：停止接口只回报已结束，不改任务行、不动邮箱，
+        # 也不把它当成可停止的 running/stopping。
+        address = "stop-partial@example.com"
+        job = self._claimed_job(address)
+        db.update_job(
+            job["id"], status="partial_success",
+            error="账号已保存，配置要求的 2FA 未完成",
+        )
+        result = registration_service.request_stop_job(job["id"])
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["state"], "partial_success")
+        self.assertIn("已结束", result["message"])
+        stored = db.get_job(job["id"])
+        self.assertEqual(stored["status"], "partial_success")
+        self.assertEqual(stored["error_message"], "账号已保存，配置要求的 2FA 未完成")
+        row = db.get_outlook_by_email(address)
+        self.assertEqual(row["status"], "registering")
+        self.assertEqual(row["network_release_count"], 0)
+
+    def test_retry_job_with_unusable_pool_row_fails_without_acquiring_or_registering(self):
+        # 12.6：重试子任务带着任务行上的邮箱执行，但池行已不是 registering（这里被人工停用）。
+        # 不领新邮箱、不建会话、以失败结束，错误说明指向池行状态。
+        real_prepare = registration._prepare_persisted_email_registration
+        for state, setup in (
+            ("disabled", lambda address: db.delete_outlook(address)),
+            ("failed", lambda address: db.settle_failed_registration_email(address, reusable=False)),
+        ):
+            with self.subTest(state=state):
+                db._save_outlook([])
+                address = f"retry-unusable-{state}@example.com"
+                job = self._claimed_job(address)
+                setup(address)
+                self.assertEqual(db.get_outlook_by_email(address)["status"], state)
+                with self._pipeline({}), patch.object(
+                    registration, "_prepare_persisted_email_registration", real_prepare,
+                ), patch.object(registration, "BrowserSession") as ctor, patch.object(
+                    email_provider, "acquire_email",
+                ) as acquire:
+                    self._run_one_job(job["id"], f"unusable-{state}")
+                stored = db.get_job(job["id"])
+                self.assertEqual(stored["status"], "failed")
+                self.assertIn("邮箱池条目不可用于注册", stored["error_message"])
+                self.assertIn(f"status={state}", stored["error_message"])
+                self.assertEqual(stored["failure_category"], "unknown")
+                ctor.assert_not_called()
+                acquire.assert_not_called()
+                # 不可用的行保持原样：不回池、不改计数。
+                row = db.get_outlook_by_email(address)
+                self.assertEqual(row["status"], state)
+                self.assertEqual(row["network_release_count"], 0)
+
+    def _stop_then_raise(self, job_id, exc):
+        """先置停止位再抛异常，与真实检查点一致：StopRequested 只在停止位已置时才会出现。"""
+        def raise_after_stop(*_args, **_kwargs):
+            job_context.request_stop(job_id)
+            raise exc
+
+        return raise_after_stop
+
+    def test_stop_inside_round_marks_claimed_email_failed(self):
+        # 12.7：单轮内部的检查点抛 StopRequested。run_registration 按失败处理邮箱但不回池，
+        # 任务层按 stopped 收口。
+        address = "stop-inside@example.com"
+        job = self._claimed_job(address)
+        with self._pipeline({}), patch.object(
+            registration, "get_csrf_token",
+            side_effect=self._stop_then_raise(job["id"], job_context.StopRequested("stopped by user")),
+        ):
+            self._run_one_job(job["id"], "stop-inside")
+        stored = db.get_job(job["id"])
+        self.assertEqual(stored["status"], "stopped")
+        self._assert_email_failed_without_release(address)
+
+    def test_stop_during_round_wait_marks_claimed_email_failed(self):
+        # 12.7：第 1 轮网络类失败，轮次间等待时被停止。run_registration 没处理邮箱（池行仍 registering），
+        # 由任务层的停止路径把它标 failed；结果与单轮内部停止相同。
+        address = "stop-between@example.com"
+        job = self._claimed_job(address)
+        with self._rounds() as rounds, patch.object(
+            registration, "get_csrf_token", side_effect=requests.ConnectionError("connection reset"),
+        ):
+            rounds.sleep.side_effect = self._stop_then_raise(
+                job["id"], job_context.StopRequested("stopped between rounds"),
+            )
+            self._run_one_job(job["id"], "stop-between")
+        self.assertEqual(rounds.constructor.call_count, 1)
+        stored = db.get_job(job["id"])
+        self.assertEqual(stored["status"], "stopped")
+        self._assert_email_failed_without_release(address)
+
+    def test_transport_error_while_stop_requested_is_treated_as_stop(self):
+        # 12.7：停止位已置期间撞上网络类异常。停止检查先于邮箱处理，邮箱不回池、不计入回池次数。
+        address = "stop-during-error@example.com"
+        job = self._claimed_job(address)
+
+        def stop_then_fail(*_args, **_kwargs):
+            job_context.request_stop(job["id"])
+            raise requests.ConnectionError("connection reset")
+
+        with patch.object(registration_service, "run_registration", side_effect=stop_then_fail), \
+                patch.object(email_provider, "settle_email_on_failure",
+                             wraps=email_provider.settle_email_on_failure) as settle:
+            self._run_one_job(job["id"], "stop-during-error")
+        stored = db.get_job(job["id"])
+        self.assertEqual(stored["status"], "stopped")
+        self.assertIsNone(stored["failure_category"], "停止路径不分类，不写失败类别")
+        self._assert_email_failed_without_release(address)
+        settle.assert_called_once()
+        self.assertFalse(settle.call_args.kwargs["reusable"])
+
+    def test_partial_success_when_account_saved_but_2fa_not_completed(self):
+        # 账号已保存、配置要求 2FA 但设置未完成：任务记 partial_success 而非 failed，
+        # 失败类别为空，邮箱不回池；重试走账号分支而不是重新注册。
+        address = "user@example.com"
+        job = self._claimed_job(address)
+        db.update_job(job["id"], status="running")
+        with self._pipeline({"continue_url": "https://chatgpt.com/api/auth/callback/openai"}), \
+                patch.object(registration, "wait_for_otp", return_value="123456"), \
+                patch.object(registration._twofa_cfg, "ENABLE_2FA", True), \
+                patch.object(registration, "_setup_registration_totp", return_value=""), \
+                patch.object(registration_service, "_release_unconsumed_job_email") as release:
+            self._run_one_job(job["id"], "partial-2fa")
+        release.assert_not_called()
+        stored = db.get_job(job["id"])
+        self.assertEqual(stored["status"], "partial_success")
+        self.assertIn("2FA", stored["error_message"])
+        self.assertIsNone(stored["failure_category"])
+        self.assertIsNotNone(stored["account_id"])
+        row = db.get_outlook_by_email(address)
+        self.assertNotEqual(row["status"], "available")
+        self.assertEqual(row["network_release_count"], 0)
+        info = registration_service.get_retry_info(stored)
+        self.assertTrue(info["retryable"])
+        self.assertEqual(info["retry_action"], "codex")
+
+    def test_failed_round_reports_email_settled(self):
+        # 单轮已在流程内决定邮箱去向时，返回结果带 email_settled，任务层不再重复处理。
+        with self._pipeline({}), \
+                patch.object(registration, "get_csrf_token",
+                             side_effect=requests.ConnectionError("connection reset")), \
+                patch.object(registration, "settle_email_on_failure", return_value=True) as settle:
+            result = self._run()
+        settle.assert_called_once()
+        self.assertFalse(result["success"])
+        self.assertTrue(result["email_settled"])
+
+    def test_task_layer_skips_email_release_when_round_settled_it(self):
+        address = "settled-task@example.com"
+        job = self._claimed_job(address)
+        result = {
+            "success": False, "partial": False, "email": address,
+            "error": "connection reset", "failure_category": "network",
+            "email_settled": True,
+        }
+        with patch.object(registration_service, "run_registration", return_value=result), \
+                patch.object(registration_service, "_release_unconsumed_job_email") as release:
+            self._run_one_job(job["id"], "settled-task")
+        release.assert_not_called()
+        stored = db.get_job(job["id"])
+        self.assertEqual(stored["status"], "failed")
+        self.assertEqual(stored["failure_category"], "network")
 
 
 if __name__ == "__main__":

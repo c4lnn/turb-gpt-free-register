@@ -243,8 +243,8 @@ export default function RegisterPage() {
           </form>
         </CardContent>
       </Card>
-      <section aria-label="任务状态统计" className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        {['pending', 'running', 'success', 'failed'].map((status) => (
+      <section aria-label="任务状态统计" className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+        {['pending', 'running', 'success', 'partial_success', 'failed'].map((status) => (
           <Card key={status} size="sm"><CardContent className="flex items-center justify-between gap-2 pt-4"><StatusBadge status={status} /><span className="font-semibold tabular-nums">{statusCounts[status] ?? 0}</span></CardContent></Card>
         ))}
       </section>
@@ -272,7 +272,7 @@ export default function RegisterPage() {
                     <TableCell><Checkbox aria-label={`选择任务 ${job.id}`} checked={selected.includes(job.id)} onCheckedChange={(checked) => setSelected((current) => checked === true ? [...current, job.id] : current.filter((id) => id !== job.id))} /></TableCell>
                     <TableCell className="font-mono text-xs">{job.id}</TableCell>
                     <TableCell className="max-w-48 truncate">{job.email || '等待分配'}</TableCell>
-                    <TableCell><StatusBadge status={job.status} label={job.display_status} /></TableCell>
+                    <TableCell><StatusBadge status={job.display_status ?? job.status} /></TableCell>
                     <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{job.started_at || '—'}</TableCell>
                     <TableCell className="max-w-64 truncate text-xs text-muted-foreground" title={job.error_message}>{job.error_message || job.error_stage || '—'}</TableCell>
                     <TableCell><div className="flex justify-end gap-1">

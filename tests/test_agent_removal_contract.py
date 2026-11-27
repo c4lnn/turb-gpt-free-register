@@ -51,6 +51,7 @@ class RemovedAgentContractTests(unittest.TestCase):
         self.stack.enter_context(patch.object(db, "_LEGACY_ACCOUNTS_JSON", root / "legacy.json"))
         self.stack.enter_context(patch.object(db, "_VIEWER_HTML", self.viewer_path))
         self.stack.enter_context(patch.object(db, "validate_runtime_storage"))
+        self.stack.enter_context(patch.object(db, "recover_interrupted_registration_jobs", return_value=0))
         self.stack.enter_context(patch.object(db, "migrate_email_pool_statuses", return_value={"rows_normalized": 0}))
         for name in (
             "recover_interrupted_plan_checks",

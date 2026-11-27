@@ -18,8 +18,9 @@ from config import openai_protocol as _protocol_cfg
 from core.infra import db
 from core.infra.contracts.email_pool import canonical_status
 from core.infra.humanize import delay as human_delay
-from core.infra.job_context import StopRequested, record_progress
-from core.mail.email_provider import acquire_email, wait_for_otp, release_email_if_unconsumed
+from core.infra.job_context import StopRequested, check_stop_requested, interruptible_sleep, record_progress
+from core.mail.email_provider import acquire_email, settle_email_on_failure, wait_for_otp
+from core.openai.register.registration_failure import classify_failure
 from core.openai.account.account_export import (
     fetch_session,
     follow_oauth_callback,
@@ -282,6 +283,67 @@ def run_registration(
         if on_email_acquired:
             on_email_acquired(email)
 
+    # 邮箱只在循环外领取一次：重试期间池行保持 registering，不会被其它任务领走。
+    max_attempts = max(1, int(getattr(
+        _protocol_cfg, "OPENAI_REGISTRATION_ROUND_MAX_ATTEMPTS", 1) or 1))
+    for round_no in range(1, max_attempts + 1):
+        # 停止请求只在轮次之间检查；轮次内部由各步骤的检查点抛 StopRequested，由单轮函数的
+        # except 接住并按失败处理邮箱。轮次之间被停止时不开始新的一轮，把上一轮的结果交给调用方。
+        if round_no > 1:
+            try:
+                check_stop_requested()
+            except StopRequested:
+                return result
+        result = _run_registration_round(
+            email, name, birthday, proxy, otp_code, batch_dir, progress,
+            final_round=(round_no >= max_attempts),
+        )
+        if result.get("success") or not result.get("retryable_round"):
+            return result
+        if round_no >= max_attempts:
+            return result
+        logger.info(
+            "[注册] 第 %s/%s 轮失败 category=%s stage=%s，换出口重试",
+            round_no, max_attempts,
+            result.get("failure_category"), result.get("error_stage"),
+        )
+        try:
+            interruptible_sleep(
+                float(getattr(_protocol_cfg, "OPENAI_REGISTRATION_ROUND_RETRY_DELAY", 5.0) or 0.0)
+                * round_no
+            )
+        except StopRequested:
+            return result
+    return result
+
+
+def _run_registration_round(
+    email: str,
+    name: str,
+    birthday: str | None,
+    proxy,
+    otp_code,
+    batch_dir,
+    progress: dict,
+    *,
+    final_round: bool = True,
+) -> dict:
+    """执行一轮完整注册：新建会话、走完认证与保存、失败时分类并处理邮箱。
+
+    每轮的会话、设备 ID、Cookie 和熔断状态都是新的。``progress`` 由调用方创建并跨轮共用：
+    每轮开始时把随轮重置的字段恢复为初始值，``record_progress`` 让任务层看到的是当前轮。
+
+    失败时按 D12 判定 ``retryable_round``（账号创建之前的网络类失败）。为真且不是最后一轮时
+    邮箱保持 ``registering`` 不动，由调用方换出口重来；否则按失败类别处理邮箱。
+    """
+    progress.update({
+        "auth_step": "initialize",
+        "password_state": "not_attempted", "password_effective": False,
+        "credential_persistence": "not_attempted", "authenticated": False,
+        "account_saved": False, "twofa_status": "not_attempted",
+    })
+    progress.pop("failure_category", None)
+    record_progress(progress)
     session = None
     account_id = None
     registration_password = None
@@ -545,6 +607,8 @@ def run_registration(
             except StopRequested:
                 raise
             except Exception as exc:
+                twofa_satisfied = False
+                progress["twofa_status"] = "failed"
                 logger.warning("[2FA] 设置失败，仍保存已获得的登录态: %s: %s", type(exc).__name__, str(exc)[:180])
 
         codex_result = {"status": "not_started", "ok": False, "message": "注册流程不启动 Codex OAuth"}
@@ -611,14 +675,20 @@ def run_registration(
         logger.debug("[完成] TOTP Secret 是否设置: %s", bool(totp_secret))
 
         # 注册任务只要求有效 token、账号保存及配置要求的 2FA；Codex 由独立补跑入口负责。
-        task_success = bool(access_token) and bool(account_id) and twofa_satisfied
+        # 账号已保存但配置要求的 2FA 未完成时记为部分成功：任务不是失败，也不满足完整交付。
+        account_saved = bool(access_token) and bool(account_id)
+        task_success = account_saved and twofa_satisfied
+        task_partial = account_saved and not twofa_satisfied
         task_error = None
-        if not task_success:
-            task_error = "注册账号已保存但必需的 2FA 或账号持久化未完成"
+        if task_partial:
+            task_error = "注册账号已保存，配置要求的 2FA 未完成"
+            logger.warning("[任务结果] %s: %s", email, task_error)
+        elif not task_success:
+            task_error = "注册账号或登录态未保存，任务未完成"
             logger.warning("[任务结果] %s: %s", email, task_error)
         progress["auth_step"] = "complete"
 
-        return {"success": task_success, "email": email, "account_id": account_id,
+        return {"success": task_success, "partial": task_partial, "email": email, "account_id": account_id,
                 "access_token": access_token, "totp_secret": totp_secret,
                 "flow": flow_result, "codex": codex_result,
                 "error": task_error, "registration": dict(progress)}
@@ -637,20 +707,43 @@ def run_registration(
         else:
             logger.error(f"[失败] {email}: {type(e).__name__}: {error_message}")
         logger.debug("详细错误信息:", exc_info=True)
-        # 已有账号登录失败只影响任务；新号、未知状态保留原生命周期策略。
+        # 停止请求（StopRequested）也落到这里：分类得 unknown，邮箱按失败处理，不计入回池次数。
+        category = classify_failure(e)
+        progress["failure_category"] = category
+        # D12：只有 user/register 请求尚未发出时的网络类失败才值得换出口重来。重试期间邮箱
+        # 保持 registering，不会被其它任务领走；最后一轮才按失败类别处理邮箱。
+        retryable_round = (
+            category == "network"
+            and progress["account_kind"] in ("unknown", "new_password", "new_passwordless")
+            and progress["password_state"] == "not_attempted"
+            and progress["credential_persistence"] == "not_attempted"
+        )
+        # 已有账号登录失败只影响任务；新号、未知状态按失败类别处理。
+        # email_settled 告诉任务层邮箱去向是否已由本轮决定：已处理（含「明确不动」）时任务层
+        # 不再重复调用；调用抛错时为 False，由任务层兜底。
+        email_settled = False
         try:
             if email and progress["account_kind"] != "existing":
-                changed = release_email_if_unconsumed(
-                    email,
-                    note=f"openai_registration: {error_message[:300]}",
-                )
-                logger.warning(f"[邮箱] {email} 注册失败，已标记不可复用 changed={changed}")
+                if retryable_round and not final_round:
+                    logger.warning(f"[邮箱] {email} 本轮失败，保持占用并换出口重试")
+                else:
+                    changed = settle_email_on_failure(
+                        email,
+                        reusable=(category == "network"),
+                        note=f"openai_registration: {error_message[:300]}",
+                    )
+                    email_settled = True
+                    logger.warning(f"[邮箱] {email} 注册失败 changed={changed} category={category}")
+            else:
+                email_settled = True
         except Exception:
             pass
-        return {"success": False, "email": email, "error": error_message,
+        return {"success": False, "partial": False, "email": email, "error": error_message,
+                "email_settled": email_settled,
                 "account_id": account_id, "registration": dict(progress),
                 "error_code": error_code,
-                "error_stage": error_stage}
+                "error_stage": error_stage,
+                "failure_category": category, "retryable_round": retryable_round}
     finally:
         try:
             if session is not None:

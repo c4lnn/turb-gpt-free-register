@@ -396,7 +396,7 @@ def _job_status_counts(rows: list[dict]) -> dict:
 
 
 def _enrich_job_rows(rows: list[dict], manual_otp_required: bool) -> None:
-    terminal_statuses = {"failed", "stopped", "cancelled"}
+    terminal_statuses = {"failed", "stopped", "cancelled", "partial_success"}
     needs_account_snapshot = any(str(row.get("status") or "") in terminal_statuses for row in rows)
     account_snapshot = db.get_retry_account_snapshot() if needs_account_snapshot else None
     for row in rows:
@@ -448,6 +448,9 @@ def create_app(auth_code: str | None = None) -> Flask:
     init_auth(app, auth_code=auth_code)
     register_auth_routes(app)
     db.validate_runtime_storage()
+    recovered_registration_jobs = db.recover_interrupted_registration_jobs()
+    if recovered_registration_jobs:
+        logger.warning("已收口 %s 个因 WebUI 重启中断的注册任务", recovered_registration_jobs)
     migrated_email_pool = db.migrate_email_pool_statuses()
     if migrated_email_pool.get("rows_normalized"):
         logger.warning("已迁移邮箱池状态: %s", migrated_email_pool)

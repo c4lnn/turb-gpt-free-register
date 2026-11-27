@@ -126,6 +126,53 @@ class WebUiRefreshPerformanceTests(unittest.TestCase):
         self.assertFalse(info["retryable"])
         account_lookup.assert_not_called()
 
+    def test_partial_success_with_codex_done_is_terminal_for_retry(self):
+        # partial_success + Codex 已完成：账号已保存但 2FA 未完成，没有自动补跑入口。
+        # 只能人工补 2FA；不应退回「补跑 Codex」或「重新注册」。
+        job = {
+            "id": 7,
+            "job_type": "registration",
+            "status": "partial_success",
+            "account_id": 1,
+            "email": "one@example.invalid",
+        }
+        account = {"id": 1, "email": "one@example.invalid", "codex_status": "success"}
+        snapshot = {"by_id": {1: account}, "by_email": {"one@example.invalid": account}}
+        account_lookup = Mock(side_effect=AssertionError("per-job account lookup"))
+        with patch.object(service.db, "get_successful_retry_for_job", return_value=None), \
+                patch.object(service.db, "get_account", account_lookup), \
+                patch.object(service.db, "get_account_by_email", account_lookup):
+            info = service.get_retry_info(job, account_snapshot=snapshot)
+
+        self.assertFalse(info["retryable"])
+        self.assertIsNone(info["retry_action"])
+        self.assertIn("2FA", info["retry_reason"])
+        self.assertIn("没有自动补跑", info["retry_reason"])
+        self.assertEqual(info["display_status"], "partial_success")
+        account_lookup.assert_not_called()
+
+    def test_partial_success_row_is_enriched_as_terminal(self):
+        # 部分成功是终态：分页列表必须为它取账号快照并计算 retry_reason，
+        # 否则前端把「2FA 未完成」显示成可重试。
+        rows = [{"id": 9, "status": "partial_success", "account_id": 1}]
+        snapshot = {"by_id": {}, "by_email": {}}
+        retry_info = {
+            "retryable": False,
+            "retry_action": None,
+            "retry_label": None,
+            "retry_reason": "账号已保存，配置要求的 2FA 未完成；当前没有自动补跑入口",
+            "display_status": "partial_success",
+        }
+        with patch.object(web_app.db, "get_retry_account_snapshot", return_value=snapshot) as get_snapshot, \
+                patch.object(web_app.svc, "get_retry_info", return_value=retry_info) as get_info:
+            web_app._enrich_job_rows(rows, manual_otp_required=True)
+
+        get_snapshot.assert_called_once_with()
+        get_info.assert_called_once_with(rows[0], account_snapshot=snapshot)
+        self.assertFalse(rows[0]["retryable"])
+        self.assertEqual(rows[0]["display_status"], "partial_success")
+        self.assertTrue(rows[0]["manual_otp_required"])
+
     def test_paged_jobs_only_enrich_current_page_and_keep_counts(self):
         rows = self._jobs()
         calls = []
@@ -198,7 +245,6 @@ class WebUiRefreshPerformanceTests(unittest.TestCase):
             "/api/summary",
             headers={"X-Auth-Code": "test-auth"},
         )
-
         self.assertEqual(response.status_code, 200)
         self.assertTrue(
             {

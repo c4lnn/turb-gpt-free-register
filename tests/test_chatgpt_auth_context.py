@@ -1,10 +1,14 @@
 # -*- coding: utf-8 -*-
+import json
 import unittest
 from urllib.parse import parse_qs, urlparse
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, call, patch
+
+import requests
 
 from config.browser import build_browser_environment
+from core.infra import job_context
 from core.openai.transport.session import BrowserSession, HeaderProfile
 
 from core.openai.auth.chatgpt_auth import (
@@ -218,6 +222,116 @@ class ChatgptAuthContextTests(unittest.TestCase):
                     self.assertEqual(headers["cache-control"], "no-cache")
                     self.assertEqual(headers["pragma"], "no-cache")
                 self.assertEqual(parse_qs(session.post.call_args.kwargs["data"])["csrfToken"], ["formal-token"])
+
+
+class Csrf403RetryTests(unittest.TestCase):
+    """``get_csrf_token`` 对 403 的同会话重试（design D3）。响应用真实的 ``requests.Response``，
+    ``raise_for_status`` 的行为与消息由 requests 生成，不在替身里手写。"""
+
+    URL = "https://chatgpt.com/api/auth/csrf"
+
+    def setUp(self):
+        patcher = patch.object(job_context, "interruptible_sleep")
+        self.sleep = patcher.start()
+        self.addCleanup(patcher.stop)
+        session = BrowserSession.__new__(BrowserSession)
+        session.browser_profile = build_browser_environment()
+        session.device_id = "csrf-device"
+        session.auth_session_logging_id = "csrf-logging"
+        session.reset_circuit_breaker = Mock()
+        self.session = session
+
+    @staticmethod
+    def _response(status, body):
+        response = requests.Response()
+        response.status_code = status
+        response.url = Csrf403RetryTests.URL
+        response._content = json.dumps(body).encode()
+        response._content_consumed = True
+        return response
+
+    def _given(self, *outcomes):
+        """按顺序给 session.get 设定返回值或要抛的异常。"""
+        self.session.get = Mock(side_effect=[
+            outcome if isinstance(outcome, BaseException) else self._response(*outcome)
+                for outcome in outcomes
+            ])
+
+    def _sleeps(self):
+        return [call.args[0] for call in self.sleep.call_args_list]
+
+    def test_403_then_200_retries_in_same_session(self):
+        self._given((403, {}), (200, {"csrfToken": "formal-token"}))
+        token = get_csrf_token(self.session, login_referer="https://chatgpt.com/auth/login")
+        self.assertEqual(token, "formal-token")
+        self.assertEqual(self.session.get.call_count, 2)
+        # 同一会话、同一请求：两次调用的地址与请求头完全相同。
+        first, second = self.session.get.call_args_list
+        self.assertEqual(first, second)
+        self.assertEqual(first.args[0], self.URL)
+        self.assertEqual(self._sleeps(), [5.0])
+        self.assertEqual(self.session.reset_circuit_breaker.call_count, 1)
+
+    def test_circuit_is_reset_before_each_retry(self):
+        order = []
+        self.session.reset_circuit_breaker = Mock(side_effect=lambda: order.append("reset"))
+        self.sleep.side_effect = lambda seconds: order.append("sleep")
+        gets = []
+        self.session.get = Mock(side_effect=lambda *args, **kwargs: (
+            order.append("get") or gets.append(1) or self._response(403 if len(gets) < 3 else 200, {"csrfToken": "t"})))
+        token = get_csrf_token(self.session)
+        self.assertEqual(token, "t")
+        # 每次重试前先清熔断再等待；最后一次 403 之后不再有重试，也就不清。
+        self.assertEqual(order, ["get", "reset", "sleep", "get", "reset", "sleep", "get"])
+        self.assertEqual(self._sleeps(), [5.0, 10.0])
+
+    def test_three_403_raise_http_error_with_status(self):
+        self._given((403, {}), (403, {}), (403, {}))
+        with self.assertRaises(requests.HTTPError) as caught:
+            get_csrf_token(self.session)
+        self.assertIn("403", str(caught.exception))
+        self.assertEqual(self.session.get.call_count, 3)
+        self.assertEqual(self._sleeps(), [5.0, 10.0])
+        # 第 3 次 403 之后直接抛出：不再清熔断、不再等待。
+        self.assertEqual(self.session.reset_circuit_breaker.call_count, 2)
+
+    def test_429_is_not_retried(self):
+        self._given((429, {}))
+        with self.assertRaises(requests.HTTPError) as caught:
+            get_csrf_token(self.session)
+        self.assertIn("429", str(caught.exception))
+        self.assertEqual(self.session.get.call_count, 1)
+        self.assertEqual(self._sleeps(), [])
+        self.session.reset_circuit_breaker.assert_not_called()
+
+    def test_transport_error_passes_through_unchanged(self):
+        # 传输层的链路瞬断重试在 WreqSession 内部；耗尽后抛出的异常原样穿出，这里不再重试。
+        timeout = requests.Timeout("timed out")
+        self._given(timeout)
+        with self.assertRaises(requests.Timeout) as caught:
+            get_csrf_token(self.session)
+        self.assertIs(caught.exception, timeout)
+        self.assertEqual(self.session.get.call_count, 1)
+        self.assertEqual(self._sleeps(), [])
+        self.session.reset_circuit_breaker.assert_not_called()
+
+    def test_network_error_after_403_is_not_retried(self):
+        # 403 之后的重试请求遇到网络错误：同样原样穿出，不进入新一轮 403 重试。
+        connection_error = requests.ConnectionError("is_connect error")
+        self._given((403, {}), connection_error)
+        with self.assertRaises(requests.ConnectionError) as caught:
+            get_csrf_token(self.session)
+        self.assertIs(caught.exception, connection_error)
+        self.assertEqual(self.session.get.call_count, 2)
+        self.assertEqual(self._sleeps(), [5.0])
+
+    def test_non_403_success_is_unchanged(self):
+        self._given((200, {"csrfToken": "first-try"}))
+        self.assertEqual(get_csrf_token(self.session), "first-try")
+        self.assertEqual(self.session.get.call_count, 1)
+        self.assertEqual(self._sleeps(), [])
+        self.session.reset_circuit_breaker.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

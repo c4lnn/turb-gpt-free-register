@@ -186,15 +186,22 @@ def _network_preflight_with_retry(
             attempt, max_attempts,
         )
         logger.info("[查活] 指纹摘要：%s", session.fingerprint_summary_text())
+        # 正式 CSRF 的 403 已在 get_csrf_token 内部同会话重试并耗尽，外层不再重复。
+        csrf_403_exhausted = False
         try:
             _warm_login_fingerprint_context(session)
             login_referer = (
                 build_login_referer(session, email)
                 if header_profile is HeaderProfile.PASSWORD_TOTP_LOGIN else None
             )
-            csrf = get_csrf_token(
-                session, login_referer=login_referer, header_profile=header_profile,
-            )
+            try:
+                csrf = get_csrf_token(
+                    session, login_referer=login_referer, header_profile=header_profile,
+                )
+            except Exception as exc:
+                if _exception_status_code(exc) == 403:
+                    csrf_403_exhausted = True
+                raise
             # 成功 Web 样本在 signin 前会再次确认匿名 NextAuth session。
             probe_auth_session(session)
             authorize_url = signin_openai(
@@ -203,7 +210,7 @@ def _network_preflight_with_retry(
             return session, authorize_url
         except Exception as exc:
             last_exc = exc
-            if attempt >= max_attempts or not _is_retryable_network_error(exc):
+            if attempt >= max_attempts or csrf_403_exhausted or not _is_retryable_network_error(exc):
                 try:
                     close_browser_session(session)
                 except Exception:

@@ -1,4 +1,6 @@
 """将 wreq 的同步客户端适配为 BrowserSession 使用的 requests 风格接口。"""
+import logging
+import time
 from datetime import timedelta
 from http.client import HTTPMessage, responses
 from collections.abc import Mapping
@@ -8,6 +10,8 @@ from requests import Request, Response, exceptions
 from requests.cookies import MockRequest, MockResponse, RequestsCookieJar, create_cookie
 from requests.structures import CaseInsensitiveDict
 from requests.utils import get_encoding_from_headers
+
+logger = logging.getLogger(__name__)
 
 
 class WreqCookies:
@@ -66,8 +70,29 @@ class WreqCookies:
         self._host_cookies.clear()
 
 
+_TRANSIENT_WREQ_ERRORS = None
+
+
+def _is_transient_failure(exc):
+    """判断 wreq 原生异常是否为链路瞬断（连接建立失败、超时、代理连接失败）。
+
+    按异常类判定，不解析消息文本。wreq 的异常类与失败阶段有对应关系：
+    连接建立失败是 ConnectionError，代理在隧道建立前失败是 ProxyConnectionError，
+    超时是 TimeoutError。ConnectionResetError / RequestError / DecodingError 只在
+    请求已发出之后出现，重试它们等于重发一个可能已被处理的请求，因此不重试。
+    TlsError 在实测中未出现过，保留它是与 OSS 的重试集合一致。
+    """
+    global _TRANSIENT_WREQ_ERRORS
+    if _TRANSIENT_WREQ_ERRORS is None:
+        import wreq
+        _TRANSIENT_WREQ_ERRORS = (wreq.ConnectionError, wreq.TlsError,
+                                  wreq.ProxyConnectionError, wreq.TimeoutError)
+    return isinstance(exc, _TRANSIENT_WREQ_ERRORS)
+
+
 class WreqSession:
-    def __init__(self, impersonate, *, default_headers: bool = True):
+    def __init__(self, impersonate, *, default_headers: bool = True,
+                 retry_max_attempts=None, retry_base_delay=None):
         try:
             import wreq
             from wreq.blocking import Client
@@ -92,6 +117,14 @@ class WreqSession:
         # 会话级默认头，语义同 requests.Session.headers：逐请求可覆盖。
         # 旁路模块习惯用 s.headers.update({...}) 固化 UA/Origin/Referer。
         self.headers = CaseInsensitiveDict()
+        # 链路瞬断重试参数。未显式传入时惰性读取 config：本模块此前不在导入期依赖
+        # config，旁路模块（邮箱 / 接码）单独构造本类，保持这一约定。
+        if retry_max_attempts is None or retry_base_delay is None:
+            import config
+            retry_max_attempts = config.WREQ_TRANSIENT_RETRY_MAX_ATTEMPTS if retry_max_attempts is None else retry_max_attempts
+            retry_base_delay = config.WREQ_TRANSIENT_RETRY_BASE_DELAY if retry_base_delay is None else retry_base_delay
+        self.retry_max_attempts = max(0, int(retry_max_attempts))
+        self.retry_base_delay = max(0.0, float(retry_base_delay))
 
     def _build_proxy(self, proxy):
         """把 requests 风格的代理 URL 转成 wreq Proxy，并保留账号密码。
@@ -157,21 +190,34 @@ class WreqSession:
         if kwargs:
             raise TypeError(f"wreq 暂不支持请求参数: {', '.join(sorted(kwargs))}")
         try:
-            with self._client.request(getattr(self._wreq.Method, method.upper()), url, **options) as raw:
-                for hop in raw.history:
-                    self.cookies.remember_response(hop.previous, hop.headers)
-                self.cookies.remember_response(raw.url, raw.headers)
-                response = Response()
-                response.status_code = raw.status.as_int()
-                response.reason = responses.get(response.status_code, "")
-                response.url = str(raw.url)
-                response.headers = CaseInsensitiveDict((bytes(k).decode("ascii"), bytes(v).decode("latin-1"))
-                                                       for k, v in raw.headers)
-                response._content = bytes(raw.bytes())
-                response._content_consumed = True
-                response.encoding = get_encoding_from_headers(response.headers)
-                response.cookies = self.cookies.jar
-                return response
+            for attempt in range(self.retry_max_attempts + 1):
+                try:
+                    with self._client.request(getattr(self._wreq.Method, method.upper()), url, **options) as raw:
+                        for hop in raw.history:
+                            self.cookies.remember_response(hop.previous, hop.headers)
+                        self.cookies.remember_response(raw.url, raw.headers)
+                        response = Response()
+                        response.status_code = raw.status.as_int()
+                        response.reason = responses.get(response.status_code, "")
+                        response.url = str(raw.url)
+                        response.headers = CaseInsensitiveDict(
+                            (bytes(k).decode("ascii"), bytes(v).decode("latin-1"))
+                            for k, v in raw.headers)
+                        response._content = bytes(raw.bytes())
+                        response._content_consumed = True
+                        response.encoding = get_encoding_from_headers(response.headers)
+                        response.cookies = self.cookies.jar
+                        return response
+                except Exception as exc:
+                    # 只吞链路瞬断且还有重试余量的失败；其余原样抛给外层映射或穿透。
+                    # 瞬断时 with 块没有走完，上面的 Cookie 记录一行都没执行。
+                    if not (_is_transient_failure(exc) and attempt < self.retry_max_attempts):
+                        raise
+                    logger.warning(
+                        "[传输] 链路瞬断重试 (第 %s/%s 次) %s: %s",
+                        attempt + 1, self.retry_max_attempts, type(exc).__name__, str(exc)[:120],
+                    )
+                    time.sleep(self.retry_base_delay * (attempt + 1))
         except self._wreq.TimeoutError as exc:
             raise exceptions.Timeout(str(exc)) from exc
         except self._wreq.ProxyConnectionError as exc:
@@ -181,6 +227,8 @@ class WreqSession:
         except (self._wreq.ConnectionError, self._wreq.ConnectionResetError) as exc:
             raise exceptions.ConnectionError(str(exc)) from exc
         except self._wreq.RequestError as exc:
+            raise exceptions.ConnectionError(str(exc)) from exc
+        except (self._wreq.DecodingError, self._wreq.BodyError) as exc:
             raise exceptions.ConnectionError(str(exc)) from exc
 
     def get(self, url, **kwargs):

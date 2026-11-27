@@ -352,75 +352,45 @@ def follow_authorize(
     header_profile: HeaderProfile = HeaderProfile.STANDARD,
     include_high_entropy: bool = False,
 ) -> str:
-    """跟随 authorize URL 重定向；允许注册导航省略 user-initiated 请求头。"""
-    max_attempts, retry_delay = _proxy_retry_config()
-    last_exc: Exception | None = None
-    for attempt in range(1, max_attempts + 1):
-        try:
-            logger.info(f"[步骤4] 跟随 authorize URL 重定向 (尝试 {attempt}/{max_attempts})...")
-            headers = session.get_auth_navigate_headers(
-                referer="https://chatgpt.com/", user_initiated=user_initiated,
-                header_profile=header_profile,
-                include_high_entropy=include_high_entropy,
-            )
-            current_url = authorize_url
-            for redirect_count in range(31):
-                resp = session.get(current_url, headers=headers, allow_redirects=False)
-                status = int(getattr(resp, "status_code", 0) or 0)
-                if status not in (301, 302, 303, 307, 308):
-                    break
-                location = (getattr(resp, "headers", {}) or {}).get("location")
-                if not location:
-                    break
-                if redirect_count == 30:
-                    raise RuntimeError("authorize 重定向超过 30 次")
-                current_url = urljoin(current_url, location)
-            _rotate_document_navigation_id(session)
-            resp.raise_for_status()
-            final_url = str(getattr(resp, "url", "") or "")
-            # 保留本次已取得的最终响应的可安全解析状态，供注册专用分类入口使用；
-            # 不新增第二次 authorize 导航。落地为 HTML 文档时无结构化 page.type/mode，
-            # 仅记录落地 URL 与状态码，由 get_registration_state 按路径严格判定。
-            session.registration_authorize_state = {
-                "landing_url": final_url,
-                "status": int(getattr(resp, "status_code", 0) or 0),
-                "page": _try_response_json(resp) if _looks_like_json(resp) else {},
-            }
-            landing = urlparse(final_url)
-            logger.info(
-                "[步骤4] 重定向完成, 最终落点: %s%s",
-                landing.netloc, landing.path,
-            )
-            return final_url
-        except Exception as exc:
-            last_exc = exc
-            if _exception_http_status(exc) == 403:
-                if attempt >= max_attempts:
-                    logger.warning("[步骤4] authorize HTTP 403，已达到最大重试次数")
-                    raise
-                reset_retryable_circuit(session)
-                backoff = retry_delay * (2 ** (attempt - 1))
-                logger.warning(
-                    "[步骤4] authorize HTTP 403，保留当前指纹和 Cookie，%.1fs 后重试 (%s/%s)",
-                    backoff, attempt, max_attempts,
-                )
-                time.sleep(backoff)
-                continue
-            if not _is_retryable_authorize_error(exc):
-                # 非临时性错误（比如 4xx 业务错误）直接抛出
-                raise
-            if attempt >= max_attempts:
-                break
-            # 保留同一个 BrowserSession/Cookie Jar，只清掉本地熔断后重试。
-            reset_retryable_circuit(session)
-            backoff = retry_delay * (2 ** (attempt - 1))
-            logger.warning(
-                f"[步骤4] authorize 临时失败 ({type(exc).__name__}: {str(exc)[:120]})，"
-                f"保留当前 session/deviceId/CF Cookie，{backoff:.1f}s 后重试..."
-            )
-            time.sleep(backoff)
+    """跟随 authorize URL 重定向；允许注册导航省略 user-initiated 请求头。
 
-    raise last_exc if last_exc else RuntimeError("步骤4 重试耗尽但无异常记录")
+    只导航一次，任何错误（含 403 与网络错误）原样抛出，由调用方决定是否放弃本轮。
+    """
+    logger.info("[步骤4] 跟随 authorize URL 重定向...")
+    headers = session.get_auth_navigate_headers(
+        referer="https://chatgpt.com/", user_initiated=user_initiated,
+        header_profile=header_profile,
+        include_high_entropy=include_high_entropy,
+    )
+    current_url = authorize_url
+    for redirect_count in range(31):
+        resp = session.get(current_url, headers=headers, allow_redirects=False)
+        status = int(getattr(resp, "status_code", 0) or 0)
+        if status not in (301, 302, 303, 307, 308):
+            break
+        location = (getattr(resp, "headers", {}) or {}).get("location")
+        if not location:
+            break
+        if redirect_count == 30:
+            raise RuntimeError("authorize 重定向超过 30 次")
+        current_url = urljoin(current_url, location)
+    _rotate_document_navigation_id(session)
+    resp.raise_for_status()
+    final_url = str(getattr(resp, "url", "") or "")
+    # 保留本次已取得的最终响应的可安全解析状态，供注册专用分类入口使用；
+    # 不新增第二次 authorize 导航。落地为 HTML 文档时无结构化 page.type/mode，
+    # 仅记录落地 URL 与状态码，由 get_registration_state 按路径严格判定。
+    session.registration_authorize_state = {
+        "landing_url": final_url,
+        "status": int(getattr(resp, "status_code", 0) or 0),
+        "page": _try_response_json(resp) if _looks_like_json(resp) else {},
+    }
+    landing = urlparse(final_url)
+    logger.info(
+        "[步骤4] 重定向完成, 最终落点: %s%s",
+        landing.netloc, landing.path,
+    )
+    return final_url
 
 
 def request_sentinel_token(

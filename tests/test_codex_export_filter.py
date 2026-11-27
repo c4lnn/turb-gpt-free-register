@@ -13,6 +13,7 @@ class CodexExportFilterTests(unittest.TestCase):
         self.addCleanup(self.patches.close)
         for name, value in (
             ("validate_runtime_storage", None),
+            ("recover_interrupted_registration_jobs", 0),
             ("migrate_email_pool_statuses", {}),
             ("migrate_account_status_contracts", {}),
             ("recover_interrupted_codex_operations", 0),

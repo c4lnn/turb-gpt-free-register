@@ -2,7 +2,7 @@
 import json
 import uuid
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from config import browser as browser_config
 import core.openai.auth.openai_auth as openai_auth
@@ -1262,12 +1262,11 @@ class OpenAIRegistrationFlowTests(unittest.TestCase):
                 return _Response(url="https://auth.openai.com/email-verification")
 
         session = Session()
-        with patch.object(openai_auth, "_proxy_retry_config", return_value=(1, 0)):
-            final_url = openai_auth.follow_authorize(
-                session,
-                "https://auth.openai.com/oauth/authorize?state=test",
-                user_initiated=False,
-            )
+        final_url = openai_auth.follow_authorize(
+            session,
+            "https://auth.openai.com/oauth/authorize?state=test",
+            user_initiated=False,
+        )
 
         self.assertEqual(final_url, "https://auth.openai.com/email-verification")
         self.assertEqual(len(session.gets), 2)
@@ -1291,10 +1290,9 @@ class OpenAIRegistrationFlowTests(unittest.TestCase):
                 return headers
 
         session = Session()
-        with patch.object(openai_auth, "_proxy_retry_config", return_value=(1, 0)):
-            openai_auth.follow_authorize(
-                session, "https://auth.openai.com/oauth/authorize?state=test",
-            )
+        openai_auth.follow_authorize(
+            session, "https://auth.openai.com/oauth/authorize?state=test",
+        )
 
         self.assertEqual(len(session.gets), 1)
         self.assertFalse(session.gets[0][2])
@@ -1323,10 +1321,9 @@ class OpenAIRegistrationFlowTests(unittest.TestCase):
                 )
 
         session = Session()
-        with patch.object(openai_auth, "_proxy_retry_config", return_value=(1, 0)):
-            final_url = openai_auth.follow_authorize(
-                session, "https://auth.openai.com/api/accounts/authorize?x=1"
-            )
+        final_url = openai_auth.follow_authorize(
+            session, "https://auth.openai.com/api/accounts/authorize?x=1"
+        )
 
         probe_navigation_id = self._probe_registration_navigation_id(session)
 
@@ -1337,60 +1334,57 @@ class OpenAIRegistrationFlowTests(unittest.TestCase):
         self.assertEqual(session.status_ids, ["document-1-next"])
         self.assertEqual(probe_navigation_id, "document-1-next")
 
-    def test_follow_authorize_http_error_rotates_before_retry(self):
+    def test_follow_authorize_403_raises_after_rotating_without_retry(self):
+        # authorize 收到 403 直接放弃：只导航一次、不清熔断、不重试，异常原样抛出。
+        # 轮换发生在收到响应之后、状态检查之前（design D4），所以 403 也会轮换一次。
         class Session(_ProtocolSession):
             def __init__(self):
                 super().__init__()
                 self.status_ids = []
+                self.reset_circuit_breaker = Mock()
 
             def get(self, url, *, headers, allow_redirects=True):
                 self.get_navigation_ids.append(self.document_navigation_id)
-                status_code = 403 if len(self.get_navigation_ids) == 1 else 200
                 return _ObservedResponse(
-                    self, self.status_ids, status_code=status_code,
+                    self, self.status_ids, status_code=403,
                     url="https://auth.openai.com/create-account/password",
                 )
 
         session = Session()
-        with patch.object(openai_auth, "_proxy_retry_config", return_value=(2, 0)):
+        with self.assertRaisesRegex(RuntimeError, "HTTP 403"):
             openai_auth.follow_authorize(
                 session, "https://auth.openai.com/api/accounts/authorize?x=1"
             )
 
-        probe_navigation_id = self._probe_registration_navigation_id(session)
-
-        self.assertEqual(session.get_navigation_ids, ["document-1", "document-1-next"])
-        self.assertEqual(
-            session.status_ids, ["document-1-next", "document-1-next-next"]
-        )
-        self.assertEqual(probe_navigation_id, "document-1-next-next")
-
-    def test_follow_authorize_transport_exception_does_not_rotate_before_retry(self):
-        class Session(_ProtocolSession):
-            def __init__(self):
-                super().__init__()
-                self.status_ids = []
-
-            def get(self, url, *, headers, allow_redirects=True):
-                self.get_navigation_ids.append(self.document_navigation_id)
-                if len(self.get_navigation_ids) == 1:
-                    raise ConnectionError("connection reset")
-                return _ObservedResponse(
-                    self, self.status_ids,
-                    url="https://auth.openai.com/create-account/password",
-                )
-
-        session = Session()
-        with patch.object(openai_auth, "_proxy_retry_config", return_value=(2, 0)):
-            openai_auth.follow_authorize(
-                session, "https://auth.openai.com/api/accounts/authorize?x=1"
-            )
-
-        probe_navigation_id = self._probe_registration_navigation_id(session)
-
-        self.assertEqual(session.get_navigation_ids, ["document-1", "document-1"])
+        # get_navigation_ids 的长度就是导航次数。
+        self.assertEqual(session.get_navigation_ids, ["document-1"])
         self.assertEqual(session.status_ids, ["document-1-next"])
-        self.assertEqual(probe_navigation_id, "document-1-next")
+        self.assertEqual(self._probe_registration_navigation_id(session), "document-1-next")
+        session.reset_circuit_breaker.assert_not_called()
+
+    def test_follow_authorize_transport_error_raises_without_retry_or_rotation(self):
+        # 没有收到响应：不轮换 navigation ID，只请求一次，异常原样抛出。
+        class Session(_ProtocolSession):
+            def __init__(self):
+                super().__init__()
+                self.status_ids = []
+                self.reset_circuit_breaker = Mock()
+
+            def get(self, url, *, headers, allow_redirects=True):
+                self.get_navigation_ids.append(self.document_navigation_id)
+                raise ConnectionError("connection reset")
+
+        session = Session()
+        with self.assertRaisesRegex(ConnectionError, "connection reset"):
+            openai_auth.follow_authorize(
+                session, "https://auth.openai.com/api/accounts/authorize?x=1"
+            )
+
+        self.assertEqual(session.get_navigation_ids, ["document-1"])
+        self.assertEqual(session.status_ids, [])
+        self.assertEqual(self._probe_registration_navigation_id(session), "document-1")
+        session.reset_circuit_breaker.assert_not_called()
+        self.assertFalse(hasattr(session, "registration_authorize_state"))
 
 
 if __name__ == "__main__":

@@ -16,12 +16,14 @@ from datetime import datetime
 from ipaddress import ip_address
 from zoneinfo import ZoneInfo
 
+import requests
+
 
 logger = logging.getLogger(__name__)
 
 
 # ---- 对外可判定的失败类别（进入任务结果 category 字段）----
-CATEGORY_PROXY = "proxy"                    # 代理连接/认证失败（有确凿代理证据）
+CATEGORY_PROXY = "proxy"                    # 网络连接/代理失败（传输层异常或确凿的代理证据）
 CATEGORY_GEO_SERVICE = "geo_service"        # 地域服务不可达/非成功状态
 CATEGORY_GEO_PARSE = "geo_parse"            # 地域响应解析失败
 CATEGORY_GEO_INCOMPLETE = "geo_incomplete"  # 地域信息不完整（缺国家/时区/未知国家）
@@ -434,7 +436,11 @@ def build_registration_locale(country: str, timezone: str = "") -> dict:
 
 
 def classify_geo_exception(exc: Exception) -> tuple[str, str]:
-    """仅在确有代理证据时判为代理失败，否则归为地域服务不可达。"""
+    """按异常类型判定网络/代理失败；没有类型证据时退回消息关键词兜底。"""
+    if isinstance(exc, (requests.exceptions.ProxyError,
+                        requests.exceptions.ConnectionError,
+                        requests.exceptions.Timeout)):
+        return CATEGORY_PROXY, "网络连接/代理失败"
     name = type(exc).__name__.lower()
     msg = str(exc).lower()
     proxy_markers = (
@@ -442,7 +448,7 @@ def classify_geo_exception(exc: Exception) -> tuple[str, str]:
         "proxy requires auth", "connection to proxy", "proxy connect", "socks",
     )
     if "proxyerror" in name or any(marker in msg for marker in proxy_markers):
-        return CATEGORY_PROXY, "代理连接/认证失败"
+        return CATEGORY_PROXY, "网络连接/代理失败"
     return CATEGORY_GEO_SERVICE, f"网络异常({type(exc).__name__})"
 
 

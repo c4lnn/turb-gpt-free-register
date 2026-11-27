@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from requests.cookies import RequestsCookieJar
+import requests
 from config import browser as browser_cfg
 from core.openai.auth import openai_auth
 from core.openai.auth.chatgpt_auth import build_login_referer, get_csrf_token, signin_openai
@@ -286,6 +287,8 @@ class RegistrationPreflightTests(unittest.TestCase):
             self.assertEqual(transports[0].warmup_calls, 0)
 
     def test_initial_trace_network_failure_stops_before_warmup(self):
+        # 内置 ConnectionError 不是 requests.exceptions.ConnectionError，按「无传输层证据」归 geo_service；
+        # 预检真实抛出的 requests 传输层异常见下面两个用例。
         def forbidden(_):
             self.fail("trace network failure must not send csrf")
 
@@ -296,6 +299,36 @@ class RegistrationPreflightTests(unittest.TestCase):
             with self.assertRaises(RegistrationGeoError) as ctx:
                 registration_preflight(session)
             self.assertEqual(ctx.exception.category, "geo_service")
+            self.assertEqual(ctx.exception.stage, "detect")
+            self.assertEqual(session.device_id, "")
+            self.assertEqual(transports[0].warmup_calls, 0)
+
+    def test_initial_trace_requests_proxy_error_is_proxy(self):
+        def forbidden(_):
+            self.fail("trace proxy failure must not send csrf")
+
+        def down(_):
+            raise requests.exceptions.ProxyError("is_proxy_connect error")
+
+        with _session(forbidden, trace=down) as (session, transports):
+            with self.assertRaises(RegistrationGeoError) as ctx:
+                registration_preflight(session)
+            self.assertEqual(ctx.exception.category, "proxy")
+            self.assertEqual(ctx.exception.stage, "detect")
+            self.assertEqual(session.device_id, "")
+            self.assertEqual(transports[0].warmup_calls, 0)
+
+    def test_initial_trace_requests_timeout_is_proxy(self):
+        def forbidden(_):
+            self.fail("trace timeout must not send csrf")
+
+        def down(_):
+            raise requests.exceptions.Timeout("is_timeout error")
+
+        with _session(forbidden, trace=down) as (session, transports):
+            with self.assertRaises(RegistrationGeoError) as ctx:
+                registration_preflight(session)
+            self.assertEqual(ctx.exception.category, "proxy")
             self.assertEqual(ctx.exception.stage, "detect")
             self.assertEqual(session.device_id, "")
             self.assertEqual(transports[0].warmup_calls, 0)
